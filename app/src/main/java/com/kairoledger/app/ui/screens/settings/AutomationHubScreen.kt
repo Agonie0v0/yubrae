@@ -146,6 +146,9 @@ fun AutomationHubScreen(
                 onOpenNotificationListener = {
                     safeStartActivity(context, Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
                 },
+                onOpenAccessibility = {
+                    safeStartActivity(context, Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                },
                 onRequestSms = {
                     smsLauncher.launch(
                         arrayOf(
@@ -220,6 +223,41 @@ fun AutomationHubScreen(
                             viewModel.updateSettings { it.copy(smsCaptureEnabled = checked) }
                         }
                     )
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f))
+
+                    SwitchSettingRow(
+                        title = "屏幕账单页自动识别（无障碍）",
+                        subtitle = "仅在打开微信、支付宝、云闪付及银行支付/账单页时本地提取，不读取聊天",
+                        checked = settings.accessibilityCaptureEnabled,
+                        onCheckedChange = { checked ->
+                            viewModel.updateSettings { it.copy(accessibilityCaptureEnabled = checked) }
+                        }
+                    )
+
+                    AnimatedVisibility(visible = settings.accessibilityCaptureEnabled) {
+                        Column(
+                            modifier = Modifier.padding(start = 16.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            SwitchSettingRow(
+                                title = "支付成功页自动唤起弹窗",
+                                subtitle = "付款后自动提取单号与实付金额，并与 60 秒内通知/短信融合",
+                                checked = settings.accessibilityPaySuccessEnabled,
+                                onCheckedChange = { checked ->
+                                    viewModel.updateSettings { it.copy(accessibilityPaySuccessEnabled = checked) }
+                                }
+                            )
+                            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.25f))
+                            SwitchSettingRow(
+                                title = "历史账单详情页自动唤起（补记模式）",
+                                subtitle = "打开历史账单详情时自动补记并还原真实交易时间，同单号自动防重",
+                                checked = settings.accessibilityBillDetailEnabled,
+                                onCheckedChange = { checked ->
+                                    viewModel.updateSettings { it.copy(accessibilityBillDetailEnabled = checked) }
+                                }
+                            )
+                        }
+                    }
                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f))
 
                     SwitchSettingRow(
@@ -345,6 +383,7 @@ private fun PermissionHealthCard(
     onRefresh: () -> Unit,
     onRootGrant: () -> Unit,
     onOpenNotificationListener: () -> Unit,
+    onOpenAccessibility: () -> Unit,
     onRequestSms: () -> Unit,
     onOpenOverlay: () -> Unit,
     onRequestPostNotification: () -> Unit,
@@ -397,6 +436,7 @@ private fun PermissionHealthCard(
                 PermissionRow("Root 环境 (su)", report.isRooted, "已获取", "未检测到", null)
                 PermissionRow("LSPosed 框架环境", report.hasLsposedHint, "已就绪", "未检测到", null)
                 PermissionRow("通知监听使用权", report.notificationListenerEnabled, "已授权", "未开启", onOpenNotificationListener)
+                PermissionRow("无障碍页面监听", report.accessibilityServiceEnabled, "已开启", "未开启", onOpenAccessibility)
                 PermissionRow("短信读取与接收权限", report.smsPermissionGranted, "已授权", "未授权", onRequestSms)
                 PermissionRow("悬浮窗显示权限", report.overlayPermissionGranted, "已授权", "未授权", onOpenOverlay)
                 PermissionRow("系统通知发送权限", report.postNotificationGranted, "已授权", "未授权", onRequestPostNotification)
@@ -460,7 +500,8 @@ private fun PermissionHealthCard(
                         Text("1. 长按应用图标 → 应用信息 → 省电策略 → 选择「无限制」", style = MaterialTheme.typography.bodySmall)
                         Text("2. 应用信息 → 权限管理 → 开启「自启动」与「显示悬浮窗」", style = MaterialTheme.typography.bodySmall)
                         Text("3. 系统设置 → 通知与控制中心 → 通知使用权 → 勾选「棱账自动记账监听」", style = MaterialTheme.typography.bodySmall)
-                        Text("4. 多任务界面长按/下拉「棱账」卡片点击锁头图标，防止系统清理", style = MaterialTheme.typography.bodySmall)
+                        Text("4. 系统设置 → 更多设置 → 无障碍 → 已下载的应用 → 无障碍设置开启「棱账」", style = MaterialTheme.typography.bodySmall)
+                        Text("5. 多任务界面长按/下拉「棱账」卡片点击锁头图标，防止系统清理", style = MaterialTheme.typography.bodySmall)
                     }
                 }
             }

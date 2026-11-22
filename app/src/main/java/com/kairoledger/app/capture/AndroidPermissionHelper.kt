@@ -21,6 +21,11 @@ import java.util.concurrent.TimeUnit
  */
 object AndroidPermissionHelper {
 
+    internal const val ACCESSIBILITY_SERVICE_CLASS =
+        "com.kairoledger.app.capture.screen.KairoAccessibilityService"
+    private const val ACCESSIBILITY_SERVICE_SHORT_SUFFIX =
+        ".capture.screen.KairoAccessibilityService"
+
     private val SU_PATHS = listOf(
         "/system/bin/su",
         "/system/xbin/su",
@@ -84,6 +89,8 @@ object AndroidPermissionHelper {
             runCatching { NotificationManagerCompat.from(appContext).areNotificationsEnabled() }.getOrDefault(true)
         }
 
+        val accessibilityServiceEnabled = isAccessibilityServiceEnabled(appContext)
+
         DevicePermissionReport(
             isRooted = isRooted,
             hasLsposedHint = hasLsposed,
@@ -93,8 +100,99 @@ object AndroidPermissionHelper {
             ignoringBatteryOptimizations = ignoringBattery,
             postNotificationGranted = postNotificationGranted,
             manufacturer = Build.MANUFACTURER.orEmpty(),
-            osDisplay = buildOsDisplay()
+            osDisplay = buildOsDisplay(),
+            accessibilityServiceEnabled = accessibilityServiceEnabled
         )
+    }
+
+    fun isAccessibilityServiceEnabled(context: Context): Boolean {
+        val appContext = context.applicationContext
+        val masterEnabled = runCatching {
+            Settings.Secure.getInt(
+                appContext.contentResolver,
+                Settings.Secure.ACCESSIBILITY_ENABLED,
+                1
+            ) == 1
+        }.getOrDefault(true)
+        if (!masterEnabled) return false
+
+        val enabledRaw = runCatching {
+            Settings.Secure.getString(
+                appContext.contentResolver,
+                Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+            )
+        }.getOrNull()
+        return isAccessibilityServiceInList(enabledRaw, appContext.packageName)
+    }
+
+    internal fun isAccessibilityServiceInList(
+        enabledRaw: String?,
+        packageName: String,
+        serviceClassName: String = ACCESSIBILITY_SERVICE_CLASS
+    ): Boolean {
+        val raw = enabledRaw?.trim().orEmpty()
+        if (raw.isEmpty() || raw.equals("null", ignoreCase = true)) return false
+        val targetFull = "$packageName/$serviceClassName"
+        return raw.split(':')
+            .asSequence()
+            .map { it.trim() }
+            .filter { it.isNotEmpty() && !it.equals("null", ignoreCase = true) }
+            .any { entry -> isSameAccessibilityComponent(entry, targetFull, serviceClassName) }
+    }
+
+    internal fun buildAppendedAccessibilityServices(
+        existingRaw: String?,
+        targetComponent: String
+    ): String {
+        val cleanTarget = targetComponent.trim()
+        val raw = existingRaw?.trim().orEmpty()
+        if (raw.isEmpty() || raw.equals("null", ignoreCase = true)) {
+            return cleanTarget
+        }
+        val deduplicated = mutableListOf<String>()
+        for (token in raw.split(':')) {
+            val item = token.trim()
+            if (item.isEmpty() || item.equals("null", ignoreCase = true)) continue
+            if (deduplicated.none { isSameAccessibilityComponent(it, item) }) {
+                deduplicated.add(item)
+            }
+        }
+        if (cleanTarget.isNotEmpty() && deduplicated.none { isSameAccessibilityComponent(it, cleanTarget) }) {
+            deduplicated.add(cleanTarget)
+        }
+        return deduplicated.joinToString(":")
+    }
+
+    private fun isSameAccessibilityComponent(
+        a: String,
+        b: String,
+        knownServiceClass: String = ACCESSIBILITY_SERVICE_CLASS
+    ): Boolean {
+        val ca = canonicalComponentName(a)
+        val cb = canonicalComponentName(b)
+        if (ca == cb) return true
+
+        val aSlash = a.indexOf('/')
+        val bSlash = b.indexOf('/')
+        if (aSlash <= 0 || bSlash <= 0) return false
+        val aPkg = a.substring(0, aSlash).trim()
+        val bPkg = b.substring(0, bSlash).trim()
+        if (aPkg != bPkg) return false
+
+        val aCls = a.substring(aSlash + 1).trim()
+        val bCls = b.substring(bSlash + 1).trim()
+        return (aCls == ACCESSIBILITY_SERVICE_SHORT_SUFFIX && bCls == knownServiceClass) ||
+            (bCls == ACCESSIBILITY_SERVICE_SHORT_SUFFIX && aCls == knownServiceClass)
+    }
+
+    private fun canonicalComponentName(component: String): String {
+        val trimmed = component.trim()
+        val slashIdx = trimmed.indexOf('/')
+        if (slashIdx <= 0 || slashIdx >= trimmed.length - 1) return trimmed
+        val pkg = trimmed.substring(0, slashIdx).trim()
+        val cls = trimmed.substring(slashIdx + 1).trim()
+        val fullCls = if (cls.startsWith(".")) "$pkg$cls" else cls
+        return "$pkg/$fullCls"
     }
 
     suspend fun tryRootGrantPermissions(context: Context): Result<String> = withContext(Dispatchers.IO) {
@@ -102,9 +200,25 @@ object AndroidPermissionHelper {
             val appContext = context.applicationContext
             val pkg = appContext.packageName
             val listenerComponent = "$pkg/${KairoNotificationListenerService::class.java.name}"
+            val accessibilityComponent = "$pkg/$ACCESSIBILITY_SERVICE_CLASS"
+
+            val existingAccessibility = readSecureSettingViaRoot("enabled_accessibility_services")
+                ?: runCatching {
+                    Settings.Secure.getString(
+                        appContext.contentResolver,
+                        Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+                    )
+                }.getOrNull()
+            val mergedAccessibility = buildAppendedAccessibilityServices(
+                existingRaw = existingAccessibility,
+                targetComponent = accessibilityComponent
+            )
+            val quotedAccessibility = "'" + mergedAccessibility.replace("'", "'\\''") + "'"
 
             val script = buildString {
                 append("cmd notification allow_listener ").append(listenerComponent).append(" ; ")
+                append("settings put secure enabled_accessibility_services ").append(quotedAccessibility).append(" ; ")
+                append("settings put secure accessibility_enabled 1 ; ")
                 append("dumpsys deviceidle whitelist +").append(pkg).append(" ; ")
                 append("pm grant ").append(pkg).append(" android.permission.RECEIVE_SMS 2>/dev/null ; ")
                 append("pm grant ").append(pkg).append(" android.permission.READ_SMS 2>/dev/null ; ")
@@ -139,8 +253,24 @@ object AndroidPermissionHelper {
                 append("，电池白名单=").append(if (report.ignoringBatteryOptimizations) "已放行" else "未生效")
                 append("，短信=").append(if (report.smsPermissionGranted) "已授权" else "未生效")
                 append("，悬浮窗=").append(if (report.overlayPermissionGranted) "已授权" else "未生效")
+                append("，无障碍页面监听=").append(if (report.accessibilityServiceEnabled) "已开启" else "未生效")
             }
         }
+    }
+
+    private fun readSecureSettingViaRoot(key: String): String? {
+        return runCatching {
+            val process = ProcessBuilder("su", "-c", "settings get secure $key")
+                .redirectErrorStream(true)
+                .start()
+            val finished = process.waitFor(3, TimeUnit.SECONDS)
+            if (!finished) {
+                process.destroyForcibly()
+                return@runCatching null
+            }
+            val output = process.inputStream.bufferedReader().use { it.readText() }.trim()
+            if (process.exitValue() == 0) output else null
+        }.getOrNull()
     }
 
     /**

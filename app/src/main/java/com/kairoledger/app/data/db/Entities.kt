@@ -48,6 +48,7 @@ object CaptureChannel {
     const val MANUAL = "MANUAL"
     const val NOTIFICATION = "NOTIFICATION"
     const val SMS = "SMS"
+    const val SCREEN = "SCREEN"
     const val AUTO_ACCOUNTING = "AUTO_ACCOUNTING"
     const val SHARE = "SHARE"
     const val AI = "AI"

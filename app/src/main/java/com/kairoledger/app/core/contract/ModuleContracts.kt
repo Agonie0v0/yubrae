@@ -179,7 +179,9 @@ data class ParsedBillDraft(
     val note: String = "",
     val timestamp: Long = System.currentTimeMillis(),
     val confidence: Float = 0.9f,
-    val parserUsed: String = "LOCAL_RULE"
+    val parserUsed: String = "LOCAL_RULE",
+    val externalOrderNo: String = "",
+    val manualAccountAmountMicros: Long? = null
 )
 
 data class CaptureHandleResult(
@@ -200,7 +202,8 @@ data class DevicePermissionReport(
     val ignoringBatteryOptimizations: Boolean,
     val postNotificationGranted: Boolean,
     val manufacturer: String,
-    val osDisplay: String
+    val osDisplay: String,
+    val accessibilityServiceEnabled: Boolean = false
 )
 
 interface CaptureEngine {

@@ -27,6 +27,9 @@ data class AppSettings(
     val dynamicColor: Boolean = true,
     val notificationCaptureEnabled: Boolean = true,
     val smsCaptureEnabled: Boolean = true,
+    val accessibilityCaptureEnabled: Boolean = true,
+    val accessibilityPaySuccessEnabled: Boolean = true,
+    val accessibilityBillDetailEnabled: Boolean = true,
     val autoAccountingBridgeEnabled: Boolean = true,
     val floatingConfirmEnabled: Boolean = true,
     val floatingAutoConfirmSeconds: Int = 8,
@@ -54,6 +57,9 @@ class SettingsStore(private val context: Context) {
         val DYNAMIC_COLOR = booleanPreferencesKey("dynamic_color")
         val NOTIFICATION_CAPTURE = booleanPreferencesKey("notification_capture")
         val SMS_CAPTURE = booleanPreferencesKey("sms_capture")
+        val ACCESSIBILITY_CAPTURE = booleanPreferencesKey("accessibility_capture")
+        val ACCESSIBILITY_PAY_SUCCESS = booleanPreferencesKey("accessibility_pay_success")
+        val ACCESSIBILITY_BILL_DETAIL = booleanPreferencesKey("accessibility_bill_detail")
         val AUTO_ACCOUNTING_BRIDGE = booleanPreferencesKey("auto_accounting_bridge")
         val FLOATING_CONFIRM = booleanPreferencesKey("floating_confirm")
         val FLOATING_SECONDS = intPreferencesKey("floating_seconds")
@@ -85,6 +91,9 @@ class SettingsStore(private val context: Context) {
             dynamicColor = prefs[Keys.DYNAMIC_COLOR] ?: true,
             notificationCaptureEnabled = prefs[Keys.NOTIFICATION_CAPTURE] ?: true,
             smsCaptureEnabled = prefs[Keys.SMS_CAPTURE] ?: true,
+            accessibilityCaptureEnabled = prefs[Keys.ACCESSIBILITY_CAPTURE] ?: true,
+            accessibilityPaySuccessEnabled = prefs[Keys.ACCESSIBILITY_PAY_SUCCESS] ?: true,
+            accessibilityBillDetailEnabled = prefs[Keys.ACCESSIBILITY_BILL_DETAIL] ?: true,
             autoAccountingBridgeEnabled = prefs[Keys.AUTO_ACCOUNTING_BRIDGE] ?: true,
             floatingConfirmEnabled = prefs[Keys.FLOATING_CONFIRM] ?: true,
             floatingAutoConfirmSeconds = prefs[Keys.FLOATING_SECONDS] ?: 8,
@@ -120,6 +129,9 @@ class SettingsStore(private val context: Context) {
             prefs[Keys.DYNAMIC_COLOR] = settings.dynamicColor
             prefs[Keys.NOTIFICATION_CAPTURE] = settings.notificationCaptureEnabled
             prefs[Keys.SMS_CAPTURE] = settings.smsCaptureEnabled
+            prefs[Keys.ACCESSIBILITY_CAPTURE] = settings.accessibilityCaptureEnabled
+            prefs[Keys.ACCESSIBILITY_PAY_SUCCESS] = settings.accessibilityPaySuccessEnabled
+            prefs[Keys.ACCESSIBILITY_BILL_DETAIL] = settings.accessibilityBillDetailEnabled
             prefs[Keys.AUTO_ACCOUNTING_BRIDGE] = settings.autoAccountingBridgeEnabled
             prefs[Keys.FLOATING_CONFIRM] = settings.floatingConfirmEnabled
             prefs[Keys.FLOATING_SECONDS] = settings.floatingAutoConfirmSeconds

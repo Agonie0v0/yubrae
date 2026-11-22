@@ -80,7 +80,10 @@ class FloatingConfirmService : Service() {
             categoryName = intent?.getStringExtra(EXTRA_CATEGORY).orEmpty(),
             accountName = intent?.getStringExtra(EXTRA_ACCOUNT_NAME).orEmpty(),
             parserUsed = intent?.getStringExtra(EXTRA_PARSER_USED).orEmpty(),
-            autoConfirmSeconds = intent?.getIntExtra(EXTRA_AUTO_CONFIRM_SECONDS, 8) ?: 8
+            autoConfirmSeconds = intent?.getIntExtra(EXTRA_AUTO_CONFIRM_SECONDS, 8) ?: 8,
+            accountAmountMicros = intent?.getLongExtra(EXTRA_ACCOUNT_AMOUNT_MICROS, 0L) ?: 0L,
+            accountCurrency = intent?.getStringExtra(EXTRA_ACCOUNT_CURRENCY).orEmpty(),
+            sourceBadge = intent?.getStringExtra(EXTRA_SOURCE_BADGE).orEmpty()
         )
 
         if (!Settings.canDrawOverlays(this)) {
@@ -165,8 +168,9 @@ class FloatingConfirmService : Service() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
+        val cleanBadge = payload.sourceBadge.trim()
         val titleView = TextView(this).apply {
-            text = "棱账 · 自动记账"
+            text = if (cleanBadge.isNotEmpty()) "棱账 · $cleanBadge" else "棱账 · 自动记账"
             setTextColor(textSecondary)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
             typeface = Typeface.DEFAULT_BOLD
@@ -198,14 +202,25 @@ class FloatingConfirmService : Service() {
             showSign = false,
             showCurrencyCode = true
         )
+        val convertedAccountText = formatConvertedAccountHint(payload)
         val amountView = TextView(this).apply {
             text = formattedAmount
             setTextColor(amountColor)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 24f)
             typeface = Typeface.DEFAULT_BOLD
-            setPadding(0, dp(6), 0, dp(4))
+            setPadding(0, dp(6), 0, if (convertedAccountText.isNotEmpty()) dp(2) else dp(4))
         }
         rootCard.addView(amountView)
+
+        if (convertedAccountText.isNotEmpty()) {
+            val convertedView = TextView(this).apply {
+                text = convertedAccountText
+                setTextColor(textSecondary)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+                setPadding(0, 0, 0, dp(4))
+            }
+            rootCard.addView(convertedView)
+        }
 
         // 摘要详情行：商户 · 分类 · 账户
         val metaParts = listOfNotNull(
@@ -391,7 +406,10 @@ class FloatingConfirmService : Service() {
         val categoryName: String,
         val accountName: String,
         val parserUsed: String,
-        val autoConfirmSeconds: Int
+        val autoConfirmSeconds: Int,
+        val accountAmountMicros: Long = 0L,
+        val accountCurrency: String = "",
+        val sourceBadge: String = ""
     )
 
     companion object {
@@ -404,17 +422,34 @@ class FloatingConfirmService : Service() {
         private const val EXTRA_ACCOUNT_NAME = "extra_account_name"
         private const val EXTRA_PARSER_USED = "extra_parser_used"
         private const val EXTRA_AUTO_CONFIRM_SECONDS = "extra_auto_confirm_seconds"
+        private const val EXTRA_ACCOUNT_AMOUNT_MICROS = "extra_account_amount_micros"
+        private const val EXTRA_ACCOUNT_CURRENCY = "extra_account_currency"
+        private const val EXTRA_SOURCE_BADGE = "extra_source_badge"
         private const val EXTRA_AS_FOREGROUND = "extra_as_foreground"
 
         private const val NOTIF_ID_FGS = 9001
         private const val NOTIF_ID_CONFIRM_BASE = 9100
+
+        private fun formatConvertedAccountHint(payload: OverlayPayload): String {
+            val accCur = payload.accountCurrency.trim()
+            if (accCur.isBlank() ||
+                payload.origCurrency.equals(accCur, ignoreCase = true) ||
+                payload.accountAmountMicros <= 0L
+            ) {
+                return ""
+            }
+            return "≈ 账户实扣 ${MoneyAmount.format(payload.accountAmountMicros, accCur, showCurrencyCode = true)}"
+        }
 
         fun showOrNotify(
             context: Context,
             transactionId: Long,
             draft: ParsedBillDraft,
             accountName: String = "",
-            autoConfirmSeconds: Int = 8
+            autoConfirmSeconds: Int = 8,
+            accountAmountMicros: Long = 0L,
+            accountCurrency: String = "",
+            sourceBadge: String = ""
         ) {
             val appContext = context.applicationContext
             CaptureRuntimeHelper.ensureNotificationChannels(appContext)
@@ -428,7 +463,10 @@ class FloatingConfirmService : Service() {
                 categoryName = draft.categoryName,
                 accountName = accountName,
                 parserUsed = draft.parserUsed,
-                autoConfirmSeconds = autoConfirmSeconds
+                autoConfirmSeconds = autoConfirmSeconds,
+                accountAmountMicros = accountAmountMicros,
+                accountCurrency = accountCurrency,
+                sourceBadge = sourceBadge
             )
 
             if (!Settings.canDrawOverlays(appContext)) {
@@ -446,6 +484,9 @@ class FloatingConfirmService : Service() {
                 putExtra(EXTRA_ACCOUNT_NAME, payload.accountName)
                 putExtra(EXTRA_PARSER_USED, payload.parserUsed)
                 putExtra(EXTRA_AUTO_CONFIRM_SECONDS, payload.autoConfirmSeconds)
+                putExtra(EXTRA_ACCOUNT_AMOUNT_MICROS, payload.accountAmountMicros)
+                putExtra(EXTRA_ACCOUNT_CURRENCY, payload.accountCurrency)
+                putExtra(EXTRA_SOURCE_BADGE, payload.sourceBadge)
             }
 
             val startedDirectly = runCatching {
@@ -478,17 +519,29 @@ class FloatingConfirmService : Service() {
             }
 
             val notifId = NOTIF_ID_CONFIRM_BASE + (payload.transactionId % 10_000L).toInt()
-            val signPrefix = if (payload.type == TransactionType.INCOME) "+" else "-"
+            val signPrefix = when (payload.type) {
+                TransactionType.INCOME -> "+"
+                TransactionType.TRANSFER -> ""
+                else -> "-"
+            }
             val amountStr = signPrefix + MoneyAmount.format(
                 amountMicros = payload.origAmountMicros,
                 currencyCode = payload.origCurrency,
                 showCurrencyCode = true
             )
+            val convertedHint = formatConvertedAccountHint(payload)
             val detail = listOfNotNull(
+                convertedHint.takeIf { it.isNotBlank() },
                 payload.merchant.takeIf { it.isNotBlank() },
                 payload.categoryName.takeIf { it.isNotBlank() },
                 payload.accountName.takeIf { it.isNotBlank() }
             ).joinToString(" · ").ifBlank { "请核对自动识别账单" }
+            val cleanBadge = payload.sourceBadge.trim()
+            val notifTitle = if (cleanBadge.isNotEmpty()) {
+                "棱账 · $cleanBadge：$amountStr"
+            } else {
+                "棱账自动记账：$amountStr"
+            }
 
             val editIntent = Intent(appContext, MainActivity::class.java).apply {
                 putExtra(IntentConstants.EXTRA_EDIT_TRANSACTION_ID, payload.transactionId)
@@ -530,8 +583,9 @@ class FloatingConfirmService : Service() {
                 CaptureRuntimeHelper.CHANNEL_CAPTURE_CONFIRM
             )
                 .setSmallIcon(R.mipmap.ic_launcher)
-                .setContentTitle("棱账自动记账：$amountStr")
+                .setContentTitle(notifTitle)
                 .setContentText(detail)
+                .setStyle(NotificationCompat.BigTextStyle().bigText(detail))
                 .setPriority(NotificationCompat.PRIORITY_HIGH)
                 .setAutoCancel(true)
                 .setContentIntent(editPendingIntent)

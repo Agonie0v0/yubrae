@@ -113,7 +113,21 @@
             </intent-filter>
         </activity>
 
-        <!-- 8. Jetpack Glance 桌面小组件 -->
+        <!-- 8. 无障碍屏幕账单页与支付成功页监听服务 -->
+        <service
+            android:name=".capture.screen.KairoAccessibilityService"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/kairo_accessibility_config" />
+        </service>
+
+        <!-- 9. Jetpack Glance 桌面小组件 -->
         <receiver
             android:name="com.kairoledger.app.widget.KairoSummaryWidgetReceiver"
             android:exported="true"

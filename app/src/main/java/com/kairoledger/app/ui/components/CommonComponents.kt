@@ -35,6 +35,7 @@ import androidx.compose.material.icons.rounded.CurrencyExchange
 import androidx.compose.material.icons.rounded.CurrencyPound
 import androidx.compose.material.icons.rounded.Devices
 import androidx.compose.material.icons.rounded.DirectionsCar
+import androidx.compose.material.icons.rounded.DocumentScanner
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Euro
 import androidx.compose.material.icons.rounded.EventRepeat
@@ -217,6 +218,7 @@ object KairoFormats {
         CaptureChannel.MANUAL -> "手动记账"
         CaptureChannel.NOTIFICATION -> "自动通知"
         CaptureChannel.SMS -> "银行短信"
+        CaptureChannel.SCREEN -> "页面识别"
         CaptureChannel.AUTO_ACCOUNTING -> "AutoAccounting"
         CaptureChannel.SHARE -> "分享导入"
         CaptureChannel.AI -> "AI 识别"
@@ -229,6 +231,7 @@ object KairoFormats {
         CaptureChannel.MANUAL -> Icons.Rounded.Edit
         CaptureChannel.NOTIFICATION -> Icons.Rounded.Notifications
         CaptureChannel.SMS -> Icons.Rounded.Sms
+        CaptureChannel.SCREEN -> Icons.Rounded.DocumentScanner
         CaptureChannel.AUTO_ACCOUNTING -> Icons.Rounded.AutoAwesome
         CaptureChannel.SHARE -> Icons.Rounded.Share
         CaptureChannel.AI -> Icons.Rounded.SmartToy

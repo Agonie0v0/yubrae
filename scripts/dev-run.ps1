@@ -46,9 +46,9 @@ function Get-TargetDevice {
 function Invoke-BuildAndRestart {
     Push-Location $ProjectRoot
     try {
-        $tasks = if ($SkipTests) { @('assembleDebug') } else { @('testDebugUnitTest', 'assembleDebug') }
+        [string[]]$tasks = if ($SkipTests) { @('assembleDebug') } else { @('testDebugUnitTest', 'assembleDebug') }
         Write-Host "[KairoLedger] 正在编译: $($tasks -join ' ') ..." -ForegroundColor Cyan
-        & (Join-Path $ProjectRoot 'gradlew.bat') @tasks
+        & (Join-Path $ProjectRoot 'gradlew.bat') $tasks
         if ($LASTEXITCODE -ne 0) {
             Write-Host "[KairoLedger] 构建失败 (exit=$LASTEXITCODE)" -ForegroundColor Red
             return $false

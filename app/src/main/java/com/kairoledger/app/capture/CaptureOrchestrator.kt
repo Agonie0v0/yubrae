@@ -1,6 +1,9 @@
 package com.kairoledger.app.capture
 
 import android.content.Context
+import com.kairoledger.app.capture.screen.ScreenPageKind
+import com.kairoledger.app.capture.screen.ScreenParseOutcome
+import com.kairoledger.app.capture.screen.ScreenSnapshot
 import com.kairoledger.app.core.contract.CaptureEngine
 import com.kairoledger.app.core.contract.CaptureHandleResult
 import com.kairoledger.app.core.contract.CaptureInput
@@ -24,6 +27,7 @@ import com.kairoledger.app.data.db.ParseStatus
 import com.kairoledger.app.data.db.RawCaptureLogDao
 import com.kairoledger.app.data.db.RawCaptureLogEntity
 import com.kairoledger.app.data.db.TransactionDao
+import com.kairoledger.app.data.db.TransactionEntity
 import com.kairoledger.app.data.db.TransactionStatus
 import com.kairoledger.app.data.db.TransactionType
 import com.kairoledger.app.data.prefs.AppSettings
@@ -31,10 +35,15 @@ import com.kairoledger.app.data.prefs.SettingsStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.put
 import okhttp3.OkHttpClient
 import java.util.Locale
+import kotlin.math.abs
 
 /**
  * 自动记账核心编排器：
@@ -62,7 +71,16 @@ class CaptureOrchestrator(
     private val permissionInspector: suspend () -> DevicePermissionReport = { defaultUnsupportedPermissionReport() },
     private val rootGranter: suspend () -> Result<String> = {
         Result.failure(UnsupportedOperationException("仅支持在 Android 设备执行 Root 授权"))
-    }
+    },
+    private val richFloatingPromptLauncher: (suspend (
+        transactionId: Long,
+        draft: ParsedBillDraft,
+        accountName: String,
+        accountAmountMicros: Long,
+        accountCurrency: String,
+        sourceBadge: String,
+        settings: AppSettings
+    ) -> Unit)? = null
 ) : CaptureEngine {
 
     constructor(
@@ -93,7 +111,19 @@ class CaptureOrchestrator(
             )
         },
         permissionInspector = { AndroidPermissionHelper.inspectPermissions(context.applicationContext) },
-        rootGranter = { AndroidPermissionHelper.tryRootGrantPermissions(context.applicationContext) }
+        rootGranter = { AndroidPermissionHelper.tryRootGrantPermissions(context.applicationContext) },
+        richFloatingPromptLauncher = { txId, draft, accountName, accountAmountMicros, accountCurrency, sourceBadge, settings ->
+            FloatingConfirmService.showOrNotify(
+                context = context.applicationContext,
+                transactionId = txId,
+                draft = draft,
+                accountName = accountName,
+                autoConfirmSeconds = settings.floatingAutoConfirmSeconds,
+                accountAmountMicros = accountAmountMicros,
+                accountCurrency = accountCurrency,
+                sourceBadge = sourceBadge
+            )
+        }
     )
 
     private val captureMutex = Mutex()
@@ -307,6 +337,156 @@ class CaptureOrchestrator(
         )
     }
 
+    /**
+     * 供 KairoAccessibilityService 调用的屏幕账单页 / 支付成功页识别入口。
+     */
+    suspend fun handleScreenCapture(
+        snapshot: ScreenSnapshot,
+        outcome: ScreenParseOutcome
+    ): CaptureHandleResult {
+        val title = buildScreenLogTitle(snapshot.packageName, outcome.pageKind)
+        val rawSummary = outcome.summaryText.trim().ifBlank {
+            snapshot.texts.asSequence()
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+                .joinToString("\n")
+                .take(1500)
+        }
+        val cleanOrderNo = outcome.orderNo.trim().ifBlank {
+            outcome.draft?.externalOrderNo.orEmpty().trim()
+        }
+        val logContent = if (cleanOrderNo.isNotBlank() && !rawSummary.contains(cleanOrderNo)) {
+            if (rawSummary.isBlank()) "单号: $cleanOrderNo" else "$rawSummary\n单号: $cleanOrderNo"
+        } else {
+            rawSummary
+        }
+
+        val initialLog = RawCaptureLogEntity(
+            channel = CaptureChannel.SCREEN,
+            sourcePackage = snapshot.packageName,
+            title = title,
+            content = logContent,
+            capturedAt = snapshot.capturedAtMillis,
+            parseStatus = ParseStatus.FAILED
+        )
+        val logId = rawCaptureLogDao.insert(initialLog)
+        val settings = runCatching { settingsProvider() }.getOrDefault(AppSettings())
+
+        if (!settings.accessibilityCaptureEnabled) {
+            val msg = "采集通道 ${CaptureChannel.SCREEN} 已关闭"
+            rawCaptureLogDao.update(initialLog.copy(id = logId, parseStatus = ParseStatus.IGNORED, errorMessage = msg))
+            return CaptureHandleResult(logId = logId, status = ParseStatus.IGNORED, message = msg)
+        }
+        if (outcome.pageKind == ScreenPageKind.PAY_SUCCESS && !settings.accessibilityPaySuccessEnabled) {
+            val msg = "支付成功页自动唤起开关已关闭"
+            rawCaptureLogDao.update(initialLog.copy(id = logId, parseStatus = ParseStatus.IGNORED, errorMessage = msg))
+            return CaptureHandleResult(logId = logId, status = ParseStatus.IGNORED, message = msg)
+        }
+        if (outcome.pageKind == ScreenPageKind.BILL_DETAIL && !settings.accessibilityBillDetailEnabled) {
+            val msg = "历史账单详情页补记开关已关闭"
+            rawCaptureLogDao.update(initialLog.copy(id = logId, parseStatus = ParseStatus.IGNORED, errorMessage = msg))
+            return CaptureHandleResult(logId = logId, status = ParseStatus.IGNORED, message = msg)
+        }
+        if (outcome.ignoredReason.isNotBlank()) {
+            rawCaptureLogDao.update(
+                initialLog.copy(
+                    id = logId,
+                    parseStatus = ParseStatus.IGNORED,
+                    errorMessage = outcome.ignoredReason
+                )
+            )
+            return CaptureHandleResult(
+                logId = logId,
+                status = ParseStatus.IGNORED,
+                message = outcome.ignoredReason
+            )
+        }
+
+        val allAccounts = accountDao.getAll()
+        val activeAccounts = allAccounts.filter { !it.archived }.ifEmpty { allAccounts }
+        val categories = categoryDao.getAll()
+
+        var draft = outcome.draft
+        var matchedStatus = ParseStatus.MATCHED_LOCAL
+        var llmErrorMessage: String? = null
+
+        if (draft == null && outcome.shouldFallbackToLlm && settings.llmEnabled && settings.llmApiKey.isNotBlank()) {
+            val screenInput = CaptureInput(
+                channel = CaptureChannel.SCREEN,
+                sourcePackage = snapshot.packageName,
+                title = title,
+                content = logContent,
+                timestamp = snapshot.capturedAtMillis
+            )
+            val llmResult = llmBillParser.parse(screenInput, settings, activeAccounts, categories)
+            llmResult.fold(
+                onSuccess = { aiDraft ->
+                    if (aiDraft != null) {
+                        draft = aiDraft
+                        matchedStatus = ParseStatus.MATCHED_AI
+                    } else {
+                        llmErrorMessage = "AI 判定非资金动账"
+                    }
+                },
+                onFailure = { err ->
+                    llmErrorMessage = "AI 解析失败: ${err.message ?: "未知错误"}"
+                }
+            )
+        }
+
+        val rawDraft = draft
+        if (rawDraft == null || rawDraft.origAmountMicros <= 0L) {
+            val finalStatus = when {
+                llmErrorMessage == "AI 判定非资金动账" -> ParseStatus.IGNORED
+                outcome.pageKind == ScreenPageKind.UNKNOWN && rawDraft == null -> ParseStatus.IGNORED
+                else -> ParseStatus.FAILED
+            }
+            val errorMsg = llmErrorMessage ?: when {
+                rawDraft != null -> "屏幕识别金额无效"
+                outcome.pageKind == ScreenPageKind.UNKNOWN -> "非支付或账单详情页面"
+                else -> "未从屏幕页面识别到有效账单"
+            }
+            rawCaptureLogDao.update(
+                initialLog.copy(
+                    id = logId,
+                    parseStatus = finalStatus,
+                    errorMessage = errorMsg
+                )
+            )
+            return CaptureHandleResult(logId = logId, status = finalStatus, message = errorMsg)
+        }
+
+        val resolvedDraft = if (cleanOrderNo.isNotBlank() && rawDraft.externalOrderNo.isBlank()) {
+            rawDraft.copy(externalOrderNo = cleanOrderNo)
+        } else {
+            rawDraft
+        }
+        val sourceBadge = when (outcome.pageKind) {
+            ScreenPageKind.PAY_SUCCESS -> "支付页识别"
+            ScreenPageKind.BILL_DETAIL -> "账单详情识别"
+            ScreenPageKind.UNKNOWN -> "页面识别"
+        }
+
+        return persistDraftWithDeduplication(
+            logId = logId,
+            initialLog = initialLog,
+            draft = resolvedDraft,
+            matchedStatus = matchedStatus,
+            channel = CaptureChannel.SCREEN,
+            sourcePackage = snapshot.packageName,
+            rawText = "$title\n$logContent".trim(),
+            activeAccounts = activeAccounts,
+            categories = categories,
+            settings = settings,
+            showFloatingPrompt = true,
+            screenPageKind = outcome.pageKind,
+            screenOrderNo = resolvedDraft.externalOrderNo.ifBlank { cleanOrderNo },
+            screenDedupFingerprint = outcome.dedupFingerprint,
+            capturedAtMillis = snapshot.capturedAtMillis,
+            sourceBadge = sourceBadge
+        )
+    }
+
     private suspend fun persistDraftWithDeduplication(
         logId: Long,
         initialLog: RawCaptureLogEntity,
@@ -318,12 +498,24 @@ class CaptureOrchestrator(
         activeAccounts: List<AccountEntity>,
         categories: List<CategoryEntity>,
         settings: AppSettings,
-        showFloatingPrompt: Boolean
+        showFloatingPrompt: Boolean,
+        screenPageKind: ScreenPageKind? = null,
+        screenOrderNo: String = "",
+        screenDedupFingerprint: String = "",
+        capturedAtMillis: Long = initialLog.capturedAt,
+        sourceBadge: String = ""
     ): CaptureHandleResult {
         val accountsById = activeAccounts.associateBy { it.id }
         val categoriesById = categories.associateBy { it.id }
 
         val resolvedAccountId = draft.accountId?.takeIf { it in accountsById }
+            ?: if (draft.manualAccountAmountMicros != null &&
+                !draft.origCurrency.equals(settings.baseCurrency, ignoreCase = true)
+            ) {
+                activeAccounts.firstOrNull { it.currencyCode.equals(settings.baseCurrency, ignoreCase = true) }?.id
+            } else {
+                null
+            }
             ?: activeAccounts.firstOrNull { it.currencyCode.equals(draft.origCurrency, ignoreCase = true) }?.id
             ?: activeAccounts.firstOrNull()?.id
 
@@ -334,17 +526,90 @@ class CaptureOrchestrator(
                     id = logId,
                     parseStatus = ParseStatus.FAILED,
                     parserUsed = draft.parserUsed,
-                    extractedJson = draftToJson(draft),
+                    extractedJson = draftToJson(draft, screenOrderNo, screenDedupFingerprint, screenPageKind),
                     errorMessage = msg
                 )
             )
             return CaptureHandleResult(logId = logId, status = ParseStatus.FAILED, draft = draft, message = msg)
         }
 
-        val finalDraft = draft.copy(accountId = resolvedAccountId)
-        val draftJson = draftToJson(finalDraft)
+        val effectiveOrderNo = screenOrderNo.trim().ifBlank { draft.externalOrderNo.trim() }
+        val finalDraft = draft.copy(
+            accountId = resolvedAccountId,
+            externalOrderNo = effectiveOrderNo
+        )
+        val draftJson = draftToJson(finalDraft, effectiveOrderNo, screenDedupFingerprint, screenPageKind)
+        val finalNote = appendOrderNoIfMissing(finalDraft.note, effectiveOrderNo)
 
         return captureMutex.withLock {
+            // 1. 强单号防重（若关联交易仍存在，绝不重复记账或弹窗；若用户已手工删掉则允许重新补记）
+            if (effectiveOrderNo.isNotBlank()) {
+                val recentAllLogs = rawCaptureLogDao.getAll().take(ORDER_DEDUP_SCAN_LIMIT)
+                for (candidate in recentAllLogs) {
+                    if (candidate.id == logId) continue
+                    val linkedTxId = candidate.linkedTransactionId ?: continue
+                    if (!logMatchesOrderNo(candidate, effectiveOrderNo)) continue
+                    val existingTx = transactionDao.getById(linkedTxId)
+                    if (existingTx != null) {
+                        val dedupMsg = "同单号已记账（交易 #${existingTx.id}），跳过重复记录"
+                        rawCaptureLogDao.update(
+                            initialLog.copy(
+                                id = logId,
+                                parseStatus = ParseStatus.MERGED_DEDUP,
+                                parserUsed = finalDraft.parserUsed,
+                                extractedJson = draftJson,
+                                linkedTransactionId = existingTx.id,
+                                errorMessage = ""
+                            )
+                        )
+                        return@withLock CaptureHandleResult(
+                            logId = logId,
+                            status = ParseStatus.MERGED_DEDUP,
+                            transactionId = existingTx.id,
+                            mergedIntoExisting = true,
+                            draft = finalDraft,
+                            message = dedupMsg
+                        )
+                    }
+                }
+            }
+
+            // 2. 历史账单详情页（距当前捕获超过 2 分钟）：检查前后 120s 内同金额/币种交易防重
+            val isHistoricalBillDetail = screenPageKind == ScreenPageKind.BILL_DETAIL &&
+                abs(capturedAtMillis - finalDraft.timestamp) > HISTORICAL_BILL_THRESHOLD_MILLIS
+            if (isHistoricalBillDetail) {
+                val historicalWindowTxs = transactionDao.getBetween(
+                    finalDraft.timestamp - HISTORICAL_DEDUP_WINDOW_MILLIS,
+                    finalDraft.timestamp + HISTORICAL_DEDUP_WINDOW_MILLIS
+                )
+                val existingHistoricalTx = historicalWindowTxs.firstOrNull { tx ->
+                    tx.type == finalDraft.type &&
+                        tx.origCurrency.equals(finalDraft.origCurrency, ignoreCase = true) &&
+                        tx.origAmountMicros == finalDraft.origAmountMicros
+                }
+                if (existingHistoricalTx != null) {
+                    val dedupMsg = "历史账单已存在相同金额/币种记录（交易 #${existingHistoricalTx.id}），跳过重复补记"
+                    rawCaptureLogDao.update(
+                        initialLog.copy(
+                            id = logId,
+                            parseStatus = ParseStatus.MERGED_DEDUP,
+                            parserUsed = finalDraft.parserUsed,
+                            extractedJson = draftJson,
+                            linkedTransactionId = existingHistoricalTx.id,
+                            errorMessage = ""
+                        )
+                    )
+                    return@withLock CaptureHandleResult(
+                        logId = logId,
+                        status = ParseStatus.MERGED_DEDUP,
+                        transactionId = existingHistoricalTx.id,
+                        mergedIntoExisting = true,
+                        draft = finalDraft,
+                        message = dedupMsg
+                    )
+                }
+            }
+
             val windowStart = finalDraft.timestamp - CaptureDeduplicator.DEFAULT_WINDOW_MILLIS
             val windowEnd = finalDraft.timestamp + CaptureDeduplicator.DEFAULT_WINDOW_MILLIS
             val recentTxs = transactionDao.getBetween(windowStart, windowEnd)
@@ -353,6 +618,7 @@ class CaptureOrchestrator(
                 .filter { it.linkedTransactionId != null && it.id != logId }
                 .associateBy { it.linkedTransactionId!! }
 
+            // 3. 60s 跨渠道去重与信息融合
             val dedupMatch = deduplicator.findMatchAndMerge(
                 incomingDraft = finalDraft,
                 incomingChannel = channel,
@@ -365,7 +631,13 @@ class CaptureOrchestrator(
             )
 
             if (dedupMatch != null) {
-                val mergeResult = ledgerService.saveTransaction(dedupMatch.mergedRequest)
+                val enrichedRequest = enrichMergedRequest(
+                    base = dedupMatch.mergedRequest,
+                    incomingDraft = finalDraft,
+                    orderNo = effectiveOrderNo,
+                    accountsById = accountsById
+                )
+                val mergeResult = ledgerService.saveTransaction(enrichedRequest)
                 return@withLock mergeResult.fold(
                     onSuccess = { updatedTx ->
                         rawCaptureLogDao.update(
@@ -408,6 +680,42 @@ class CaptureOrchestrator(
                 )
             }
 
+            // 3b. 同应用支付成功页刚落账后用户立即点开“账单详情页”（无单号场景的实时去重融合）
+            if (screenPageKind == ScreenPageKind.BILL_DETAIL && !isHistoricalBillDetail) {
+                val existingPaySuccessTx = findRecentScreenPaySuccessMatch(
+                    finalDraft = finalDraft,
+                    sourcePackage = sourcePackage,
+                    recentTxs = recentTxs,
+                    logsByTxId = logsByTxId
+                )
+                if (existingPaySuccessTx != null) {
+                    val enrichedTxId = maybeEnrichPaySuccessTx(
+                        existing = existingPaySuccessTx,
+                        incomingDraft = finalDraft,
+                        orderNo = effectiveOrderNo,
+                        accountsById = accountsById
+                    )
+                    rawCaptureLogDao.update(
+                        initialLog.copy(
+                            id = logId,
+                            parseStatus = ParseStatus.MERGED_DEDUP,
+                            parserUsed = finalDraft.parserUsed,
+                            extractedJson = draftJson,
+                            linkedTransactionId = enrichedTxId,
+                            errorMessage = ""
+                        )
+                    )
+                    return@withLock CaptureHandleResult(
+                        logId = logId,
+                        status = ParseStatus.MERGED_DEDUP,
+                        transactionId = enrichedTxId,
+                        mergedIntoExisting = true,
+                        draft = finalDraft,
+                        message = "与刚捕获的支付成功页交易 #$enrichedTxId 自动融合"
+                    )
+                }
+            }
+
             val shouldPromptFloating = showFloatingPrompt && settings.floatingConfirmEnabled
             val initialTxStatus = if (shouldPromptFloating ||
                 (settings.defaultPendingWhenUncertain && finalDraft.confidence < 0.8f)
@@ -423,9 +731,10 @@ class CaptureOrchestrator(
                 origAmountMicros = finalDraft.origAmountMicros,
                 origCurrency = finalDraft.origCurrency,
                 accountId = resolvedAccountId,
+                manualAccountAmountMicros = finalDraft.manualAccountAmountMicros,
                 categoryId = finalDraft.categoryId,
                 merchant = finalDraft.merchant,
-                note = finalDraft.note,
+                note = finalNote,
                 sourceType = channel,
                 rawEventId = logId,
                 status = initialTxStatus
@@ -447,7 +756,19 @@ class CaptureOrchestrator(
                     if (shouldPromptFloating) {
                         val accountName = accountsById[resolvedAccountId]?.name.orEmpty()
                         runCatching {
-                            floatingPromptLauncher(savedTx.id, finalDraft, accountName, settings)
+                            if (richFloatingPromptLauncher != null) {
+                                richFloatingPromptLauncher.invoke(
+                                    savedTx.id,
+                                    finalDraft,
+                                    accountName,
+                                    savedTx.accountAmountMicros,
+                                    savedTx.accountCurrency,
+                                    sourceBadge,
+                                    settings
+                                )
+                            } else {
+                                floatingPromptLauncher(savedTx.id, finalDraft, accountName, settings)
+                            }
                         }
                     }
                     CaptureHandleResult(
@@ -595,8 +916,168 @@ class CaptureOrchestrator(
     private fun isChannelEnabled(channel: String, settings: AppSettings): Boolean = when (channel) {
         CaptureChannel.NOTIFICATION -> settings.notificationCaptureEnabled
         CaptureChannel.SMS -> settings.smsCaptureEnabled
+        CaptureChannel.SCREEN -> settings.accessibilityCaptureEnabled
         CaptureChannel.AUTO_ACCOUNTING -> settings.autoAccountingBridgeEnabled
         else -> true
+    }
+
+    private fun buildScreenLogTitle(packageName: String, pageKind: ScreenPageKind): String {
+        val appLabel = when {
+            packageName == "com.tencent.mm" -> "微信"
+            packageName == "com.eg.android.AlipayGphone" -> "支付宝"
+            packageName == "com.unionpay" -> "云闪付"
+            packageName.contains("cmbchina", ignoreCase = true) -> "招商银行"
+            packageName.contains("icbc", ignoreCase = true) -> "工商银行"
+            packageName.contains("chinamworld", ignoreCase = true) -> "建设银行"
+            packageName.contains("bankabc", ignoreCase = true) -> "农业银行"
+            packageName.contains("pingan", ignoreCase = true) -> "平安银行"
+            packageName.contains("wise", ignoreCase = true) -> "Wise"
+            packageName.contains("paypal", ignoreCase = true) -> "PayPal"
+            packageName.contains("revolut", ignoreCase = true) -> "Revolut"
+            else -> ""
+        }
+        val pageLabel = when (pageKind) {
+            ScreenPageKind.PAY_SUCCESS -> "支付成功页"
+            ScreenPageKind.BILL_DETAIL -> "账单详情页"
+            ScreenPageKind.UNKNOWN -> "屏幕页面"
+        }
+        return if (appLabel.isNotBlank()) "$appLabel$pageLabel" else pageLabel
+    }
+
+    private fun appendOrderNoIfMissing(note: String, orderNo: String): String {
+        val cleanNote = note.trim()
+        val cleanOrder = orderNo.trim()
+        if (cleanOrder.isBlank() || cleanNote.contains(cleanOrder)) return cleanNote
+        return if (cleanNote.isBlank()) "单号:$cleanOrder" else "$cleanNote | 单号:$cleanOrder"
+    }
+
+    private fun logMatchesOrderNo(log: RawCaptureLogEntity, orderNo: String): Boolean {
+        val extracted = extractOrderNoFromJson(log.extractedJson)
+        if (extracted.isNotBlank() && extracted.equals(orderNo, ignoreCase = true)) {
+            return true
+        }
+        return orderNo.length >= 8 && log.content.contains(orderNo, ignoreCase = true)
+    }
+
+    private fun extractOrderNoFromJson(rawJson: String): String {
+        if (rawJson.isBlank()) return ""
+        return runCatching {
+            val obj = LENIENT_JSON.parseToJsonElement(rawJson) as? JsonObject ?: return ""
+            val primary = (obj["externalOrderNo"] as? JsonPrimitive)?.contentOrNull.orEmpty().trim()
+            if (primary.isNotBlank()) return primary
+            (obj["orderNo"] as? JsonPrimitive)?.contentOrNull.orEmpty().trim()
+        }.getOrDefault("")
+    }
+
+    private fun enrichMergedRequest(
+        base: RecordTransactionRequest,
+        incomingDraft: ParsedBillDraft,
+        orderNo: String,
+        accountsById: Map<Long, AccountEntity>
+    ): RecordTransactionRequest {
+        val targetAccCurrency = accountsById[base.accountId]?.currencyCode.orEmpty()
+        val enrichedManualAmount = if (
+            base.manualAccountAmountMicros == null &&
+            incomingDraft.manualAccountAmountMicros != null &&
+            incomingDraft.manualAccountAmountMicros > 0L &&
+            targetAccCurrency.isNotBlank() &&
+            !targetAccCurrency.equals(base.origCurrency, ignoreCase = true)
+        ) {
+            incomingDraft.manualAccountAmountMicros
+        } else {
+            base.manualAccountAmountMicros
+        }
+        val enrichedNote = appendOrderNoIfMissing(base.note, orderNo)
+        return base.copy(
+            manualAccountAmountMicros = enrichedManualAmount,
+            note = enrichedNote
+        )
+    }
+
+    private fun findRecentScreenPaySuccessMatch(
+        finalDraft: ParsedBillDraft,
+        sourcePackage: String,
+        recentTxs: List<TransactionEntity>,
+        logsByTxId: Map<Long, RawCaptureLogEntity>
+    ): TransactionEntity? {
+        return recentTxs.firstOrNull { tx ->
+            if (tx.sourceType != CaptureChannel.SCREEN) return@firstOrNull false
+            if (tx.type != finalDraft.type) return@firstOrNull false
+            if (!tx.origCurrency.equals(finalDraft.origCurrency, ignoreCase = true)) return@firstOrNull false
+            if (tx.origAmountMicros != finalDraft.origAmountMicros) return@firstOrNull false
+            val linkedLog = logsByTxId[tx.id] ?: return@firstOrNull false
+            if (!linkedLog.sourcePackage.equals(sourcePackage, ignoreCase = true)) return@firstOrNull false
+            if (!linkedLog.title.contains("支付成功")) return@firstOrNull false
+            val a = tx.merchant.trim().lowercase(Locale.ROOT)
+            val b = finalDraft.merchant.trim().lowercase(Locale.ROOT)
+            a.isBlank() || b.isBlank() || a == b || a.contains(b) || b.contains(a)
+        }
+    }
+
+    private suspend fun maybeEnrichPaySuccessTx(
+        existing: TransactionEntity,
+        incomingDraft: ParsedBillDraft,
+        orderNo: String,
+        accountsById: Map<Long, AccountEntity>
+    ): Long {
+        val updatedNote = appendOrderNoIfMissing(existing.note, orderNo)
+        val newAccountId = if (incomingDraft.accountHint.isNotBlank() &&
+            incomingDraft.accountId != null &&
+            !existing.note.contains(incomingDraft.accountHint)
+        ) {
+            incomingDraft.accountId
+        } else {
+            existing.accountId
+        }
+        val targetAccCurrency = accountsById[newAccountId]?.currencyCode ?: existing.accountCurrency
+        val newManualAccountAmount = if (
+            incomingDraft.manualAccountAmountMicros != null &&
+            incomingDraft.manualAccountAmountMicros > 0L &&
+            !targetAccCurrency.equals(existing.origCurrency, ignoreCase = true)
+        ) {
+            incomingDraft.manualAccountAmountMicros
+        } else {
+            null
+        }
+        val betterMerchant = if (existing.merchant.isBlank() && incomingDraft.merchant.isNotBlank()) {
+            incomingDraft.merchant
+        } else {
+            existing.merchant
+        }
+        val needsUpdate = updatedNote != existing.note ||
+            newAccountId != existing.accountId ||
+            newManualAccountAmount != null ||
+            betterMerchant != existing.merchant
+        if (!needsUpdate) return existing.id
+
+        val req = RecordTransactionRequest(
+            existingId = existing.id,
+            type = existing.type,
+            timestamp = minOf(existing.timestamp, incomingDraft.timestamp),
+            origAmountMicros = existing.origAmountMicros,
+            origCurrency = existing.origCurrency,
+            accountId = newAccountId,
+            manualAccountAmountMicros = newManualAccountAmount ?: if (
+                existing.origCurrency != targetAccCurrency &&
+                existing.accountCurrency == targetAccCurrency &&
+                existing.accountAmountMicros > 0L
+            ) {
+                existing.accountAmountMicros
+            } else {
+                null
+            },
+            toAccountId = existing.toAccountId,
+            manualToAmountMicros = existing.toAmountMicros,
+            categoryId = existing.categoryId ?: incomingDraft.categoryId,
+            merchant = betterMerchant,
+            note = updatedNote,
+            tags = existing.tags,
+            reimburseStatus = existing.reimburseStatus,
+            sourceType = existing.sourceType,
+            rawEventId = existing.rawEventId,
+            status = existing.status
+        )
+        return ledgerService.saveTransaction(req).getOrNull()?.id ?: existing.id
     }
 
     private fun resolveExternalAccount(
@@ -635,7 +1116,12 @@ class CaptureOrchestrator(
         return accounts.firstOrNull()
     }
 
-    private fun draftToJson(draft: ParsedBillDraft): String = buildJsonObject {
+    private fun draftToJson(
+        draft: ParsedBillDraft,
+        extraOrderNo: String = "",
+        dedupFingerprint: String = "",
+        pageKind: ScreenPageKind? = null
+    ): String = buildJsonObject {
         put("type", draft.type)
         put("origAmountMicros", draft.origAmountMicros)
         put("origCurrency", draft.origCurrency)
@@ -648,9 +1134,31 @@ class CaptureOrchestrator(
         put("timestamp", draft.timestamp)
         put("confidence", draft.confidence)
         put("parserUsed", draft.parserUsed)
+        val effectiveOrderNo = draft.externalOrderNo.ifBlank { extraOrderNo }.trim()
+        if (effectiveOrderNo.isNotBlank()) {
+            put("externalOrderNo", effectiveOrderNo)
+        }
+        draft.manualAccountAmountMicros?.let {
+            put("manualAccountAmountMicros", it)
+        }
+        if (dedupFingerprint.isNotBlank()) {
+            put("dedupFingerprint", dedupFingerprint)
+        }
+        if (pageKind != null) {
+            put("pageKind", pageKind.name)
+        }
     }.toString()
 
     companion object {
+        private const val ORDER_DEDUP_SCAN_LIMIT = 500
+        private const val HISTORICAL_BILL_THRESHOLD_MILLIS = 120_000L
+        private const val HISTORICAL_DEDUP_WINDOW_MILLIS = 120_000L
+
+        private val LENIENT_JSON = Json {
+            ignoreUnknownKeys = true
+            isLenient = true
+        }
+
         private val VALID_ALIAS_TYPES = setOf(
             AliasMatchType.PACKAGE,
             AliasMatchType.CARD_LAST4,
@@ -667,7 +1175,8 @@ class CaptureOrchestrator(
             ignoringBatteryOptimizations = false,
             postNotificationGranted = false,
             manufacturer = "JVM",
-            osDisplay = "JVM Test Environment"
+            osDisplay = "JVM Test Environment",
+            accessibilityServiceEnabled = false
         )
     }
 }
