@@ -18,6 +18,7 @@ import android.os.Build
 import android.os.IBinder
 import android.provider.Settings
 import android.text.TextUtils
+import android.util.Log
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
@@ -28,6 +29,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
+import com.kairoledger.app.BuildConfig
 import com.kairoledger.app.MainActivity
 import com.kairoledger.app.R
 import com.kairoledger.app.core.contract.IntentConstants
@@ -67,6 +69,7 @@ class FloatingConfirmService : Service() {
 
         val txId = intent?.getLongExtra(EXTRA_TX_ID, -1L) ?: -1L
         if (txId <= 0L) {
+            debugWarn("onStartCommand: invalid txId=$txId, stopSelf")
             stopSelfCleanly()
             return START_NOT_STICKY
         }
@@ -87,6 +90,7 @@ class FloatingConfirmService : Service() {
         )
 
         if (!Settings.canDrawOverlays(this)) {
+            debugWarn("onStartCommand: overlay permission missing, fallback notif tx=$txId")
             postFallbackNotification(this, payload)
             stopSelfCleanly()
             return START_NOT_STICKY
@@ -94,8 +98,11 @@ class FloatingConfirmService : Service() {
 
         val shown = showOverlayCard(payload)
         if (!shown) {
+            debugWarn("onStartCommand: showOverlayCard failed, fallback notif tx=$txId")
             postFallbackNotification(this, payload)
             stopSelfCleanly()
+        } else {
+            debugLog("onStartCommand: overlay shown tx=$txId badge=${payload.sourceBadge}")
         }
 
         return START_NOT_STICKY
@@ -133,7 +140,11 @@ class FloatingConfirmService : Service() {
 
     private fun showOverlayCard(payload: OverlayPayload): Boolean {
         removeOverlayView()
-        val wm = getSystemService(Context.WINDOW_SERVICE) as? WindowManager ?: return false
+        val wm = getSystemService(Context.WINDOW_SERVICE) as? WindowManager
+        if (wm == null) {
+            debugWarn("showOverlayCard: WindowManager is null tx=${payload.transactionId}")
+            return false
+        }
         windowManager = wm
 
         val isDark = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
@@ -308,11 +319,11 @@ class FloatingConfirmService : Service() {
             y = dp(42)
         }
 
-        val attached = runCatching {
+        val attachResult = runCatching {
             wm.addView(wrapper, layoutParams)
-        }.isSuccess
-
-        if (!attached) {
+        }
+        if (attachResult.isFailure) {
+            debugWarn("showOverlayCard: wm.addView failed tx=${payload.transactionId}: ${attachResult.exceptionOrNull()?.message}")
             return false
         }
 
@@ -470,6 +481,7 @@ class FloatingConfirmService : Service() {
             )
 
             if (!Settings.canDrawOverlays(appContext)) {
+                debugWarn("showOrNotify: canDrawOverlays=false, fallback notif tx=$transactionId")
                 postFallbackNotification(appContext, payload)
                 return
             }
@@ -489,19 +501,38 @@ class FloatingConfirmService : Service() {
                 putExtra(EXTRA_SOURCE_BADGE, payload.sourceBadge)
             }
 
-            val startedDirectly = runCatching {
+            val directResult = runCatching {
                 appContext.startService(intent)
-            }.isSuccess
+            }
+            if (directResult.isSuccess) {
+                debugLog("showOrNotify: startService dispatched tx=$transactionId badge=$sourceBadge")
+                return
+            }
+            debugWarn("showOrNotify: startService failed tx=$transactionId: ${directResult.exceptionOrNull()?.message}")
 
-            if (!startedDirectly) {
-                val startedForeground = runCatching {
-                    intent.putExtra(EXTRA_AS_FOREGROUND, true)
-                    ContextCompat.startForegroundService(appContext, intent)
-                }.isSuccess
+            val fgResult = runCatching {
+                intent.putExtra(EXTRA_AS_FOREGROUND, true)
+                ContextCompat.startForegroundService(appContext, intent)
+            }
+            if (fgResult.isSuccess) {
+                debugLog("showOrNotify: startForegroundService dispatched tx=$transactionId badge=$sourceBadge")
+                return
+            }
+            debugWarn("showOrNotify: startForegroundService failed tx=$transactionId: ${fgResult.exceptionOrNull()?.message}, fallback notif")
+            postFallbackNotification(appContext, payload)
+        }
 
-                if (!startedForeground) {
-                    postFallbackNotification(appContext, payload)
-                }
+        private const val TAG = "KairoOverlay"
+
+        private fun debugLog(msg: String) {
+            if (BuildConfig.DEBUG) {
+                Log.d(TAG, msg)
+            }
+        }
+
+        private fun debugWarn(msg: String) {
+            if (BuildConfig.DEBUG) {
+                Log.w(TAG, msg)
             }
         }
 

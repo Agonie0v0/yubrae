@@ -62,26 +62,128 @@ function Test-HasKairoA11y([string[]]$entries) {
 }
 
 function Restore-KairoAccessibility([string]$serial) {
-    $currentRaw = (& $AdbExe -s $serial shell settings get secure enabled_accessibility_services 2>$null) -join ''
-    $existing = Get-A11yEntries $currentRaw
-    $merged = [System.Collections.Generic.List[string]]::new()
-    $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
-    foreach ($entry in $existing) {
-        $normalized = if ($entry -eq "$PackageName/$A11yShortClass") { $A11yComponent } else { $entry }
-        if ($seen.Add($normalized)) {
-            $merged.Add($normalized)
+    $hasRoot = ((& $AdbExe -s $serial shell "su -c id 2>/dev/null" 2>$null) -join '') -match 'uid=0'
+    for ($attempt = 1; $attempt -le 2; $attempt++) {
+        $currentRaw = (& $AdbExe -s $serial shell settings get secure enabled_accessibility_services 2>$null) -join ''
+        $existing = Get-A11yEntries $currentRaw
+        $merged = [System.Collections.Generic.List[string]]::new()
+        $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+        foreach ($entry in $existing) {
+            $normalized = if ($entry -eq "$PackageName/$A11yShortClass") { $A11yComponent } else { $entry }
+            if ($seen.Add($normalized)) {
+                $merged.Add($normalized)
+            }
+        }
+        if ($seen.Add($A11yComponent)) {
+            $merged.Add($A11yComponent)
+        }
+        $joined = $merged -join ':'
+
+        if ($hasRoot) {
+            $escaped = $joined -replace "'", "'\\''"
+            $putSh = (@"
+settings put secure enabled_accessibility_services '$escaped'
+settings put secure accessibility_enabled 1
+"@) -replace "`r`n", "`n"
+            $putSh | & $AdbExe -s $serial shell "su -c sh" 2>$null | Out-Null
+        } else {
+            & $AdbExe -s $serial shell settings put secure enabled_accessibility_services "$joined" 2>$null | Out-Null
+            & $AdbExe -s $serial shell settings put secure accessibility_enabled 1 2>$null | Out-Null
+        }
+
+        Start-Sleep -Milliseconds 1000
+        $verifyRaw = (& $AdbExe -s $serial shell settings get secure enabled_accessibility_services 2>$null) -join ''
+        if (Test-HasKairoA11y (Get-A11yEntries $verifyRaw)) {
+            Write-Host "[KairoLedger] 已无损保持并启用无障碍页面监听服务。" -ForegroundColor Green
+            return
+        }
+        if ($attempt -eq 1) {
+            Write-Host "[KairoLedger] 检测到无障碍列表被系统清除，正在自动重试恢复..." -ForegroundColor Yellow
         }
     }
-    if ($seen.Add($A11yComponent)) {
-        $merged.Add($A11yComponent)
+    Write-Host "[KairoLedger] 警告：重试后 enabled_accessibility_services 仍未保留 $A11yComponent。" -ForegroundColor Yellow
+}
+
+function Ensure-HyperOsKeepAlive([string]$serial) {
+    $suCheck = (& $AdbExe -s $serial shell "su -c id 2>/dev/null" 2>$null) -join ''
+    if ($suCheck -notmatch 'uid=0') {
+        Write-Host "[KairoLedger] 设备未授予 ADB Shell Root，跳过 HyperOS 防冻结与 AppOps 自动放行。" -ForegroundColor Yellow
+        return
     }
-    $joined = $merged -join ':'
-    & $AdbExe -s $serial shell settings put secure enabled_accessibility_services "$joined" 2>$null | Out-Null
-    & $AdbExe -s $serial shell settings put secure accessibility_enabled 1 2>$null | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-        & $AdbExe -s $serial shell "su -c 'settings put secure enabled_accessibility_services $joined && settings put secure accessibility_enabled 1'" | Out-Null
+
+    $rawSh = @'
+PKG='__PKG__'
+dumpsys deviceidle whitelist +"$PKG" >/dev/null 2>&1 || true
+am set-standby-bucket "$PKG" active >/dev/null 2>&1 || true
+
+# 1. HyperOS 3 PowerKeeper 省电策略设为无限制 (noRestrict)
+PK_OUT=$(content query --uri content://com.miui.powerkeeper.configure/userTable --where "pkgName='${PKG}' AND userId=0" 2>&1 || true)
+NOW_S=$(date +%s 2>/dev/null || echo 0)
+case "$NOW_S" in ''|*[!0-9]*) NOW_MS=0 ;; *) NOW_MS="${NOW_S}000" ;; esac
+case "$PK_OUT" in
+    *Error*|*Exception*|*"Could not find provider"*) ;;
+    *"Row:"*)
+        case "$PK_OUT" in
+            *"bgControl=noRestrict"*) ;;
+            *) content update --uri content://com.miui.powerkeeper.configure/userTable --where "pkgName='${PKG}' AND userId=0" --bind bgControl:s:noRestrict --bind lastConfigured:l:"$NOW_MS" >/dev/null 2>&1 || true ;;
+        esac
+        ;;
+    *"No result found"*)
+        content insert --uri content://com.miui.powerkeeper.configure/userTable --bind userId:i:0 --bind pkgName:s:"$PKG" --bind bgControl:s:noRestrict --bind lastConfigured:l:"$NOW_MS" >/dev/null 2>&1 || true
+        ;;
+esac
+
+# 2. 无损将应用包名加入 immobulus_mode_switch_restrict 的 _allowlist_
+IMMOB_CUR=$(settings get secure immobulus_mode_switch_restrict 2>/dev/null | tr -d '\r\n')
+case "$IMMOB_CUR" in
+    *_allowlist_*)
+        case "$IMMOB_CUR" in
+            *_wakeuplist_*) ALLOW_PART=${IMMOB_CUR%%_wakeuplist_*} ;;
+            *) ALLOW_PART=$IMMOB_CUR ;;
+        esac
+        ALLOW_SEG=${ALLOW_PART#*_allowlist_}
+        NEED_ADD=1
+        case "$ALLOW_SEG" in
+            "$PKG"|"${PKG}_"*|*"_${PKG}"|*"_${PKG}_"*) NEED_ADD=0 ;;
+        esac
+        if [ "$NEED_ADD" = "1" ]; then
+            HEAD_PART=${IMMOB_CUR%%_allowlist_*}
+            TAIL_PART=${IMMOB_CUR#*_allowlist_}
+            if [ -z "$TAIL_PART" ]; then
+                IMMOB_NEW="${HEAD_PART}_allowlist_${PKG}"
+            else
+                case "$TAIL_PART" in
+                    _*) IMMOB_NEW="${HEAD_PART}_allowlist_${PKG}${TAIL_PART}" ;;
+                    *) IMMOB_NEW="${HEAD_PART}_allowlist_${PKG}_${TAIL_PART}" ;;
+                esac
+            fi
+            settings put secure immobulus_mode_switch_restrict "$IMMOB_NEW" >/dev/null 2>&1 || true
+        fi
+        ;;
+esac
+
+# 3. 批量放行后台保活 / 悬浮窗 / MIUI 后台弹出与锁屏展示 AppOps
+for OP in SYSTEM_ALERT_WINDOW RUN_IN_BACKGROUND RUN_ANY_IN_BACKGROUND ACCESS_RESTRICTED_SETTINGS RECEIVE_SENSITIVE_NOTIFICATIONS 10008 10021; do
+    appops set "$PKG" "$OP" allow >/dev/null 2>&1 || true
+done
+
+# 4. 查询当前 UID 并立即通过 Greezer 与 cgroup 解冻兜底
+KAIRO_UID=$(cmd package list packages -U "$PKG" 2>/dev/null | sed -n 's/.*uid:\([0-9][0-9]*\).*/\1/p' | head -n 1)
+if [ -n "$KAIRO_UID" ] && [ "$KAIRO_UID" -gt 0 ] 2>/dev/null; then
+    cmd greezer thuid "$KAIRO_UID" 1000 >/dev/null 2>&1 || true
+    for CF in "/sys/fs/cgroup/apps/uid_${KAIRO_UID}/cgroup.freeze" /sys/fs/cgroup/apps/uid_${KAIRO_UID}/pid_*/cgroup.freeze; do
+        [ -w "$CF" ] && printf '0\n' > "$CF" 2>/dev/null || true
+    done
+fi
+echo "__HYPEROS_KEEPALIVE_DONE__"
+'@
+    $lfSh = ($rawSh -replace '__PKG__', $PackageName) -replace "`r`n", "`n"
+    $out = ($lfSh | & $AdbExe -s $serial shell "su -c sh" 2>&1) -join "`n"
+    if ($out -match '__HYPEROS_KEEPALIVE_DONE__') {
+        Write-Host "[KairoLedger] 已施加 HyperOS 3 防冻结保护 (noRestrict + immobulus + AppOps + 解冻)。" -ForegroundColor Green
+    } else {
+        Write-Host "[KairoLedger] HyperOS 3 防冻结脚本未确认完成: $out" -ForegroundColor Yellow
     }
-    Write-Host "[KairoLedger] 已无损保持并启用无障碍页面监听服务。" -ForegroundColor Green
 }
 
 function Invoke-BuildAndRestart {
@@ -118,6 +220,8 @@ function Invoke-BuildAndRestart {
         & $AdbExe -s $target shell am start -n "$PackageName/$MainActivity" | Out-Null
 
         if ($wasA11yEnabled -or $EnsureAccessibility) {
+            Ensure-HyperOsKeepAlive $target
+            Start-Sleep -Milliseconds 1500
             Restore-KairoAccessibility $target
         }
 

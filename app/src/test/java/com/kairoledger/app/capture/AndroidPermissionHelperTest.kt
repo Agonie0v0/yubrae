@@ -2,6 +2,7 @@ package com.kairoledger.app.capture
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -123,5 +124,79 @@ class AndroidPermissionHelperTest {
 
         val repeatTarget = AndroidPermissionHelper.buildAppendedAccessibilityServices(twice, target)
         assertEquals("li.songe.gkd/.A11yService:$target", repeatTarget)
+    }
+
+    @Test
+    fun parsePowerKeeperBgControl_extractsPolicyAndHandlesMissingOrErrorOutputs() {
+        val noRestrictRow =
+            "Row: 1 _id=419, userId=0, pkgName=com.wangc.bill, lastConfigured=1791278917035, bgControl=noRestrict, bgLocation=NULL"
+        val miuiAutoRow =
+            "Row: 6 _id=28034, userId=0, pkgName=com.kairoledger.app.debug, lastConfigured=1795335400380, bgControl=miuiAuto, bgLocation=NULL"
+
+        assertEquals("noRestrict", AndroidPermissionHelper.parsePowerKeeperBgControl(noRestrictRow))
+        assertEquals("miuiAuto", AndroidPermissionHelper.parsePowerKeeperBgControl(miuiAutoRow))
+        assertEquals("__NONE__", AndroidPermissionHelper.parsePowerKeeperBgControl("No result found."))
+
+        assertNull(AndroidPermissionHelper.parsePowerKeeperBgControl(null))
+        assertNull(AndroidPermissionHelper.parsePowerKeeperBgControl("   "))
+        assertNull(
+            AndroidPermissionHelper.parsePowerKeeperBgControl(
+                "Error while accessing provider:com.miui.powerkeeper.configure"
+            )
+        )
+        assertNull(
+            AndroidPermissionHelper.parsePowerKeeperBgControl(
+                "java.lang.SecurityException: Permission Denial"
+            )
+        )
+        assertNull(
+            AndroidPermissionHelper.parsePowerKeeperBgControl(
+                "Could not find provider: com.miui.powerkeeper.configure"
+            )
+        )
+
+        val probeOutput = """
+            uid=0(root) gid=0(root)
+            __PK_BEGIN__
+            $noRestrictRow
+            __PK_END__
+        """.trimIndent()
+        assertEquals("noRestrict", AndroidPermissionHelper.parsePowerKeeperBgControlFromProbe(probeOutput))
+        assertNull(AndroidPermissionHelper.parsePowerKeeperBgControlFromProbe("uid=0(root)"))
+    }
+
+    @Test
+    fun buildAppendedImmobulusAllowlist_preservesExistingAndWakeuplistWithoutDuplicates() {
+        val pkg = "com.kairoledger.app.debug"
+        val realRaw =
+            "enable_24_allowlist_android.ext.services_com.onepassword.android_com.tencent.wetype_wakeuplist_com.tencent.mm_com.google.android.gms"
+
+        val updated = AndroidPermissionHelper.buildAppendedImmobulusAllowlist(realRaw, pkg)
+        assertEquals(
+            "enable_24_allowlist_com.kairoledger.app.debug_android.ext.services_com.onepassword.android_com.tencent.wetype_wakeuplist_com.tencent.mm_com.google.android.gms",
+            updated
+        )
+
+        // 已在 _allowlist_ 中时幂等返回 null
+        assertNull(AndroidPermissionHelper.buildAppendedImmobulusAllowlist(updated, pkg))
+
+        // 仅出现在 _wakeuplist_ 中而不在 _allowlist_ 中时仍应追加到 _allowlist_
+        val wakeOnlyRaw = "enable_24_allowlist_com.onepassword.android_wakeuplist_com.kairoledger.app.debug"
+        assertEquals(
+            "enable_24_allowlist_com.kairoledger.app.debug_com.onepassword.android_wakeuplist_com.kairoledger.app.debug",
+            AndroidPermissionHelper.buildAppendedImmobulusAllowlist(wakeOnlyRaw, pkg)
+        )
+
+        // 包名前缀/超集区分（com.kairoledger.app 不应误判为已包含 com.kairoledger.app.debug）
+        val shorterPkgOnly = "enable_24_allowlist_com.kairoledger.app_com.tencent.wetype"
+        assertEquals(
+            "enable_24_allowlist_com.kairoledger.app.debug_com.kairoledger.app_com.tencent.wetype",
+            AndroidPermissionHelper.buildAppendedImmobulusAllowlist(shorterPkgOnly, pkg)
+        )
+
+        // 空值或非 HyperOS immobulus 格式返回 null
+        assertNull(AndroidPermissionHelper.buildAppendedImmobulusAllowlist(null, pkg))
+        assertNull(AndroidPermissionHelper.buildAppendedImmobulusAllowlist("null", pkg))
+        assertNull(AndroidPermissionHelper.buildAppendedImmobulusAllowlist("disable_mode", pkg))
     }
 }

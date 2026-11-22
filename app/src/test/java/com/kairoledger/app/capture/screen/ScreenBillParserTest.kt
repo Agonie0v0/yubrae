@@ -512,4 +512,81 @@ class ScreenBillParserTest {
         assertEquals(TransactionType.EXPENSE, draft!!.type)
         assertEquals(MoneyAmount.parseToMicros("66.66"), draft.origAmountMicros)
     }
+
+    @Test
+    fun parsesWeChatWebViewBillDetailWhenTopToolbarNoisePushesHeroLinesBeyondIndex12() {
+        val snapshot = ScreenSnapshot(
+            packageName = "com.tencent.mm",
+            className = "com.tencent.mm.plugin.webview.ui.tools.MMWebViewUI",
+            texts = listOf(
+                "返回",
+                "关闭",
+                "更多",
+                "网页由 payapp.weixin.qq.com 提供",
+                "分享",
+                "复制链接",
+                "在浏览器打开",
+                "刷新",
+                "搜索页面内容",
+                "字体大小",
+                "投诉",
+                "微信支付",
+                "哆哆酸辣粉",
+                "-16.00",
+                "当前状态", "支付完成",
+                "支付时间", "2026-11-22 12:30:05",
+                "商户全称", "商户_王禹睿",
+                "支付方式", "零钱",
+                "交易单号", "45000005762026112299990001",
+                "本服务由财付通提供",
+                "全部账单"
+            )
+        )
+        val outcome = parser.parse(snapshot, aliases, accounts, categories)
+        assertEquals(ScreenPageKind.BILL_DETAIL, outcome.pageKind)
+        val draft = outcome.draft
+        assertNotNull(draft)
+        assertEquals(TransactionType.EXPENSE, draft!!.type)
+        assertEquals(MoneyAmount.parseToMicros("16.00"), draft.origAmountMicros)
+        assertEquals("CNY", draft.origCurrency)
+        assertEquals("哆哆酸辣粉", draft.merchant)
+        assertEquals("餐饮美食", draft.categoryName)
+        assertEquals("45000005762026112299990001", draft.externalOrderNo)
+        assertEquals("微信零钱", accounts.first { it.id == draft.accountId }.name)
+    }
+
+    @Test
+    fun parsesWeChatRedPacketBillDetailWithIssuedTimeAndExhaustedStatus() {
+        val snapshot = ScreenSnapshot(
+            packageName = "com.tencent.mm",
+            className = "com.tencent.mm.plugin.webview.ui.tools.MMWebViewUI",
+            texts = listOf(
+                "微信红包",
+                "-20.00",
+                "当前状态", "已被领完",
+                "发出时间", "2026-11-22 15:18:22",
+                "红包个数", "1个",
+                "支付方式", "零钱",
+                "交易单号", "10000399012026112200887766",
+                "查看红包详情",
+                "本服务由财付通提供"
+            )
+        )
+        val outcome = parser.parse(snapshot, aliases, accounts, categories)
+        assertEquals(ScreenPageKind.BILL_DETAIL, outcome.pageKind)
+        val draft = outcome.draft
+        assertNotNull(draft)
+        assertEquals(TransactionType.EXPENSE, draft!!.type)
+        assertEquals(MoneyAmount.parseToMicros("20.00"), draft.origAmountMicros)
+        assertEquals("CNY", draft.origCurrency)
+        assertEquals("微信红包", draft.merchant)
+        assertEquals("10000399012026112200887766", draft.externalOrderNo)
+        assertEquals("微信零钱", accounts.first { it.id == draft.accountId }.name)
+
+        val expectedMillis = LocalDateTime.of(2026, 11, 22, 15, 18, 22)
+            .atZone(testZone)
+            .toInstant()
+            .toEpochMilli()
+        assertEquals(expectedMillis, draft.timestamp)
+    }
 }

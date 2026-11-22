@@ -32,6 +32,11 @@ class KairoAccessibilityService : AccessibilityService() {
         NOT_READY_OR_UNKNOWN
     }
 
+    private data class SnapshotCaptureResult(
+        val snapshot: ScreenSnapshot?,
+        val failReason: String = ""
+    )
+
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val screenBillParser = ScreenBillParser()
 
@@ -43,6 +48,12 @@ class KairoAccessibilityService : AccessibilityService() {
     @Volatile
     private var latestWindowClassName: String = ""
 
+    @Volatile
+    private var activeScanPackage: String = ""
+
+    @Volatile
+    private var dirtyContentWhileScanning: Boolean = false
+
     private val cacheLock = Any()
     private val recentPageCache = object : LinkedHashMap<String, Long>(256, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Long>?): Boolean =
@@ -51,6 +62,20 @@ class KairoAccessibilityService : AccessibilityService() {
     private var lastActivePackage: String = ""
     private var lastActiveDedupKey: String = ""
     private var lastActiveRawKey: String = ""
+
+    override fun onServiceConnected() {
+        super.onServiceConnected()
+        synchronized(cacheLock) {
+            lastActivePackage = ""
+            lastActiveDedupKey = ""
+            lastActiveRawKey = ""
+        }
+        activeScanPackage = ""
+        dirtyContentWhileScanning = false
+        if (BuildConfig.DEBUG) {
+            Log.i(TAG, "onServiceConnected: bound pkg=$packageName")
+        }
+    }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null) return
@@ -74,6 +99,8 @@ class KairoAccessibilityService : AccessibilityService() {
                     lastActiveDedupKey = ""
                     lastActiveRawKey = ""
                 }
+                activeScanPackage = ""
+                dirtyContentWhileScanning = false
             }
             return
         }
@@ -89,19 +116,33 @@ class KairoAccessibilityService : AccessibilityService() {
         }
 
         val retryDelays = if (eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+            debugLog("event=WINDOW_STATE pkg=$pkg cls=${event.className}")
             WINDOW_STATE_RETRY_DELAYS
         } else {
+            // 正在针对同一应用等待/扫描时不再 cancel 重建协程，防止 XWeb 高频内容刷新饿死扫描
+            if (scanJob?.isActive == true && activeScanPackage == pkg) {
+                dirtyContentWhileScanning = true
+                return
+            }
             CONTENT_OR_SCROLL_RETRY_DELAYS
         }
 
         scanJob?.cancel()
+        activeScanPackage = pkg
+        dirtyContentWhileScanning = false
         scanJob = serviceScope.launch {
+            var lastOutcome = ScanAttemptOutcome.NOT_READY_OR_UNKNOWN
             for ((attemptIdx, waitMs) in retryDelays.withIndex()) {
                 delay(waitMs)
-                val status = processActiveWindow(expectedPackage = pkg, attempt = attemptIdx + 1)
-                if (status != ScanAttemptOutcome.NOT_READY_OR_UNKNOWN) {
+                lastOutcome = processActiveWindow(expectedPackage = pkg, attempt = attemptIdx + 1)
+                if (lastOutcome != ScanAttemptOutcome.NOT_READY_OR_UNKNOWN) {
                     break
                 }
+            }
+            if (lastOutcome == ScanAttemptOutcome.NOT_READY_OR_UNKNOWN && dirtyContentWhileScanning) {
+                dirtyContentWhileScanning = false
+                delay(TRAILING_RESCAN_DELAY_MS)
+                processActiveWindow(expectedPackage = pkg, attempt = retryDelays.size + 1)
             }
         }
     }
@@ -121,23 +162,29 @@ class KairoAccessibilityService : AccessibilityService() {
         attempt: Int
     ): ScanAttemptOutcome {
         val container = CaptureRuntimeHelper.containerOrNull(applicationContext)
-            ?: return ScanAttemptOutcome.NOT_READY_OR_UNKNOWN
+        if (container == null) {
+            debugLog("attempt=$attempt pkg=$expectedPackage -> container null")
+            return ScanAttemptOutcome.NOT_READY_OR_UNKNOWN
+        }
         val settings = runCatching { container.settingsStore.getSnapshot() }.getOrNull()
         if (settings != null && !settings.accessibilityCaptureEnabled) {
+            debugLog("attempt=$attempt pkg=$expectedPackage -> accessibilityCaptureEnabled=false")
             return ScanAttemptOutcome.EXPLICITLY_IGNORED
         }
 
-        val snapshot = captureActiveSnapshot(expectedPackage)
+        val captureResult = captureActiveSnapshot(expectedPackage)
+        val snapshot = captureResult.snapshot
         if (snapshot == null) {
-            debugLog("attempt=$attempt pkg=$expectedPackage -> snapshot null")
+            debugLog("attempt=$attempt pkg=$expectedPackage -> snapshot null (${captureResult.failReason})")
             return ScanAttemptOutcome.NOT_READY_OR_UNKNOWN
         }
 
         val quickKind = screenBillParser.classifyPage(snapshot)
         if (quickKind == ScreenPageKind.UNKNOWN) {
+            val sample = snapshot.texts.take(8).joinToString(" | ") { it.take(24) }
             debugLog(
                 "attempt=$attempt pkg=${snapshot.packageName} cls=${snapshot.className} " +
-                    "lines=${snapshot.texts.size} -> UNKNOWN"
+                    "lines=${snapshot.texts.size} -> UNKNOWN sample=[$sample]"
             )
             synchronized(cacheLock) {
                 if (lastActivePackage == snapshot.packageName) {
@@ -160,6 +207,7 @@ class KairoAccessibilityService : AccessibilityService() {
         val rawKey = "${snapshot.packageName}|${quickKind.name}|${snapshot.texts.joinToString("\u0001")}"
         synchronized(cacheLock) {
             if (lastActivePackage == snapshot.packageName && lastActiveRawKey == rawKey) {
+                debugLog("attempt=$attempt pkg=${snapshot.packageName} kind=$quickKind -> RAW_CACHED")
                 return ScanAttemptOutcome.DISPATCHED_OR_CACHED
             }
         }
@@ -178,12 +226,15 @@ class KairoAccessibilityService : AccessibilityService() {
         )
 
         if (outcome.pageKind == ScreenPageKind.UNKNOWN) {
+            debugLog("attempt=$attempt pkg=${snapshot.packageName} -> parse UNKNOWN (${outcome.ignoredReason})")
             return ScanAttemptOutcome.NOT_READY_OR_UNKNOWN
         }
         if (outcome.pageKind == ScreenPageKind.PAY_SUCCESS && settings != null && !settings.accessibilityPaySuccessEnabled) {
+            debugLog("attempt=$attempt pkg=${snapshot.packageName} -> PAY_SUCCESS disabled (post-parse)")
             return ScanAttemptOutcome.EXPLICITLY_IGNORED
         }
         if (outcome.pageKind == ScreenPageKind.BILL_DETAIL && settings != null && !settings.accessibilityBillDetailEnabled) {
+            debugLog("attempt=$attempt pkg=${snapshot.packageName} -> BILL_DETAIL disabled (post-parse)")
             return ScanAttemptOutcome.EXPLICITLY_IGNORED
         }
         if (outcome.ignoredReason.isNotBlank() && outcome.draft == null && !outcome.shouldFallbackToLlm) {
@@ -191,6 +242,7 @@ class KairoAccessibilityService : AccessibilityService() {
             return ScanAttemptOutcome.EXPLICITLY_IGNORED
         }
         if (outcome.draft == null && !outcome.shouldFallbackToLlm) {
+            debugLog("attempt=$attempt pkg=${snapshot.packageName} kind=${outcome.pageKind} -> draft null")
             return ScanAttemptOutcome.NOT_READY_OR_UNKNOWN
         }
 
@@ -207,65 +259,114 @@ class KairoAccessibilityService : AccessibilityService() {
             "attempt=$attempt pkg=${snapshot.packageName} kind=${outcome.pageKind} " +
                 "lines=${snapshot.texts.size} order=${outcome.orderNo} -> DISPATCH"
         )
-        return try {
-            CaptureRuntimeHelper.orchestratorOrNull(applicationContext)
-                ?.handleScreenCapture(snapshot, outcome)
-            ScanAttemptOutcome.DISPATCHED_OR_CACHED
-        } catch (ce: CancellationException) {
-            releaseDispatchSlot(snapshot.packageName, dedupKey)
-            throw ce
-        } catch (t: Throwable) {
-            debugLog("dispatch error: ${t.message}")
-            releaseDispatchSlot(snapshot.packageName, dedupKey)
-            ScanAttemptOutcome.NOT_READY_OR_UNKNOWN
+        val dispatchPkg = snapshot.packageName
+        // 使用独立协程执行落账与悬浮窗唤起，避免后续 scanJob 取消导致数据库事务或弹窗被中断
+        serviceScope.launch {
+            try {
+                val res = CaptureRuntimeHelper.orchestratorOrNull(applicationContext)
+                    ?.handleScreenCapture(snapshot, outcome)
+                debugLog(
+                    "dispatch result: pkg=$dispatchPkg status=${res?.status} " +
+                        "tx=${res?.transactionId} merged=${res?.mergedIntoExisting} msg=${res?.message}"
+                )
+            } catch (ce: CancellationException) {
+                releaseDispatchSlot(dispatchPkg, dedupKey)
+                throw ce
+            } catch (t: Throwable) {
+                debugLog("dispatch error: pkg=$dispatchPkg err=${t.message}")
+                releaseDispatchSlot(dispatchPkg, dedupKey)
+            }
         }
+        return ScanAttemptOutcome.DISPATCHED_OR_CACHED
     }
 
-    private fun captureActiveSnapshot(expectedPackage: String): ScreenSnapshot? {
+    private fun captureActiveSnapshot(expectedPackage: String): SnapshotCaptureResult {
         val activeRoot = runCatching { rootInActiveWindow }.getOrNull()
         val activePkg = activeRoot?.packageName?.toString()?.trim().orEmpty()
+        val windowList = runCatching { windows }.getOrNull().orEmpty()
 
-        val targetRoot = when {
-            activeRoot != null && (activePkg == expectedPackage || ScreenBillParser.isWatchedPackage(activePkg)) -> {
-                activeRoot
-            }
-            else -> {
-                activeRoot?.safeRecycle()
-                findWatchedWindowRoot(expectedPackage)
-            }
-        } ?: return null
-
-        return try {
-            val resolvedPkg = targetRoot.packageName?.toString()?.takeIf { it.isNotBlank() } ?: expectedPackage
-            if (resolvedPkg == packageName || !ScreenBillParser.isWatchedPackage(resolvedPkg)) {
-                return null
-            }
-            val collected = ArrayList<String>(64)
-            val counter = IntArray(1)
-            collectVisibleTexts(targetRoot, depth = 0, visitedCounter = counter, out = collected)
-            if (collected.isEmpty()) return null
-
-            val cls = if (latestWindowPackage == resolvedPkg && latestWindowClassName.isNotBlank()) {
-                latestWindowClassName
-            } else {
-                targetRoot.className?.toString().orEmpty()
-            }
-            ScreenSnapshot(
-                packageName = resolvedPkg,
-                className = cls,
-                texts = collected,
-                capturedAtMillis = System.currentTimeMillis()
-            )
-        } finally {
-            targetRoot.safeRecycle()
+        val candidateRoots = mutableListOf<AccessibilityNodeInfo>()
+        if (activeRoot != null && (activePkg == expectedPackage || ScreenBillParser.isWatchedPackage(activePkg))) {
+            candidateRoots.add(activeRoot)
+        } else {
+            activeRoot?.safeRecycle()
         }
+
+        if (candidateRoots.isEmpty()) {
+            val fallbackRoot = findWatchedWindowRoot(expectedPackage, windowList)
+            if (fallbackRoot != null) {
+                candidateRoots.add(fallbackRoot)
+            }
+        }
+
+        if (candidateRoots.isEmpty()) {
+            val reason = "activeRoot=${activeRoot != null}, activePkg=$activePkg, windows=${windowList.size}"
+            return SnapshotCaptureResult(snapshot = null, failReason = reason)
+        }
+
+        val primaryRoot = candidateRoots.first()
+        val primaryWindowId = runCatching { primaryRoot.windowId }.getOrDefault(-1)
+        try {
+            extractSnapshotFromRoot(primaryRoot, expectedPackage)?.let { snapshot ->
+                return SnapshotCaptureResult(snapshot = snapshot)
+            }
+        } finally {
+            primaryRoot.safeRecycle()
+        }
+
+        // 若主窗口节点暂为空（例如 XWeb 过渡/半透明蒙层），尝试同包名其他应用窗口
+        val altRoot = findWatchedWindowRoot(expectedPackage, windowList, excludeWindowId = primaryWindowId)
+        if (altRoot != null) {
+            try {
+                extractSnapshotFromRoot(altRoot, expectedPackage)?.let { snapshot ->
+                    return SnapshotCaptureResult(snapshot = snapshot)
+                }
+            } finally {
+                altRoot.safeRecycle()
+            }
+        }
+
+        return SnapshotCaptureResult(
+            snapshot = null,
+            failReason = "collected=0, activePkg=$activePkg, windows=${windowList.size}"
+        )
     }
 
-    private fun findWatchedWindowRoot(expectedPackage: String): AccessibilityNodeInfo? {
-        val windowList = runCatching { windows }.getOrNull() ?: return null
+    private fun extractSnapshotFromRoot(
+        root: AccessibilityNodeInfo,
+        expectedPackage: String
+    ): ScreenSnapshot? {
+        val resolvedPkg = root.packageName?.toString()?.takeIf { it.isNotBlank() } ?: expectedPackage
+        if (resolvedPkg == packageName || !ScreenBillParser.isWatchedPackage(resolvedPkg)) {
+            return null
+        }
+        val collected = ArrayList<String>(64)
+        val counter = IntArray(1)
+        collectVisibleTexts(root, depth = 0, visitedCounter = counter, out = collected)
+        if (collected.isEmpty()) return null
+
+        val cls = if (latestWindowPackage == resolvedPkg && latestWindowClassName.isNotBlank()) {
+            latestWindowClassName
+        } else {
+            root.className?.toString().orEmpty()
+        }
+        return ScreenSnapshot(
+            packageName = resolvedPkg,
+            className = cls,
+            texts = collected,
+            capturedAtMillis = System.currentTimeMillis()
+        )
+    }
+
+    private fun findWatchedWindowRoot(
+        expectedPackage: String,
+        windowList: List<AccessibilityWindowInfo>,
+        excludeWindowId: Int = -1
+    ): AccessibilityNodeInfo? {
         var fallbackCandidate: AccessibilityNodeInfo? = null
         for (window in windowList) {
             if (window.type != AccessibilityWindowInfo.TYPE_APPLICATION) continue
+            if (excludeWindowId != -1 && window.id == excludeWindowId) continue
             val root = runCatching { window.root }.getOrNull() ?: continue
             val pkg = root.packageName?.toString()?.trim().orEmpty()
             if (pkg == expectedPackage) {
@@ -363,8 +464,9 @@ class KairoAccessibilityService : AccessibilityService() {
 
     companion object {
         private const val TAG = "KairoA11y"
-        private val WINDOW_STATE_RETRY_DELAYS = longArrayOf(320L, 600L, 850L, 1100L)
-        private val CONTENT_OR_SCROLL_RETRY_DELAYS = longArrayOf(250L, 650L, 1000L)
+        private val WINDOW_STATE_RETRY_DELAYS = longArrayOf(200L, 450L, 800L, 1200L)
+        private val CONTENT_OR_SCROLL_RETRY_DELAYS = longArrayOf(180L, 550L)
+        private const val TRAILING_RESCAN_DELAY_MS = 300L
         private const val MAX_TREE_NODES = 900
         private const val MAX_TREE_DEPTH = 48
         private const val MAX_LRU_ENTRIES = 200

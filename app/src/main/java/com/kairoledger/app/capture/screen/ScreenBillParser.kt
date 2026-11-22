@@ -550,7 +550,10 @@ class ScreenBillParser(
             val cleanedLine = stripNonAmountClauses(line)
             if (cleanedLine.isBlank()) continue
 
-            val isHeroZone = index <= 10 && isStandaloneAmountLine(cleanedLine)
+            val trimmedClean = cleanedLine.trim()
+            val hasExplicitSign = trimmedClean.startsWith("-") || trimmedClean.startsWith("+")
+            val isHeroZone = isStandaloneAmountLine(cleanedLine) &&
+                (index <= 20 || (hasExplicitSign && index <= 26))
             val role = if (isHeroZone) AmountRole.HERO else AmountRole.GENERIC
             candidates += extractCandidatesFromText(
                 text = cleanedLine,
@@ -949,7 +952,7 @@ class ScreenBillParser(
     }
 
     private fun extractHeroMerchant(lines: List<String>): String? {
-        for (line in lines.take(10)) {
+        for (line in lines.take(20)) {
             if (isLikelyFieldLabel(line)) break
             if (findKeySeparatorIndex(line) > 0) {
                 val label = line.substring(0, findKeySeparatorIndex(line))
@@ -965,10 +968,19 @@ class ScreenBillParser(
         return null
     }
 
+    private fun isNonMerchantUiText(lower: String): Boolean =
+        lower in UI_STOP_WORDS ||
+            UI_STOP_PREFIXES.any { lower.startsWith(it) } ||
+            PAY_SUCCESS_PHRASES.any { lower == it } ||
+            IGNORED_STATUS_KEYWORDS.any { lower == it }
+
     private fun cleanMerchantCandidate(raw: String): String? {
         var s = raw.trim()
         if (s.isEmpty()) return null
         if (isLikelyFieldLabel(s)) return null
+
+        // 在剥离“向/给/在/付款/转账”等前后缀之前先检查原始文本，避免“在浏览器打开”等系统 UI 文案绕过停用词表
+        if (isNonMerchantUiText(s.lowercase(Locale.ROOT))) return null
 
         s = s.replace(MERCHANT_ACTION_PREFIX_REGEX, "")
             .replace(MERCHANT_ACTION_SUFFIX_REGEX, "")
@@ -977,10 +989,7 @@ class ScreenBillParser(
         if (s.isEmpty() || s.length > 40) return null
 
         val lower = s.lowercase(Locale.ROOT)
-        if (lower in UI_STOP_WORDS) return null
-        if (UI_STOP_PREFIXES.any { lower.startsWith(it) }) return null
-        if (PAY_SUCCESS_PHRASES.any { lower == it }) return null
-        if (IGNORED_STATUS_KEYWORDS.any { lower == it }) return null
+        if (isNonMerchantUiText(lower)) return null
         if (PURE_NUMBER_OR_CARD_REGEX.matches(s)) return null
         if (AMOUNT_ONLY_LINE_REGEX.matches(s.replace(" ", ""))) return null
         if (FULL_DATETIME_REGEX.containsMatchIn(s) || MONTH_DAY_TIME_REGEX.containsMatchIn(s)) return null
@@ -1141,6 +1150,12 @@ class ScreenBillParser(
             "退款时间" to FieldKey.TIME,
             "到账时间" to FieldKey.TIME,
             "完成时间" to FieldKey.TIME,
+            "发出时间" to FieldKey.TIME,
+            "发红包时间" to FieldKey.TIME,
+            "收红包时间" to FieldKey.TIME,
+            "扣款时间" to FieldKey.TIME,
+            "结算时间" to FieldKey.TIME,
+            "账单时间" to FieldKey.TIME,
             "transaction time" to FieldKey.TIME,
             "payment time" to FieldKey.TIME,
             "date" to FieldKey.TIME,
@@ -1188,7 +1203,9 @@ class ScreenBillParser(
 
             "商户" to FieldKey.MERCHANT,
             "商户名称" to FieldKey.MERCHANT,
+            "商户简称" to FieldKey.MERCHANT,
             "商户全称" to FieldKey.MERCHANT,
+            "收款商户全称" to FieldKey.MERCHANT,
             "商家" to FieldKey.MERCHANT,
             "商家名称" to FieldKey.MERCHANT,
             "收款商户" to FieldKey.MERCHANT,
@@ -1228,6 +1245,7 @@ class ScreenBillParser(
             "对方微信号" to FieldKey.META,
             "对方账号" to FieldKey.META,
             "收款方备注" to FieldKey.META,
+            "红包个数" to FieldKey.META,
 
             "实付金额" to FieldKey.ACTUAL_AMOUNT,
             "实付款" to FieldKey.ACTUAL_AMOUNT,
@@ -1363,15 +1381,17 @@ class ScreenBillParser(
 
         private val DETAIL_ANCHOR_MARKERS = listOf(
             "账单服务", "发起群收款", "申请电子凭证", "本服务由财付通提供",
-            "收单机构", "清算机构", "在此商户的交易", "定位到聊天位置",
-            "查看往来记录", "联系收款方", "对订单有疑惑", "对此订单有疑问"
+            "收单机构", "清算机构", "在此商户的交易", "在此商户的交易记录",
+            "定位到聊天位置", "查看往来记录", "联系收款方", "对订单有疑惑", "对此订单有疑问",
+            "查看红包详情", "标签和备注", "申请开票"
         )
 
         private val PAY_SUCCESS_PHRASES = listOf(
             "支付成功", "付款成功", "交易成功", "消费成功", "转账成功",
+            "支付完成", "付款完成", "已支付",
             "汇款成功", "收款成功", "已收款", "已存入零钱", "已存入零钱通",
             "免密支付成功", "扣款成功", "退款成功", "已退款", "退款到账", "已退回",
-            "对方已收钱", "对方已收款", "对方已领取", "已领取", "已提现",
+            "对方已收钱", "对方已收款", "对方已领取", "已被领完", "已领完", "已领取", "已提现",
             "已转入", "已转出", "还款成功", "充值成功", "已完成", "已到账", "已入账",
             "payment successful", "transfer successful", "transaction successful", "money received"
         )
@@ -1478,7 +1498,9 @@ class ScreenBillParser(
             "查看零钱", "复制", "分享", "截屏", "投诉", "联系客服", "联系收款方", "常见问题",
             "对订单有疑惑", "对此订单有疑问", "申请退款", "申请售后", "申请开票", "在此商户的交易记录",
             "在此商户的交易", "账单服务", "发起群收款", "申请电子凭证", "本服务由财付通提供",
-            "定位到聊天位置", "查看往来记录", "全部账单",
+            "定位到聊天位置", "查看往来记录", "全部账单", "查看红包详情", "红包详情",
+            "复制链接", "在浏览器打开", "在默认浏览器打开", "刷新", "搜索页面内容", "字体大小", "调整字体", "浮窗",
+            "发送给朋友", "分享到朋友圈",
             "更多", "删除账单", "标签和备注", "添加备注", "分类", "计入收支", "不计入收支",
             "微信", "微信支付", "微信收款助手", "支付宝", "云闪付", "财付通", "招商银行", "工商银行", "建设银行",
             "农业银行", "中国银行", "交通银行", "平安银行", "wise", "paypal", "revolut",
@@ -1486,7 +1508,8 @@ class ScreenBillParser(
         )
 
         private val UI_STOP_PREFIXES = listOf(
-            "对订单有疑", "对此订单有疑", "在此商户的", "联系收款方", "申请开票", "申请退款", "申请售后", "查看", "本服务由"
+            "对订单有疑", "对此订单有疑", "在此商户的", "联系收款方", "申请开票", "申请退款", "申请售后",
+            "查看", "本服务由", "网页由", "该网页由", "此网页由", "页面由"
         )
 
         private val GENERIC_CHANNEL_MERCHANTS = setOf(
