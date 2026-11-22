@@ -7,8 +7,10 @@ import com.kairoledger.app.core.contract.ConversionPreview
 import com.kairoledger.app.core.contract.ExchangeRateProvider
 import com.kairoledger.app.core.contract.LedgerService
 import com.kairoledger.app.core.contract.MonthlyPoint
+import com.kairoledger.app.core.contract.NetWorthPoint
 import com.kairoledger.app.core.contract.NetWorthSummary
 import com.kairoledger.app.core.contract.RecordTransactionRequest
+import com.kairoledger.app.core.contract.TrendBucketPoint
 import com.kairoledger.app.core.model.MoneyAmount
 import com.kairoledger.app.data.db.AccountDao
 import com.kairoledger.app.data.db.AccountEntity
@@ -17,9 +19,18 @@ import com.kairoledger.app.data.db.BudgetEntity
 import com.kairoledger.app.data.db.CaptureChannel
 import com.kairoledger.app.data.db.CategoryDao
 import com.kairoledger.app.data.db.CategoryEntity
+import com.kairoledger.app.data.db.DebtDirection
+import com.kairoledger.app.data.db.DebtRecordDao
+import com.kairoledger.app.data.db.DebtRecordEntity
+import com.kairoledger.app.data.db.DebtStatus
+import com.kairoledger.app.data.db.InstallmentPlanDao
+import com.kairoledger.app.data.db.InstallmentPlanEntity
 import com.kairoledger.app.data.db.KairoDatabase
+import com.kairoledger.app.data.db.LedgerDao
+import com.kairoledger.app.data.db.LedgerEntity
 import com.kairoledger.app.data.db.RecurringRuleDao
 import com.kairoledger.app.data.db.RecurringRuleEntity
+import com.kairoledger.app.data.db.ReimburseStatus
 import com.kairoledger.app.data.db.TransactionDao
 import com.kairoledger.app.data.db.TransactionEntity
 import com.kairoledger.app.data.db.TransactionStatus
@@ -46,6 +57,9 @@ class LedgerRepositoryImpl(
     private val budgetDao: BudgetDao,
     private val recurringRuleDao: RecurringRuleDao,
     private val exchangeRateProvider: ExchangeRateProvider,
+    private val ledgerDao: LedgerDao? = null,
+    private val debtRecordDao: DebtRecordDao? = null,
+    private val installmentPlanDao: InstallmentPlanDao? = null,
     private val getSettings: suspend () -> AppSettings = { AppSettings() },
     private val inTransaction: suspend (suspend () -> Any?) -> Any? = { block -> block() },
     private val zoneId: ZoneId = ZoneId.systemDefault(),
@@ -63,6 +77,9 @@ class LedgerRepositoryImpl(
         budgetDao = db.budgetDao(),
         recurringRuleDao = db.recurringRuleDao(),
         exchangeRateProvider = exchangeRateProvider,
+        ledgerDao = db.ledgerDao(),
+        debtRecordDao = db.debtRecordDao(),
+        installmentPlanDao = db.installmentPlanDao(),
         getSettings = { settingsStore.getSnapshot() },
         inTransaction = { block -> db.withTransaction { block() } }
     )
@@ -216,6 +233,12 @@ class LedgerRepositoryImpl(
             sourceType = request.sourceType,
             rawEventId = request.rawEventId,
             status = request.status,
+            ledgerId = request.ledgerId.takeIf { it > 0L } ?: 1L,
+            excludeFromStats = request.excludeFromStats,
+            excludeFromBudget = request.excludeFromBudget,
+            refundOfTxId = request.refundOfTxId,
+            attachmentPaths = request.attachmentPaths,
+            reimbursedTxId = request.reimbursedTxId,
             createdAt = createdAt,
             updatedAt = now
         )
@@ -462,8 +485,359 @@ class LedgerRepositoryImpl(
         endMillis: Long,
         type: String,
         displayCurrency: String
+    ): List<CategoryStat> = computeCategoryStatsForLedger(
+        startMillis = startMillis,
+        endMillis = endMillis,
+        type = type,
+        ledgerId = 0L,
+        displayCurrency = displayCurrency
+    )
+
+    override suspend fun computeBudgetProgress(year: Int, month: Int): List<BudgetProgress> =
+        computeBudgetProgressForLedger(year = year, month = month, ledgerId = 0L)
+
+    override fun observeLedgers(): Flow<List<LedgerEntity>> =
+        ledgerDao?.observeAll() ?: kotlinx.coroutines.flow.flowOf(emptyList())
+
+    override suspend fun saveLedger(ledger: LedgerEntity): Long {
+        val dao = ledgerDao ?: return 1L
+        val exists = ledger.id > 0L && dao.getById(ledger.id) != null
+        return if (!exists) {
+            dao.insert(ledger)
+        } else {
+            dao.update(ledger)
+            ledger.id
+        }
+    }
+
+    override suspend fun archiveLedger(ledgerId: Long, archived: Boolean) {
+        if (ledgerId == 1L) return
+        val dao = ledgerDao ?: return
+        val existing = dao.getById(ledgerId) ?: return
+        dao.update(existing.copy(archived = archived))
+    }
+
+    override suspend fun batchUpdateCategory(txIds: List<Long>, categoryId: Long?): Result<Int> {
+        if (txIds.isEmpty()) return Result.success(0)
+        return try {
+            runInTransaction {
+                transactionDao.updateCategoryForIds(txIds, categoryId, clockMillisProvider())
+                Result.success(txIds.size)
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    override suspend fun batchDeleteTransactions(txIds: List<Long>): Result<Int> {
+        if (txIds.isEmpty()) return Result.success(0)
+        return try {
+            runInTransaction {
+                val now = clockMillisProvider()
+                var deleted = 0
+                for (id in txIds) {
+                    val tx = transactionDao.getById(id) ?: continue
+                    applyBalanceDelta(tx, direction = -1L, now = now)
+                    transactionDao.deleteById(id)
+                    deleted++
+                }
+                Result.success(deleted)
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    override suspend fun settleReimbursements(
+        txIds: List<Long>,
+        targetAccountId: Long,
+        timestamp: Long,
+        note: String
+    ): Result<TransactionEntity> {
+        if (txIds.isEmpty()) {
+            return Result.failure(IllegalArgumentException("请至少选择一笔待报销账单"))
+        }
+        return try {
+            runInTransaction {
+                val targetAccount = accountDao.getById(targetAccountId)
+                    ?: return@runInTransaction Result.failure(IllegalArgumentException("回款账户不存在: $targetAccountId"))
+                val targetCur = LedgerAnalytics.normalizeCurrency(targetAccount.currencyCode)
+                val dateStr = Instant.ofEpochMilli(timestamp).atZone(zoneId).toLocalDate().toString()
+                var totalTargetMicros = 0L
+                val pendingIds = mutableListOf<Long>()
+                var firstLedgerId = 1L
+                for (id in txIds) {
+                    val tx = transactionDao.getById(id) ?: continue
+                    if (tx.reimburseStatus != ReimburseStatus.PENDING) continue
+                    if (pendingIds.isEmpty()) firstLedgerId = tx.ledgerId
+                    pendingIds.add(id)
+                    val origCur = LedgerAnalytics.normalizeCurrency(tx.origCurrency)
+                    val converted = if (origCur == targetCur) {
+                        tx.origAmountMicros
+                    } else {
+                        val rate = exchangeRateProvider.getRate(origCur, targetCur, onDate = dateStr).rateMicros
+                        MoneyAmount.convert(tx.origAmountMicros, rate)
+                    }
+                    totalTargetMicros += converted
+                }
+                if (pendingIds.isEmpty() || totalTargetMicros <= 0L) {
+                    return@runInTransaction Result.failure(IllegalArgumentException("所选账单均非待报销状态或金额为 0"))
+                }
+
+                val incomeCat = categoryDao.findByNameAndType("报销退款", TransactionType.INCOME)
+                    ?: categoryDao.getAll().firstOrNull { it.type == TransactionType.INCOME }
+                val incomeRes = saveTransactionInternal(
+                    RecordTransactionRequest(
+                        type = TransactionType.INCOME,
+                        timestamp = timestamp,
+                        origAmountMicros = totalTargetMicros,
+                        origCurrency = targetCur,
+                        accountId = targetAccount.id,
+                        categoryId = incomeCat?.id,
+                        merchant = "报销回款",
+                        note = note.ifBlank { "报销核销 (${pendingIds.size} 笔)" },
+                        reimburseStatus = ReimburseStatus.NONE,
+                        sourceType = CaptureChannel.MANUAL,
+                        status = TransactionStatus.CONFIRMED,
+                        ledgerId = firstLedgerId,
+                        excludeFromStats = true,
+                        excludeFromBudget = true
+                    )
+                )
+                val savedIncome = incomeRes.getOrElse { return@runInTransaction Result.failure(it) }
+                transactionDao.markReimbursed(pendingIds, savedIncome.id, clockMillisProvider())
+                Result.success(savedIncome)
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    override fun observeDebts(): Flow<List<DebtRecordEntity>> =
+        debtRecordDao?.observeAll() ?: kotlinx.coroutines.flow.flowOf(emptyList())
+
+    override suspend fun saveDebt(debt: DebtRecordEntity, syncAccountBalance: Boolean): Long {
+        val dao = debtRecordDao ?: return 0L
+        return runInTransaction {
+            val now = clockMillisProvider()
+            val exists = debt.id > 0L && dao.getById(debt.id) != null
+            val savedId = if (!exists) {
+                val created = if (debt.createdAt > 0L) debt.createdAt else now
+                val id = dao.insert(debt.copy(createdAt = created, updatedAt = now))
+                if (syncAccountBalance && debt.accountId != null && debt.amountMicros > 0L) {
+                    val account = accountDao.getById(debt.accountId)
+                    if (account != null) {
+                        val isBorrow = debt.direction == DebtDirection.BORROW
+                        saveTransactionInternal(
+                            RecordTransactionRequest(
+                                type = if (isBorrow) TransactionType.INCOME else TransactionType.EXPENSE,
+                                timestamp = now,
+                                origAmountMicros = debt.amountMicros,
+                                origCurrency = debt.currencyCode,
+                                accountId = account.id,
+                                merchant = debt.personName,
+                                note = debt.note.ifBlank { if (isBorrow) "借入资金：${debt.personName}" else "借出资金：${debt.personName}" },
+                                excludeFromStats = true,
+                                excludeFromBudget = true
+                            )
+                        )
+                    }
+                }
+                id
+            } else {
+                dao.update(debt.copy(updatedAt = now))
+                debt.id
+            }
+            savedId
+        }
+    }
+
+    override suspend fun settleDebt(
+        debtId: Long,
+        settleAmountMicros: Long,
+        accountId: Long?,
+        note: String
+    ): Result<DebtRecordEntity> {
+        val dao = debtRecordDao ?: return Result.failure(UnsupportedOperationException("借贷模块未初始化"))
+        if (settleAmountMicros <= 0L) {
+            return Result.failure(IllegalArgumentException("核销金额必须大于 0"))
+        }
+        return try {
+            runInTransaction {
+                val debt = dao.getById(debtId)
+                    ?: return@runInTransaction Result.failure(IllegalArgumentException("借贷记录不存在: $debtId"))
+                val remaining = (debt.amountMicros - debt.settledAmountMicros).coerceAtLeast(0L)
+                val applied = settleAmountMicros.coerceAtMost(remaining).takeIf { it > 0L }
+                    ?: return@runInTransaction Result.failure(IllegalArgumentException("该笔借贷已全部结清"))
+                val newSettled = debt.settledAmountMicros + applied
+                val newStatus = if (newSettled >= debt.amountMicros) DebtStatus.SETTLED else DebtStatus.OPEN
+                val now = clockMillisProvider()
+                val updated = debt.copy(
+                    settledAmountMicros = newSettled,
+                    status = newStatus,
+                    updatedAt = now
+                )
+                dao.update(updated)
+
+                val targetAccId = accountId ?: debt.accountId
+                if (targetAccId != null && accountDao.getById(targetAccId) != null) {
+                    val isLend = debt.direction == DebtDirection.LEND
+                    saveTransactionInternal(
+                        RecordTransactionRequest(
+                            type = if (isLend) TransactionType.INCOME else TransactionType.EXPENSE,
+                            timestamp = now,
+                            origAmountMicros = applied,
+                            origCurrency = debt.currencyCode,
+                            accountId = targetAccId,
+                            merchant = debt.personName,
+                            note = note.ifBlank { if (isLend) "收回借款：${debt.personName}" else "归还借款：${debt.personName}" },
+                            excludeFromStats = true,
+                            excludeFromBudget = true
+                        )
+                    )
+                }
+                Result.success(updated)
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    override suspend fun deleteDebt(debtId: Long) {
+        debtRecordDao?.deleteById(debtId)
+    }
+
+    override fun observeInstallments(): Flow<List<InstallmentPlanEntity>> =
+        installmentPlanDao?.observeAll() ?: kotlinx.coroutines.flow.flowOf(emptyList())
+
+    override suspend fun saveInstallment(plan: InstallmentPlanEntity): Long {
+        val dao = installmentPlanDao ?: return 0L
+        val exists = plan.id > 0L && dao.getById(plan.id) != null
+        return if (!exists) dao.insert(plan) else {
+            dao.update(plan)
+            plan.id
+        }
+    }
+
+    override suspend fun recordInstallmentPeriod(planId: Long): Result<TransactionEntity> {
+        val dao = installmentPlanDao ?: return Result.failure(UnsupportedOperationException("分期模块未初始化"))
+        return try {
+            runInTransaction {
+                val plan = dao.getById(planId)
+                    ?: return@runInTransaction Result.failure(IllegalArgumentException("分期计划不存在: $planId"))
+                if (plan.completedPeriods >= plan.totalPeriods) {
+                    return@runInTransaction Result.failure(IllegalArgumentException("该分期计划已全部还清"))
+                }
+                val nextIndex = plan.completedPeriods + 1
+                val basePerPeriod = plan.totalAmountMicros / plan.totalPeriods.coerceAtLeast(1)
+                val remainder = if (nextIndex == plan.totalPeriods) {
+                    plan.totalAmountMicros - basePerPeriod * plan.totalPeriods
+                } else {
+                    0L
+                }
+                val periodTotalMicros = (basePerPeriod + remainder + plan.feePerPeriodMicros).coerceAtLeast(1L)
+                val now = clockMillisProvider()
+                val txRes = saveTransactionInternal(
+                    RecordTransactionRequest(
+                        type = TransactionType.EXPENSE,
+                        timestamp = now,
+                        origAmountMicros = periodTotalMicros,
+                        origCurrency = plan.currencyCode,
+                        accountId = plan.accountId,
+                        categoryId = plan.categoryId,
+                        merchant = plan.name,
+                        note = "信用卡分期第 $nextIndex/${plan.totalPeriods} 期",
+                        sourceType = CaptureChannel.RECURRING,
+                        status = TransactionStatus.CONFIRMED
+                    )
+                )
+                val savedTx = txRes.getOrElse { return@runInTransaction Result.failure(it) }
+                val nextDueDate = Instant.ofEpochMilli(plan.nextDueMillis)
+                    .atZone(zoneId)
+                    .toLocalDate()
+                    .plusMonths(1)
+                    .let { d ->
+                        val targetDay = plan.billingDay.coerceIn(1, d.lengthOfMonth())
+                        d.withDayOfMonth(targetDay).atTime(9, 0).atZone(zoneId).toInstant().toEpochMilli()
+                    }
+                dao.update(
+                    plan.copy(
+                        completedPeriods = nextIndex,
+                        nextDueMillis = nextDueDate,
+                        enabled = nextIndex < plan.totalPeriods
+                    )
+                )
+                Result.success(savedTx)
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    override suspend fun deleteInstallment(planId: Long) {
+        installmentPlanDao?.deleteById(planId)
+    }
+
+    override suspend fun computeNetWorthHistory(
+        monthsBack: Int,
+        displayCurrency: String
+    ): List<NetWorthPoint> {
+        val accounts = accountDao.getAll()
+        val nowMillis = clockMillisProvider()
+        val months = LedgerAnalytics.buildMonthBuckets(monthsBack, nowMillis, zoneId)
+        val firstStart = LedgerAnalytics.monthRangeMillis(months.first().year, months.first().monthValue, zoneId).first
+        val transactions = transactionDao.getBetween(firstStart, nowMillis + 86_400_000L * 365L)
+        return LedgerAnalytics.computeNetWorthHistory(
+            accounts = accounts,
+            transactions = transactions,
+            monthsBack = monthsBack,
+            displayCurrency = displayCurrency,
+            zoneId = zoneId,
+            nowMillis = nowMillis,
+            fetchRate = { from, to -> exchangeRateProvider.getRate(from, to).rateMicros }
+        )
+    }
+
+    override suspend fun computeTrendBuckets(
+        granularity: String,
+        anchorDateMillis: Long,
+        customStartMillis: Long?,
+        customEndMillis: Long?,
+        ledgerId: Long,
+        displayCurrency: String
+    ): List<TrendBucketPoint> {
+        val transactions = transactionDao.getAll()
+        return LedgerAnalytics.computeTrendBuckets(
+            granularity = granularity,
+            anchorDateMillis = anchorDateMillis,
+            customStartMillis = customStartMillis,
+            customEndMillis = customEndMillis,
+            ledgerId = ledgerId,
+            transactions = transactions,
+            displayCurrency = displayCurrency,
+            zoneId = zoneId,
+            fetchRate = { from, to -> exchangeRateProvider.getRate(from, to).rateMicros }
+        )
+    }
+
+    override suspend fun computeCategoryStatsForLedger(
+        startMillis: Long,
+        endMillis: Long,
+        type: String,
+        ledgerId: Long,
+        displayCurrency: String
     ): List<CategoryStat> {
-        val transactions = transactionDao.getBetween(startMillis, endMillis)
+        val transactions = transactionDao.getAll()
         val categories = categoryDao.getAll()
         return LedgerAnalytics.computeCategoryStats(
             transactions = transactions,
@@ -472,23 +846,22 @@ class LedgerRepositoryImpl(
             endMillis = endMillis,
             type = type,
             displayCurrency = displayCurrency,
+            ledgerId = ledgerId,
             fetchRate = { from, to -> exchangeRateProvider.getRate(from, to).rateMicros }
         )
     }
 
-    override suspend fun computeBudgetProgress(year: Int, month: Int): List<BudgetProgress> {
+    override suspend fun computeBudgetProgressForLedger(
+        year: Int,
+        month: Int,
+        ledgerId: Long
+    ): List<BudgetProgress> {
         val budgets = budgetDao.getAll()
-        if (budgets.none { it.enabled }) return emptyList()
-
-        val hasYearly = budgets.any { it.enabled && it.period.equals("YEARLY", ignoreCase = true) }
-        val (startMillis, endMillis) = if (hasYearly) {
-            LedgerAnalytics.yearRangeMillis(year, zoneId)
-        } else {
-            LedgerAnalytics.monthRangeMillis(year, month, zoneId)
+        if (budgets.none { it.enabled && (ledgerId <= 0L || it.ledgerId == ledgerId) }) {
+            return emptyList()
         }
-        val transactions = transactionDao.getBetween(startMillis, endMillis)
+        val transactions = transactionDao.getAll()
         val categories = categoryDao.getAll()
-
         return LedgerAnalytics.computeBudgetProgress(
             budgets = budgets,
             transactions = transactions,
@@ -496,6 +869,8 @@ class LedgerRepositoryImpl(
             year = year,
             month = month,
             zoneId = zoneId,
+            ledgerId = ledgerId,
+            nowMillis = clockMillisProvider(),
             fetchRate = { from, to -> exchangeRateProvider.getRate(from, to).rateMicros }
         )
     }

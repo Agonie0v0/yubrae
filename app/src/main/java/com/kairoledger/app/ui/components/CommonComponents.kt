@@ -5,6 +5,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -19,43 +20,56 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.MenuBook
 import androidx.compose.material.icons.automirrored.rounded.TrendingUp
 import androidx.compose.material.icons.rounded.AccountBalance
 import androidx.compose.material.icons.rounded.AccountBalanceWallet
 import androidx.compose.material.icons.rounded.AttachMoney
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Bolt
+import androidx.compose.material.icons.rounded.Book
 import androidx.compose.material.icons.rounded.CardGiftcard
 import androidx.compose.material.icons.rounded.Category
 import androidx.compose.material.icons.rounded.Chat
 import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.Checkroom
+import androidx.compose.material.icons.rounded.ChildCare
 import androidx.compose.material.icons.rounded.CloudDone
+import androidx.compose.material.icons.rounded.Coffee
 import androidx.compose.material.icons.rounded.CreditCard
 import androidx.compose.material.icons.rounded.CurrencyExchange
 import androidx.compose.material.icons.rounded.CurrencyPound
 import androidx.compose.material.icons.rounded.Devices
+import androidx.compose.material.icons.rounded.DirectionsBus
 import androidx.compose.material.icons.rounded.DirectionsCar
 import androidx.compose.material.icons.rounded.DocumentScanner
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Euro
 import androidx.compose.material.icons.rounded.EventRepeat
 import androidx.compose.material.icons.rounded.Fastfood
+import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FitnessCenter
 import androidx.compose.material.icons.rounded.Flight
 import androidx.compose.material.icons.rounded.Home
+import androidx.compose.material.icons.rounded.Hotel
 import androidx.compose.material.icons.rounded.LaptopMac
 import androidx.compose.material.icons.rounded.LocalCafe
+import androidx.compose.material.icons.rounded.LocalGasStation
 import androidx.compose.material.icons.rounded.LocalHospital
 import androidx.compose.material.icons.rounded.LocalMall
+import androidx.compose.material.icons.rounded.LocalShipping
 import androidx.compose.material.icons.rounded.LocalTaxi
 import androidx.compose.material.icons.rounded.LunchDining
 import androidx.compose.material.icons.rounded.MedicalServices
 import androidx.compose.material.icons.rounded.MoreHoriz
 import androidx.compose.material.icons.rounded.Movie
+import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.Notifications
 import androidx.compose.material.icons.rounded.Payments
 import androidx.compose.material.icons.rounded.Pets
+import androidx.compose.material.icons.rounded.PhoneAndroid
 import androidx.compose.material.icons.rounded.ReceiptLong
+import androidx.compose.material.icons.rounded.Redeem
 import androidx.compose.material.icons.rounded.Replay
 import androidx.compose.material.icons.rounded.Restaurant
 import androidx.compose.material.icons.rounded.Savings
@@ -63,8 +77,10 @@ import androidx.compose.material.icons.rounded.School
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.ShoppingBag
 import androidx.compose.material.icons.rounded.ShoppingBasket
+import androidx.compose.material.icons.rounded.ShoppingCart
 import androidx.compose.material.icons.rounded.SmartToy
 import androidx.compose.material.icons.rounded.Sms
+import androidx.compose.material.icons.rounded.Spa
 import androidx.compose.material.icons.rounded.SportsEsports
 import androidx.compose.material.icons.rounded.Store
 import androidx.compose.material.icons.rounded.Subscriptions
@@ -72,6 +88,7 @@ import androidx.compose.material.icons.rounded.Subway
 import androidx.compose.material.icons.rounded.SwapHoriz
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material.icons.rounded.UploadFile
+import androidx.compose.material.icons.rounded.WaterDrop
 import androidx.compose.material.icons.rounded.Wifi
 import androidx.compose.material.icons.rounded.Work
 import androidx.compose.material3.AlertDialog
@@ -83,6 +100,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -90,6 +108,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.kairoledger.app.core.model.CurrencyCatalog
 import com.kairoledger.app.data.db.CaptureChannel
@@ -151,9 +170,71 @@ object KairoIcons {
         "receipt_long" -> Icons.Rounded.ReceiptLong
         "swap_horiz" -> Icons.Rounded.SwapHoriz
         "tune" -> Icons.Rounded.Tune
+        "menu_book" -> Icons.AutoMirrored.Rounded.MenuBook
+        "book" -> Icons.Rounded.Book
+        "coffee" -> Icons.Rounded.Coffee
+        "shopping_cart" -> Icons.Rounded.ShoppingCart
+        "directions_bus" -> Icons.Rounded.DirectionsBus
+        "local_gas_station" -> Icons.Rounded.LocalGasStation
+        "hotel" -> Icons.Rounded.Hotel
+        "music_note" -> Icons.Rounded.MusicNote
+        "checkroom" -> Icons.Rounded.Checkroom
+        "child_care" -> Icons.Rounded.ChildCare
+        "favorite" -> Icons.Rounded.Favorite
+        "spa" -> Icons.Rounded.Spa
+        "redeem" -> Icons.Rounded.Redeem
+        "phone_android" -> Icons.Rounded.PhoneAndroid
+        "local_shipping" -> Icons.Rounded.LocalShipping
+        "water_drop" -> Icons.Rounded.WaterDrop
         "category" -> Icons.Rounded.Category
         else -> Icons.Rounded.Category
     }
+
+    val selectableCategoryIcons: List<Pair<String, String>> = listOf(
+        "restaurant" to "餐饮",
+        "lunch_dining" to "正餐",
+        "local_cafe" to "咖啡",
+        "shopping_basket" to "买菜",
+        "shopping_bag" to "购物",
+        "shopping_cart" to "超市",
+        "local_mall" to "百货",
+        "checkroom" to "服饰",
+        "directions_car" to "汽车",
+        "subway" to "地铁",
+        "directions_bus" to "公交",
+        "local_taxi" to "打车",
+        "local_gas_station" to "加油",
+        "flight" to "差旅",
+        "hotel" to "住宿",
+        "home" to "居家",
+        "bolt" to "水电",
+        "water_drop" to "水费",
+        "wifi" to "网络",
+        "phone_android" to "话费",
+        "devices" to "数码",
+        "subscriptions" to "订阅",
+        "smart_toy" to "AI",
+        "cloud_done" to "云服务",
+        "sports_esports" to "游戏",
+        "movie" to "电影",
+        "music_note" to "音乐",
+        "medical_services" to "医疗",
+        "fitness_center" to "健身",
+        "spa" to "美容",
+        "school" to "学习",
+        "book" to "书籍",
+        "pets" to "宠物",
+        "child_care" to "育儿",
+        "card_giftcard" to "礼金",
+        "redeem" to "礼物",
+        "favorite" to "人情",
+        "local_shipping" to "快递",
+        "work" to "工资",
+        "trending_up" to "理财",
+        "replay" to "退款",
+        "currency_exchange" to "汇兑",
+        "more_horiz" to "其他"
+    )
 
     val selectableAccountIcons: List<Pair<String, String>> = listOf(
         "account_balance_wallet" to "钱包",
@@ -169,6 +250,7 @@ object KairoIcons {
     )
 
     val selectableColorPalette: List<Long> = listOf(
+        0xFF2AA876L,
         0xFF006874L,
         0xFF07C160L,
         0xFF1677FFL,
@@ -178,6 +260,7 @@ object KairoIcons {
         0xFFEA580CL,
         0xFF0D9488L,
         0xFFDB2777L,
+        0xFFE89B2DL,
         0xFF475569L
     )
 }
@@ -553,6 +636,79 @@ fun transactionAmountColor(type: String): Color {
     }
 }
 
+val LocalPrivacyMasked = compositionLocalOf { false }
+
+fun formatPrivacyAmount(masked: Boolean, raw: String): String =
+    if (masked) "****" else raw
+
+/**
+ * 一木记账风格统一大圆角柔和卡片容器。
+ */
+@Composable
+fun YimuCard(
+    modifier: Modifier = Modifier,
+    containerColor: Color = MaterialTheme.colorScheme.surfaceContainerLowest,
+    cornerRadius: Dp = 18.dp,
+    onClick: (() -> Unit)? = null,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    val shape = RoundedCornerShape(cornerRadius)
+    val baseModifier = modifier.fillMaxWidth()
+    val border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.65f))
+    if (onClick != null) {
+        Surface(
+            modifier = baseModifier,
+            shape = shape,
+            color = containerColor,
+            border = border,
+            onClick = onClick
+        ) {
+            Column(content = content)
+        }
+    } else {
+        Surface(
+            modifier = baseModifier,
+            shape = shape,
+            color = containerColor,
+            border = border
+        ) {
+            Column(content = content)
+        }
+    }
+}
+
+/**
+ * 一木风格圆形彩色图标徽章（柔和浅底 + 高对比主题色图标）。
+ */
+@Composable
+fun CategoryIconBadge(
+    iconKey: String,
+    colorHex: Long,
+    size: Dp = 40.dp,
+    iconSize: Dp = 20.dp,
+    selected: Boolean = false,
+    modifier: Modifier = Modifier
+) {
+    val accentColor = Color(colorHex)
+    val bgColor = if (selected) accentColor else accentColor.copy(alpha = 0.14f)
+    val fgColor = if (selected) Color.White else accentColor
+    Surface(
+        modifier = modifier.size(size),
+        shape = CircleShape,
+        color = bgColor,
+        border = if (selected) BorderStroke(1.5.dp, accentColor) else null
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Icon(
+                imageVector = KairoIcons.iconFor(iconKey),
+                contentDescription = null,
+                tint = fgColor,
+                modifier = Modifier.size(iconSize)
+            )
+        }
+    }
+}
+
 @Composable
 fun AmountText(
     amountMicros: Long,
@@ -563,12 +719,17 @@ fun AmountText(
     style: androidx.compose.ui.text.TextStyle = MaterialTheme.typography.titleMedium,
     modifier: Modifier = Modifier
 ) {
-    val formatted = com.kairoledger.app.core.model.MoneyAmount.format(
-        amountMicros = amountMicros,
-        currencyCode = currencyCode,
-        showSign = showSign,
-        showCurrencyCode = showCurrencyCode
-    )
+    val privacyMasked = LocalPrivacyMasked.current
+    val formatted = if (privacyMasked) {
+        "****"
+    } else {
+        com.kairoledger.app.core.model.MoneyAmount.format(
+            amountMicros = amountMicros,
+            currencyCode = currencyCode,
+            showSign = showSign,
+            showCurrencyCode = showCurrencyCode
+        )
+    }
     Text(
         text = formatted,
         color = color,

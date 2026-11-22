@@ -213,6 +213,30 @@ class FakeTransactionDao : TransactionDao {
         emit()
     }
 
+    override suspend fun updateCategoryForIds(ids: List<Long>, categoryId: Long?, updatedAt: Long) {
+        val idSet = ids.toHashSet()
+        for (i in items.indices) {
+            if (items[i].id in idSet) {
+                items[i] = items[i].copy(categoryId = categoryId, updatedAt = updatedAt)
+            }
+        }
+        emit()
+    }
+
+    override suspend fun markReimbursed(ids: List<Long>, reimbursedTxId: Long, updatedAt: Long) {
+        val idSet = ids.toHashSet()
+        for (i in items.indices) {
+            if (items[i].id in idSet) {
+                items[i] = items[i].copy(
+                    reimburseStatus = com.kairoledger.app.data.db.ReimburseStatus.REIMBURSED,
+                    reimbursedTxId = reimbursedTxId,
+                    updatedAt = updatedAt
+                )
+            }
+        }
+        emit()
+    }
+
     override suspend fun deleteById(id: Long) {
         items.removeAll { it.id == id }
         emit()
@@ -374,4 +398,84 @@ class FakeRecurringRuleDao : RecurringRuleDao {
         items.clear()
         emit()
     }
+}
+
+class FakeLedgerDao : com.kairoledger.app.data.db.LedgerDao {
+    private val items = mutableListOf<com.kairoledger.app.data.db.LedgerEntity>()
+    private val flow = MutableStateFlow<List<com.kairoledger.app.data.db.LedgerEntity>>(emptyList())
+    private var nextId = 1L
+    private fun emit() { flow.value = items.sortedWith(compareBy({ it.sortOrder }, { it.id })) }
+
+    override fun observeActive(): Flow<List<com.kairoledger.app.data.db.LedgerEntity>> =
+        flow.map { list -> list.filter { !it.archived } }
+    override fun observeAll(): Flow<List<com.kairoledger.app.data.db.LedgerEntity>> = flow
+    override suspend fun getAll(): List<com.kairoledger.app.data.db.LedgerEntity> = flow.value
+    override suspend fun getById(id: Long): com.kairoledger.app.data.db.LedgerEntity? = items.firstOrNull { it.id == id }
+    override suspend fun insert(ledger: com.kairoledger.app.data.db.LedgerEntity): Long {
+        val assigned = if (ledger.id > 0L) ledger.id else nextId++
+        if (assigned >= nextId) nextId = assigned + 1
+        items.removeAll { it.id == assigned }
+        items.add(ledger.copy(id = assigned))
+        emit()
+        return assigned
+    }
+    override suspend fun insertAll(ledgers: List<com.kairoledger.app.data.db.LedgerEntity>) { ledgers.forEach { insert(it) } }
+    override suspend fun update(ledger: com.kairoledger.app.data.db.LedgerEntity) {
+        val idx = items.indexOfFirst { it.id == ledger.id }
+        if (idx >= 0) { items[idx] = ledger; emit() }
+    }
+    override suspend fun deleteById(id: Long) { items.removeAll { it.id == id }; emit() }
+    override suspend fun clearAll() { items.clear(); emit() }
+}
+
+class FakeDebtRecordDao : com.kairoledger.app.data.db.DebtRecordDao {
+    private val items = mutableListOf<com.kairoledger.app.data.db.DebtRecordEntity>()
+    private val flow = MutableStateFlow<List<com.kairoledger.app.data.db.DebtRecordEntity>>(emptyList())
+    private var nextId = 1L
+    private fun emit() { flow.value = items.sortedByDescending { it.updatedAt } }
+
+    override fun observeAll(): Flow<List<com.kairoledger.app.data.db.DebtRecordEntity>> = flow
+    override suspend fun getAll(): List<com.kairoledger.app.data.db.DebtRecordEntity> = flow.value
+    override suspend fun getById(id: Long): com.kairoledger.app.data.db.DebtRecordEntity? = items.firstOrNull { it.id == id }
+    override suspend fun insert(debt: com.kairoledger.app.data.db.DebtRecordEntity): Long {
+        val assigned = if (debt.id > 0L) debt.id else nextId++
+        if (assigned >= nextId) nextId = assigned + 1
+        items.removeAll { it.id == assigned }
+        items.add(debt.copy(id = assigned))
+        emit()
+        return assigned
+    }
+    override suspend fun insertAll(debts: List<com.kairoledger.app.data.db.DebtRecordEntity>) { debts.forEach { insert(it) } }
+    override suspend fun update(debt: com.kairoledger.app.data.db.DebtRecordEntity) {
+        val idx = items.indexOfFirst { it.id == debt.id }
+        if (idx >= 0) { items[idx] = debt; emit() }
+    }
+    override suspend fun deleteById(id: Long) { items.removeAll { it.id == id }; emit() }
+    override suspend fun clearAll() { items.clear(); emit() }
+}
+
+class FakeInstallmentPlanDao : com.kairoledger.app.data.db.InstallmentPlanDao {
+    private val items = mutableListOf<com.kairoledger.app.data.db.InstallmentPlanEntity>()
+    private val flow = MutableStateFlow<List<com.kairoledger.app.data.db.InstallmentPlanEntity>>(emptyList())
+    private var nextId = 1L
+    private fun emit() { flow.value = items.sortedBy { it.nextDueMillis } }
+
+    override fun observeAll(): Flow<List<com.kairoledger.app.data.db.InstallmentPlanEntity>> = flow
+    override suspend fun getAll(): List<com.kairoledger.app.data.db.InstallmentPlanEntity> = flow.value
+    override suspend fun getById(id: Long): com.kairoledger.app.data.db.InstallmentPlanEntity? = items.firstOrNull { it.id == id }
+    override suspend fun insert(plan: com.kairoledger.app.data.db.InstallmentPlanEntity): Long {
+        val assigned = if (plan.id > 0L) plan.id else nextId++
+        if (assigned >= nextId) nextId = assigned + 1
+        items.removeAll { it.id == assigned }
+        items.add(plan.copy(id = assigned))
+        emit()
+        return assigned
+    }
+    override suspend fun insertAll(plans: List<com.kairoledger.app.data.db.InstallmentPlanEntity>) { plans.forEach { insert(it) } }
+    override suspend fun update(plan: com.kairoledger.app.data.db.InstallmentPlanEntity) {
+        val idx = items.indexOfFirst { it.id == plan.id }
+        if (idx >= 0) { items[idx] = plan; emit() }
+    }
+    override suspend fun deleteById(id: Long) { items.removeAll { it.id == id }; emit() }
+    override suspend fun clearAll() { items.clear(); emit() }
 }

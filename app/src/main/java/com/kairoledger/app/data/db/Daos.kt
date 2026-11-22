@@ -81,6 +81,12 @@ interface TransactionDao {
     @Query("UPDATE transactions SET status = 'CONFIRMED', updated_at = :updatedAt WHERE status = 'PENDING'")
     suspend fun confirmAllPending(updatedAt: Long = System.currentTimeMillis())
 
+    @Query("UPDATE transactions SET category_id = :categoryId, updated_at = :updatedAt WHERE id IN (:ids)")
+    suspend fun updateCategoryForIds(ids: List<Long>, categoryId: Long?, updatedAt: Long = System.currentTimeMillis())
+
+    @Query("UPDATE transactions SET reimburse_status = 'REIMBURSED', reimbursed_tx_id = :reimbursedTxId, updated_at = :updatedAt WHERE id IN (:ids)")
+    suspend fun markReimbursed(ids: List<Long>, reimbursedTxId: Long, updatedAt: Long = System.currentTimeMillis())
+
     @Query("DELETE FROM transactions WHERE id = :id")
     suspend fun deleteById(id: Long)
 
@@ -280,5 +286,89 @@ interface RecurringRuleDao {
     suspend fun deleteById(id: Long)
 
     @Query("DELETE FROM recurring_rules")
+    suspend fun clearAll()
+}
+
+@Dao
+interface LedgerDao {
+    @Query("SELECT * FROM ledgers WHERE archived = 0 ORDER BY sort_order ASC, id ASC")
+    fun observeActive(): Flow<List<LedgerEntity>>
+
+    @Query("SELECT * FROM ledgers ORDER BY sort_order ASC, id ASC")
+    fun observeAll(): Flow<List<LedgerEntity>>
+
+    @Query("SELECT * FROM ledgers ORDER BY sort_order ASC, id ASC")
+    suspend fun getAll(): List<LedgerEntity>
+
+    @Query("SELECT * FROM ledgers WHERE id = :id LIMIT 1")
+    suspend fun getById(id: Long): LedgerEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insert(ledger: LedgerEntity): Long
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAll(ledgers: List<LedgerEntity>)
+
+    @Update
+    suspend fun update(ledger: LedgerEntity)
+
+    @Query("DELETE FROM ledgers WHERE id = :id")
+    suspend fun deleteById(id: Long)
+
+    @Query("DELETE FROM ledgers")
+    suspend fun clearAll()
+}
+
+@Dao
+interface DebtRecordDao {
+    @Query("SELECT * FROM debt_records ORDER BY status ASC, updated_at DESC, id DESC")
+    fun observeAll(): Flow<List<DebtRecordEntity>>
+
+    @Query("SELECT * FROM debt_records ORDER BY status ASC, updated_at DESC, id DESC")
+    suspend fun getAll(): List<DebtRecordEntity>
+
+    @Query("SELECT * FROM debt_records WHERE id = :id LIMIT 1")
+    suspend fun getById(id: Long): DebtRecordEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insert(debt: DebtRecordEntity): Long
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAll(debts: List<DebtRecordEntity>)
+
+    @Update
+    suspend fun update(debt: DebtRecordEntity)
+
+    @Query("DELETE FROM debt_records WHERE id = :id")
+    suspend fun deleteById(id: Long)
+
+    @Query("DELETE FROM debt_records")
+    suspend fun clearAll()
+}
+
+@Dao
+interface InstallmentPlanDao {
+    @Query("SELECT * FROM installment_plans ORDER BY next_due_millis ASC, id DESC")
+    fun observeAll(): Flow<List<InstallmentPlanEntity>>
+
+    @Query("SELECT * FROM installment_plans ORDER BY next_due_millis ASC, id DESC")
+    suspend fun getAll(): List<InstallmentPlanEntity>
+
+    @Query("SELECT * FROM installment_plans WHERE id = :id LIMIT 1")
+    suspend fun getById(id: Long): InstallmentPlanEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insert(plan: InstallmentPlanEntity): Long
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAll(plans: List<InstallmentPlanEntity>)
+
+    @Update
+    suspend fun update(plan: InstallmentPlanEntity)
+
+    @Query("DELETE FROM installment_plans WHERE id = :id")
+    suspend fun deleteById(id: Long)
+
+    @Query("DELETE FROM installment_plans")
     suspend fun clearAll()
 }

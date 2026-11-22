@@ -20,11 +20,21 @@ enum class ThemeMode {
     SYSTEM, LIGHT, DARK
 }
 
+object ThemeStyle {
+    const val YIMU_FRESH = "YIMU_FRESH"
+    const val PRISM_TEAL = "PRISM_TEAL"
+}
+
 data class AppSettings(
     val baseCurrency: String = CurrencyCatalog.DEFAULT_BASE_CURRENCY,
     val pinnedCurrencies: List<String> = CurrencyCatalog.PINNED_CURRENCIES,
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
-    val dynamicColor: Boolean = true,
+    val dynamicColor: Boolean = false,
+    val themeStyle: String = ThemeStyle.YIMU_FRESH,
+    val activeLedgerId: Long = 1L,
+    val privacyMaskEnabled: Boolean = false,
+    val biometricLockEnabled: Boolean = false,
+    val floatingRichEditorEnabled: Boolean = true,
     val notificationCaptureEnabled: Boolean = true,
     val smsCaptureEnabled: Boolean = true,
     val accessibilityCaptureEnabled: Boolean = true,
@@ -55,6 +65,11 @@ class SettingsStore(private val context: Context) {
         val PINNED_CURRENCIES = stringPreferencesKey("pinned_currencies")
         val THEME_MODE = stringPreferencesKey("theme_mode")
         val DYNAMIC_COLOR = booleanPreferencesKey("dynamic_color")
+        val THEME_STYLE = stringPreferencesKey("theme_style")
+        val ACTIVE_LEDGER_ID = longPreferencesKey("active_ledger_id")
+        val PRIVACY_MASK = booleanPreferencesKey("privacy_mask")
+        val BIOMETRIC_LOCK = booleanPreferencesKey("biometric_lock")
+        val FLOATING_RICH_EDITOR = booleanPreferencesKey("floating_rich_editor")
         val NOTIFICATION_CAPTURE = booleanPreferencesKey("notification_capture")
         val SMS_CAPTURE = booleanPreferencesKey("sms_capture")
         val ACCESSIBILITY_CAPTURE = booleanPreferencesKey("accessibility_capture")
@@ -88,7 +103,12 @@ class SettingsStore(private val context: Context) {
             baseCurrency = prefs[Keys.BASE_CURRENCY] ?: CurrencyCatalog.DEFAULT_BASE_CURRENCY,
             pinnedCurrencies = pinned,
             themeMode = theme,
-            dynamicColor = prefs[Keys.DYNAMIC_COLOR] ?: true,
+            dynamicColor = prefs[Keys.DYNAMIC_COLOR] ?: false,
+            themeStyle = prefs[Keys.THEME_STYLE] ?: ThemeStyle.YIMU_FRESH,
+            activeLedgerId = prefs[Keys.ACTIVE_LEDGER_ID] ?: 1L,
+            privacyMaskEnabled = prefs[Keys.PRIVACY_MASK] ?: false,
+            biometricLockEnabled = prefs[Keys.BIOMETRIC_LOCK] ?: false,
+            floatingRichEditorEnabled = prefs[Keys.FLOATING_RICH_EDITOR] ?: true,
             notificationCaptureEnabled = prefs[Keys.NOTIFICATION_CAPTURE] ?: true,
             smsCaptureEnabled = prefs[Keys.SMS_CAPTURE] ?: true,
             accessibilityCaptureEnabled = prefs[Keys.ACCESSIBILITY_CAPTURE] ?: true,
@@ -127,6 +147,11 @@ class SettingsStore(private val context: Context) {
             prefs[Keys.PINNED_CURRENCIES] = settings.pinnedCurrencies.joinToString(",")
             prefs[Keys.THEME_MODE] = settings.themeMode.name
             prefs[Keys.DYNAMIC_COLOR] = settings.dynamicColor
+            prefs[Keys.THEME_STYLE] = settings.themeStyle
+            prefs[Keys.ACTIVE_LEDGER_ID] = settings.activeLedgerId
+            prefs[Keys.PRIVACY_MASK] = settings.privacyMaskEnabled
+            prefs[Keys.BIOMETRIC_LOCK] = settings.biometricLockEnabled
+            prefs[Keys.FLOATING_RICH_EDITOR] = settings.floatingRichEditorEnabled
             prefs[Keys.NOTIFICATION_CAPTURE] = settings.notificationCaptureEnabled
             prefs[Keys.SMS_CAPTURE] = settings.smsCaptureEnabled
             prefs[Keys.ACCESSIBILITY_CAPTURE] = settings.accessibilityCaptureEnabled

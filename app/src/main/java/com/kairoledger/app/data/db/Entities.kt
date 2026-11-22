@@ -44,6 +44,78 @@ object ReimburseStatus {
     const val REIMBURSED = "REIMBURSED"
 }
 
+object DebtDirection {
+    const val LEND = "LEND"
+    const val BORROW = "BORROW"
+}
+
+object DebtStatus {
+    const val OPEN = "OPEN"
+    const val SETTLED = "SETTLED"
+}
+
+object StatsGranularity {
+    const val WEEKLY = "WEEKLY"
+    const val MONTHLY = "MONTHLY"
+    const val YEARLY = "YEARLY"
+    const val CUSTOM = "CUSTOM"
+}
+
+@Entity(tableName = "ledgers")
+data class LedgerEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0L,
+    val name: String,
+    @ColumnInfo(name = "currency_code") val currencyCode: String = "CNY",
+    val icon: String = "menu_book",
+    @ColumnInfo(name = "color_hex") val colorHex: Long = 0xFF2AA876L,
+    @ColumnInfo(name = "sort_order") val sortOrder: Int = 0,
+    val archived: Boolean = false,
+    @ColumnInfo(name = "created_at") val createdAt: Long = System.currentTimeMillis()
+)
+
+@Entity(
+    tableName = "debt_records",
+    indices = [
+        Index("direction"),
+        Index("status"),
+        Index("person_name")
+    ]
+)
+data class DebtRecordEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0L,
+    val direction: String,
+    @ColumnInfo(name = "person_name") val personName: String,
+    @ColumnInfo(name = "amount_micros") val amountMicros: Long,
+    @ColumnInfo(name = "settled_amount_micros") val settledAmountMicros: Long = 0L,
+    @ColumnInfo(name = "currency_code") val currencyCode: String = "CNY",
+    @ColumnInfo(name = "account_id") val accountId: Long? = null,
+    @ColumnInfo(name = "due_date_millis") val dueDateMillis: Long? = null,
+    val note: String = "",
+    val status: String = DebtStatus.OPEN,
+    @ColumnInfo(name = "created_at") val createdAt: Long = System.currentTimeMillis(),
+    @ColumnInfo(name = "updated_at") val updatedAt: Long = System.currentTimeMillis()
+)
+
+@Entity(
+    tableName = "installment_plans",
+    indices = [Index("account_id")]
+)
+data class InstallmentPlanEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0L,
+    @ColumnInfo(name = "account_id") val accountId: Long,
+    val name: String,
+    @ColumnInfo(name = "total_amount_micros") val totalAmountMicros: Long,
+    @ColumnInfo(name = "fee_per_period_micros") val feePerPeriodMicros: Long = 0L,
+    @ColumnInfo(name = "currency_code") val currencyCode: String = "CNY",
+    @ColumnInfo(name = "total_periods") val totalPeriods: Int,
+    @ColumnInfo(name = "completed_periods") val completedPeriods: Int = 0,
+    @ColumnInfo(name = "billing_day") val billingDay: Int = 5,
+    @ColumnInfo(name = "next_due_millis") val nextDueMillis: Long,
+    @ColumnInfo(name = "category_id") val categoryId: Long? = null,
+    val enabled: Boolean = true,
+    @ColumnInfo(name = "created_at") val createdAt: Long = System.currentTimeMillis()
+)
+
 object CaptureChannel {
     const val MANUAL = "MANUAL"
     const val NOTIFICATION = "NOTIFICATION"
@@ -97,7 +169,9 @@ data class AccountEntity(
         Index("account_id"),
         Index("to_account_id"),
         Index("category_id"),
-        Index("status")
+        Index("status"),
+        Index("ledger_id"),
+        Index("refund_of_tx_id")
     ]
 )
 data class TransactionEntity(
@@ -125,6 +199,12 @@ data class TransactionEntity(
     @ColumnInfo(name = "source_type") val sourceType: String = CaptureChannel.MANUAL,
     @ColumnInfo(name = "raw_event_id") val rawEventId: Long? = null,
     val status: String = TransactionStatus.CONFIRMED,
+    @ColumnInfo(name = "ledger_id") val ledgerId: Long = 1L,
+    @ColumnInfo(name = "exclude_from_stats") val excludeFromStats: Boolean = false,
+    @ColumnInfo(name = "exclude_from_budget") val excludeFromBudget: Boolean = false,
+    @ColumnInfo(name = "refund_of_tx_id") val refundOfTxId: Long? = null,
+    @ColumnInfo(name = "attachment_paths") val attachmentPaths: String = "",
+    @ColumnInfo(name = "reimbursed_tx_id") val reimbursedTxId: Long? = null,
     @ColumnInfo(name = "created_at") val createdAt: Long = System.currentTimeMillis(),
     @ColumnInfo(name = "updated_at") val updatedAt: Long = System.currentTimeMillis()
 )
@@ -215,7 +295,9 @@ data class BudgetEntity(
     val period: String = "MONTHLY",
     @ColumnInfo(name = "limit_amount_micros") val limitAmountMicros: Long,
     @ColumnInfo(name = "currency_code") val currencyCode: String = "CNY",
-    val enabled: Boolean = true
+    val enabled: Boolean = true,
+    @ColumnInfo(name = "ledger_id") val ledgerId: Long = 1L,
+    @ColumnInfo(name = "rollover_enabled") val rolloverEnabled: Boolean = false
 )
 
 @Entity(tableName = "recurring_rules")

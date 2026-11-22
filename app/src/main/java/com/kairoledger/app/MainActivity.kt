@@ -2,20 +2,22 @@ package com.kairoledger.app
 
 import android.content.Intent
 import android.os.Bundle
-import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.fragment.app.FragmentActivity
 import com.kairoledger.app.core.contract.IntentConstants
 import com.kairoledger.app.ui.navigation.KairoAppRoot
 
-class MainActivity : ComponentActivity() {
+class MainActivity : FragmentActivity() {
 
     private var launchOpenQuickRecord by mutableStateOf(false)
     private var launchEditTransactionId by mutableStateOf<Long?>(null)
     private var launchInitialTab by mutableStateOf<Int?>(null)
+    private var launchOpenSmartInput by mutableStateOf(false)
+    private var launchReceiptImagePath by mutableStateOf<String?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -29,10 +31,14 @@ class MainActivity : ComponentActivity() {
                 initialOpenQuickRecord = launchOpenQuickRecord,
                 initialEditTransactionId = launchEditTransactionId,
                 initialTab = launchInitialTab,
+                initialOpenSmartInput = launchOpenSmartInput,
+                initialReceiptImagePath = launchReceiptImagePath,
                 onConsumeLaunchArgs = {
                     launchOpenQuickRecord = false
                     launchEditTransactionId = null
                     launchInitialTab = null
+                    launchOpenSmartInput = false
+                    launchReceiptImagePath = null
                 }
             )
         }
@@ -57,6 +63,13 @@ class MainActivity : ComponentActivity() {
         }
         if (intent.hasExtra(IntentConstants.EXTRA_INITIAL_TAB)) {
             launchInitialTab = intent.getIntExtra(IntentConstants.EXTRA_INITIAL_TAB, 0)
+        }
+        if (intent.getBooleanExtra(IntentConstants.EXTRA_OPEN_SMART_INPUT, false)) {
+            launchOpenSmartInput = true
+        }
+        val receiptPath = intent.getStringExtra(IntentConstants.EXTRA_RECEIPT_IMAGE_PATH)
+        if (!receiptPath.isNullOrBlank()) {
+            launchReceiptImagePath = receiptPath
         }
     }
 }

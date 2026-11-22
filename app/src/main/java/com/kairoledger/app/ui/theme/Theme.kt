@@ -18,6 +18,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
 import com.kairoledger.app.data.prefs.ThemeMode
+import com.kairoledger.app.data.prefs.ThemeStyle
 
 @Immutable
 data class KairoSemanticColors(
@@ -110,10 +111,75 @@ private val DarkColorScheme = darkColorScheme(
     onErrorContainer = PrismOnErrorContainerDark
 )
 
+private val YimuLightColorScheme = lightColorScheme(
+    primary = YimuPrimaryLight,
+    onPrimary = YimuOnPrimaryLight,
+    primaryContainer = YimuPrimaryContainerLight,
+    onPrimaryContainer = YimuOnPrimaryContainerLight,
+    secondary = YimuSecondaryLight,
+    onSecondary = YimuOnSecondaryLight,
+    secondaryContainer = YimuSecondaryContainerLight,
+    onSecondaryContainer = YimuOnSecondaryContainerLight,
+    tertiary = YimuTertiaryLight,
+    onTertiary = YimuOnTertiaryLight,
+    tertiaryContainer = YimuTertiaryContainerLight,
+    onTertiaryContainer = YimuOnTertiaryContainerLight,
+    background = YimuBackgroundLight,
+    onBackground = YimuOnBackgroundLight,
+    surface = YimuSurfaceLight,
+    onSurface = YimuOnSurfaceLight,
+    surfaceVariant = YimuSurfaceVariantLight,
+    onSurfaceVariant = YimuOnSurfaceVariantLight,
+    outline = YimuOutlineLight,
+    outlineVariant = YimuOutlineVariantLight,
+    surfaceContainerLowest = YimuSurfaceContainerLowestLight,
+    surfaceContainerLow = YimuSurfaceContainerLowLight,
+    surfaceContainer = YimuSurfaceContainerLight,
+    surfaceContainerHigh = YimuSurfaceContainerHighLight,
+    surfaceContainerHighest = YimuSurfaceContainerHighestLight,
+    error = PrismErrorLight,
+    onError = PrismOnErrorLight,
+    errorContainer = PrismErrorContainerLight,
+    onErrorContainer = PrismOnErrorContainerLight
+)
+
+private val YimuDarkColorScheme = darkColorScheme(
+    primary = YimuPrimaryDark,
+    onPrimary = YimuOnPrimaryDark,
+    primaryContainer = YimuPrimaryContainerDark,
+    onPrimaryContainer = YimuOnPrimaryContainerDark,
+    secondary = YimuSecondaryDark,
+    onSecondary = YimuOnSecondaryDark,
+    secondaryContainer = YimuSecondaryContainerDark,
+    onSecondaryContainer = YimuOnSecondaryContainerDark,
+    tertiary = YimuTertiaryDark,
+    onTertiary = YimuOnTertiaryDark,
+    tertiaryContainer = YimuTertiaryContainerDark,
+    onTertiaryContainer = YimuOnTertiaryContainerDark,
+    background = YimuBackgroundDark,
+    onBackground = YimuOnBackgroundDark,
+    surface = YimuSurfaceDark,
+    onSurface = YimuOnSurfaceDark,
+    surfaceVariant = YimuSurfaceVariantDark,
+    onSurfaceVariant = YimuOnSurfaceVariantDark,
+    outline = YimuOutlineDark,
+    outlineVariant = YimuOutlineVariantDark,
+    surfaceContainerLowest = YimuSurfaceContainerLowestDark,
+    surfaceContainerLow = YimuSurfaceContainerLowDark,
+    surfaceContainer = YimuSurfaceContainerDark,
+    surfaceContainerHigh = YimuSurfaceContainerHighDark,
+    surfaceContainerHighest = YimuSurfaceContainerHighestDark,
+    error = PrismErrorDark,
+    onError = PrismOnErrorDark,
+    errorContainer = PrismErrorContainerDark,
+    onErrorContainer = PrismOnErrorContainerDark
+)
+
 @Composable
 fun KairoLedgerTheme(
     themeMode: ThemeMode = ThemeMode.SYSTEM,
-    dynamicColor: Boolean = true,
+    dynamicColor: Boolean = false,
+    themeStyle: String = ThemeStyle.YIMU_FRESH,
     content: @Composable () -> Unit
 ) {
     val darkTheme = when (themeMode) {
@@ -122,11 +188,14 @@ fun KairoLedgerTheme(
         ThemeMode.DARK -> true
     }
 
+    val isYimuFresh = !themeStyle.equals(ThemeStyle.PRISM_TEAL, ignoreCase = true)
     val context = LocalContext.current
     val colorScheme = when {
         dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
             if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
         }
+        isYimuFresh && darkTheme -> YimuDarkColorScheme
+        isYimuFresh -> YimuLightColorScheme
         darkTheme -> DarkColorScheme
         else -> LightColorScheme
     }
@@ -142,6 +211,18 @@ fun KairoLedgerTheme(
             warning = WarningDark,
             warningContainer = WarningContainerDark,
             isDark = true
+        )
+    } else if (isYimuFresh) {
+        KairoSemanticColors(
+            expense = YimuExpenseLight,
+            expenseContainer = ExpenseContainerLight,
+            income = YimuIncomeLight,
+            incomeContainer = IncomeContainerLight,
+            transfer = YimuTransferLight,
+            transferContainer = TransferContainerLight,
+            warning = YimuWarningLight,
+            warningContainer = WarningContainerLight,
+            isDark = false
         )
     } else {
         KairoSemanticColors(

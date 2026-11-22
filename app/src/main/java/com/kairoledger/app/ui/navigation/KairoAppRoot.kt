@@ -91,6 +91,8 @@ fun KairoAppRoot(
     initialOpenQuickRecord: Boolean = false,
     initialEditTransactionId: Long? = null,
     initialTab: Int? = null,
+    initialOpenSmartInput: Boolean = false,
+    initialReceiptImagePath: String? = null,
     onConsumeLaunchArgs: () -> Unit = {}
 ) {
     val viewModel: KairoMainViewModel = viewModel(
@@ -120,7 +122,13 @@ fun KairoAppRoot(
     }
 
     // 处理桌面小组件 / 悬浮窗 / 外部协议启动参数
-    LaunchedEffect(initialOpenQuickRecord, initialEditTransactionId, initialTab) {
+    LaunchedEffect(
+        initialOpenQuickRecord,
+        initialEditTransactionId,
+        initialTab,
+        initialOpenSmartInput,
+        initialReceiptImagePath
+    ) {
         var consumed = false
         if (initialTab != null) {
             selectedTab = initialTab.coerceIn(0, 3)
@@ -141,6 +149,9 @@ fun KairoAppRoot(
             quickRecordInitialType = TransactionType.EXPENSE
             quickRecordInitialAccountId = null
             showQuickRecord = true
+            consumed = true
+        }
+        if (initialOpenSmartInput || !initialReceiptImagePath.isNullOrBlank()) {
             consumed = true
         }
         if (consumed) {

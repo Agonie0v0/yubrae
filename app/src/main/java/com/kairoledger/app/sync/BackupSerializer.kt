@@ -5,8 +5,11 @@ import com.kairoledger.app.data.db.AccountAliasDao
 import com.kairoledger.app.data.db.AccountDao
 import com.kairoledger.app.data.db.BudgetDao
 import com.kairoledger.app.data.db.CategoryDao
+import com.kairoledger.app.data.db.DebtRecordDao
 import com.kairoledger.app.data.db.ExchangeRateDao
+import com.kairoledger.app.data.db.InstallmentPlanDao
 import com.kairoledger.app.data.db.KairoDatabase
+import com.kairoledger.app.data.db.LedgerDao
 import com.kairoledger.app.data.db.ParseRuleDao
 import com.kairoledger.app.data.db.RawCaptureLogDao
 import com.kairoledger.app.data.db.RecurringRuleDao
@@ -28,7 +31,7 @@ data class RestoreSummary(
 
 /**
  * 棱账全库与核心偏好快照序列化器：
- * 覆盖 9 张 Room 表及关键 AppSettings，支持导出 JSON 字符串与事务内安全回放恢复。
+ * 覆盖全部 Room 表及关键 AppSettings，支持导出 JSON 字符串与事务内安全回放恢复。
  */
 class BackupSerializer(
     private val accountDao: AccountDao,
@@ -42,7 +45,10 @@ class BackupSerializer(
     private val recurringRuleDao: RecurringRuleDao,
     private val readSettings: suspend () -> AppSettings,
     private val writeSettings: suspend (AppSettings) -> Unit,
-    private val runInTransaction: suspend (suspend () -> Unit) -> Unit
+    private val runInTransaction: suspend (suspend () -> Unit) -> Unit,
+    private val ledgerDao: LedgerDao? = null,
+    private val debtRecordDao: DebtRecordDao? = null,
+    private val installmentPlanDao: InstallmentPlanDao? = null
 ) {
 
     constructor(db: KairoDatabase, settingsStore: SettingsStore) : this(
@@ -57,7 +63,10 @@ class BackupSerializer(
         recurringRuleDao = db.recurringRuleDao(),
         readSettings = { settingsStore.getSnapshot() },
         writeSettings = { settingsStore.saveAll(it) },
-        runInTransaction = { block -> db.withTransaction { block() } }
+        runInTransaction = { block -> db.withTransaction { block() } },
+        ledgerDao = db.ledgerDao(),
+        debtRecordDao = db.debtRecordDao(),
+        installmentPlanDao = db.installmentPlanDao()
     )
 
     private val jsonCodec = Json {
@@ -81,7 +90,10 @@ class BackupSerializer(
             parseRules = parseRuleDao.getAll().map { it.toDto() },
             rawCaptureLogs = rawCaptureLogDao.getAll().map { it.toDto() },
             budgets = budgetDao.getAll().map { it.toDto() },
-            recurringRules = recurringRuleDao.getAll().map { it.toDto() }
+            recurringRules = recurringRuleDao.getAll().map { it.toDto() },
+            ledgers = ledgerDao?.getAll()?.map { it.toDto() }.orEmpty(),
+            debts = debtRecordDao?.getAll()?.map { it.toDto() }.orEmpty(),
+            installments = installmentPlanDao?.getAll()?.map { it.toDto() }.orEmpty()
         )
     }
 
@@ -121,17 +133,26 @@ class BackupSerializer(
         val captureLogs = snapshot.rawCaptureLogs.map { it.toEntity() }
         val budgets = snapshot.budgets.map { it.toEntity() }
         val recurringRules = snapshot.recurringRules.map { it.toEntity() }
+        val ledgers = snapshot.ledgers.map { it.toEntity() }
+        val debts = snapshot.debts.map { it.toEntity() }
+        val installments = snapshot.installments.map { it.toEntity() }
 
         runInTransaction {
             transactionDao.clearAll()
             rawCaptureLogDao.clearAll()
             recurringRuleDao.clearAll()
+            installmentPlanDao?.clearAll()
+            debtRecordDao?.clearAll()
             budgetDao.clearAll()
             accountAliasDao.clearAll()
             parseRuleDao.clearAll()
             exchangeRateDao.clearAll()
             categoryDao.clearAll()
             accountDao.clearAll()
+            if (ledgers.isNotEmpty()) {
+                ledgerDao?.clearAll()
+                ledgerDao?.insertAll(ledgers)
+            }
 
             if (accounts.isNotEmpty()) accountDao.insertAll(accounts)
             if (categories.isNotEmpty()) categoryDao.insertAll(categories)
@@ -140,6 +161,8 @@ class BackupSerializer(
             if (aliases.isNotEmpty()) accountAliasDao.insertAll(aliases)
             if (budgets.isNotEmpty()) budgetDao.insertAll(budgets)
             if (recurringRules.isNotEmpty()) recurringRuleDao.insertAll(recurringRules)
+            if (debts.isNotEmpty()) debtRecordDao?.insertAll(debts)
+            if (installments.isNotEmpty()) installmentPlanDao?.insertAll(installments)
             if (captureLogs.isNotEmpty()) rawCaptureLogDao.insertAll(captureLogs)
             if (transactions.isNotEmpty()) transactionDao.insertAll(transactions)
         }

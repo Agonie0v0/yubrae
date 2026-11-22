@@ -15,6 +15,18 @@ import java.time.ZoneId
 object DefaultSeedData {
 
     suspend fun ensureSeeded(db: KairoDatabase) {
+        if (db.ledgerDao().getAll().isEmpty()) {
+            db.ledgerDao().insert(
+                LedgerEntity(
+                    id = 1L,
+                    name = "默认账本",
+                    currencyCode = CurrencyCatalog.DEFAULT_BASE_CURRENCY,
+                    icon = "menu_book",
+                    colorHex = 0xFF2AA876L,
+                    sortOrder = 0
+                )
+            )
+        }
         if (db.categoryDao().getAll().isEmpty()) {
             seedCategories(db)
         }

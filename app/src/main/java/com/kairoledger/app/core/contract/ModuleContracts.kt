@@ -5,11 +5,15 @@ import com.kairoledger.app.data.db.AccountEntity
 import com.kairoledger.app.data.db.BudgetEntity
 import com.kairoledger.app.data.db.CaptureChannel
 import com.kairoledger.app.data.db.CategoryEntity
+import com.kairoledger.app.data.db.DebtRecordEntity
 import com.kairoledger.app.data.db.ExchangeRateEntity
+import com.kairoledger.app.data.db.InstallmentPlanEntity
+import com.kairoledger.app.data.db.LedgerEntity
 import com.kairoledger.app.data.db.ParseRuleEntity
 import com.kairoledger.app.data.db.RawCaptureLogEntity
 import com.kairoledger.app.data.db.RecurringRuleEntity
 import com.kairoledger.app.data.db.ReimburseStatus
+import com.kairoledger.app.data.db.StatsGranularity
 import com.kairoledger.app.data.db.TransactionEntity
 import com.kairoledger.app.data.db.TransactionStatus
 import kotlinx.coroutines.flow.Flow
@@ -39,7 +43,13 @@ data class RecordTransactionRequest(
     val reimburseStatus: String = ReimburseStatus.NONE,
     val sourceType: String = CaptureChannel.MANUAL,
     val rawEventId: Long? = null,
-    val status: String = TransactionStatus.CONFIRMED
+    val status: String = TransactionStatus.CONFIRMED,
+    val ledgerId: Long = 1L,
+    val excludeFromStats: Boolean = false,
+    val excludeFromBudget: Boolean = false,
+    val refundOfTxId: Long? = null,
+    val attachmentPaths: String = "",
+    val reimbursedTxId: Long? = null
 )
 
 data class ConversionPreview(
@@ -94,7 +104,24 @@ data class BudgetProgress(
     val spentInBudgetCurrencyMicros: Long,
     val limitInBudgetCurrencyMicros: Long,
     val progressRatio: Float,
-    val overBudget: Boolean
+    val overBudget: Boolean,
+    val rolloverMicros: Long = 0L,
+    val dailyAvailableMicros: Long = 0L,
+    val remainingDays: Int = 0
+)
+
+data class NetWorthPoint(
+    val label: String,
+    val epochMillis: Long,
+    val netWorthMicros: Long
+)
+
+data class TrendBucketPoint(
+    val label: String,
+    val startMillis: Long,
+    val endMillis: Long,
+    val expenseBaseMicros: Long,
+    val incomeBaseMicros: Long
 )
 
 interface ExchangeRateProvider {
@@ -157,6 +184,57 @@ interface LedgerService {
     suspend fun computeMonthlyTrend(monthsBack: Int = 6, displayCurrency: String): List<MonthlyPoint>
     suspend fun computeCategoryStats(startMillis: Long, endMillis: Long, type: String, displayCurrency: String): List<CategoryStat>
     suspend fun computeBudgetProgress(year: Int, month: Int): List<BudgetProgress>
+
+    // 多账本 / 批量 / 报销 / 借贷 / 信用卡分期 / 多维报表扩展
+    fun observeLedgers(): Flow<List<LedgerEntity>>
+    suspend fun saveLedger(ledger: LedgerEntity): Long
+    suspend fun archiveLedger(ledgerId: Long, archived: Boolean)
+
+    suspend fun batchUpdateCategory(txIds: List<Long>, categoryId: Long?): Result<Int>
+    suspend fun batchDeleteTransactions(txIds: List<Long>): Result<Int>
+    suspend fun settleReimbursements(
+        txIds: List<Long>,
+        targetAccountId: Long,
+        timestamp: Long = System.currentTimeMillis(),
+        note: String = "报销集中入账"
+    ): Result<TransactionEntity>
+
+    fun observeDebts(): Flow<List<DebtRecordEntity>>
+    suspend fun saveDebt(debt: DebtRecordEntity, syncAccountBalance: Boolean = false): Long
+    suspend fun settleDebt(
+        debtId: Long,
+        settleAmountMicros: Long,
+        accountId: Long? = null,
+        note: String = ""
+    ): Result<DebtRecordEntity>
+    suspend fun deleteDebt(debtId: Long)
+
+    fun observeInstallments(): Flow<List<InstallmentPlanEntity>>
+    suspend fun saveInstallment(plan: InstallmentPlanEntity): Long
+    suspend fun recordInstallmentPeriod(planId: Long): Result<TransactionEntity>
+    suspend fun deleteInstallment(planId: Long)
+
+    suspend fun computeNetWorthHistory(monthsBack: Int = 6, displayCurrency: String): List<NetWorthPoint>
+    suspend fun computeTrendBuckets(
+        granularity: String = StatsGranularity.MONTHLY,
+        anchorDateMillis: Long = System.currentTimeMillis(),
+        customStartMillis: Long? = null,
+        customEndMillis: Long? = null,
+        ledgerId: Long = 0L,
+        displayCurrency: String
+    ): List<TrendBucketPoint>
+    suspend fun computeCategoryStatsForLedger(
+        startMillis: Long,
+        endMillis: Long,
+        type: String,
+        ledgerId: Long = 0L,
+        displayCurrency: String
+    ): List<CategoryStat>
+    suspend fun computeBudgetProgressForLedger(
+        year: Int,
+        month: Int,
+        ledgerId: Long = 0L
+    ): List<BudgetProgress>
 }
 
 data class CaptureInput(
@@ -270,5 +348,7 @@ object IntentConstants {
     const val EXTRA_OPEN_QUICK_RECORD = "com.kairoledger.app.EXTRA_OPEN_QUICK_RECORD"
     const val EXTRA_EDIT_TRANSACTION_ID = "com.kairoledger.app.EXTRA_EDIT_TRANSACTION_ID"
     const val EXTRA_INITIAL_TAB = "com.kairoledger.app.EXTRA_INITIAL_TAB"
+    const val EXTRA_OPEN_SMART_INPUT = "com.kairoledger.app.EXTRA_OPEN_SMART_INPUT"
+    const val EXTRA_RECEIPT_IMAGE_PATH = "com.kairoledger.app.EXTRA_RECEIPT_IMAGE_PATH"
 }
 

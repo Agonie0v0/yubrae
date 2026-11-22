@@ -158,6 +158,22 @@ internal class InMemorySyncDatabase {
             publish()
         }
 
+        override suspend fun updateCategoryForIds(ids: List<Long>, categoryId: Long?, updatedAt: Long) {
+            val idSet = ids.toHashSet()
+            items.replaceAll { _, tx ->
+                if (tx.id in idSet) tx.copy(categoryId = categoryId, updatedAt = updatedAt) else tx
+            }
+            publish()
+        }
+
+        override suspend fun markReimbursed(ids: List<Long>, reimbursedTxId: Long, updatedAt: Long) {
+            val idSet = ids.toHashSet()
+            items.replaceAll { _, tx ->
+                if (tx.id in idSet) tx.copy(reimburseStatus = "REIMBURSED", reimbursedTxId = reimbursedTxId, updatedAt = updatedAt) else tx
+            }
+            publish()
+        }
+
         override suspend fun deleteById(id: Long) {
             items.remove(id)
             publish()

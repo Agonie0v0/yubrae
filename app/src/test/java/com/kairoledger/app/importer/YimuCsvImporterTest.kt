@@ -356,6 +356,26 @@ class YimuCsvImporterTest {
         override suspend fun computeMonthlyTrend(monthsBack: Int, displayCurrency: String): List<MonthlyPoint> = emptyList()
         override suspend fun computeCategoryStats(startMillis: Long, endMillis: Long, type: String, displayCurrency: String): List<CategoryStat> = emptyList()
         override suspend fun computeBudgetProgress(year: Int, month: Int): List<BudgetProgress> = emptyList()
+        override fun observeLedgers(): Flow<List<com.kairoledger.app.data.db.LedgerEntity>> = MutableStateFlow(emptyList())
+        override suspend fun saveLedger(ledger: com.kairoledger.app.data.db.LedgerEntity): Long = 1L
+        override suspend fun archiveLedger(ledgerId: Long, archived: Boolean) {}
+        override suspend fun batchUpdateCategory(txIds: List<Long>, categoryId: Long?): Result<Int> = Result.success(0)
+        override suspend fun batchDeleteTransactions(txIds: List<Long>): Result<Int> = Result.success(0)
+        override suspend fun settleReimbursements(txIds: List<Long>, targetAccountId: Long, timestamp: Long, note: String): Result<TransactionEntity> =
+            Result.failure(UnsupportedOperationException())
+        override fun observeDebts(): Flow<List<com.kairoledger.app.data.db.DebtRecordEntity>> = MutableStateFlow(emptyList())
+        override suspend fun saveDebt(debt: com.kairoledger.app.data.db.DebtRecordEntity, syncAccountBalance: Boolean): Long = 0L
+        override suspend fun settleDebt(debtId: Long, settleAmountMicros: Long, accountId: Long?, note: String): Result<com.kairoledger.app.data.db.DebtRecordEntity> =
+            Result.failure(UnsupportedOperationException())
+        override suspend fun deleteDebt(debtId: Long) {}
+        override fun observeInstallments(): Flow<List<com.kairoledger.app.data.db.InstallmentPlanEntity>> = MutableStateFlow(emptyList())
+        override suspend fun saveInstallment(plan: com.kairoledger.app.data.db.InstallmentPlanEntity): Long = 0L
+        override suspend fun recordInstallmentPeriod(planId: Long): Result<TransactionEntity> = Result.failure(UnsupportedOperationException())
+        override suspend fun deleteInstallment(planId: Long) {}
+        override suspend fun computeNetWorthHistory(monthsBack: Int, displayCurrency: String): List<com.kairoledger.app.core.contract.NetWorthPoint> = emptyList()
+        override suspend fun computeTrendBuckets(granularity: String, anchorDateMillis: Long, customStartMillis: Long?, customEndMillis: Long?, ledgerId: Long, displayCurrency: String): List<com.kairoledger.app.core.contract.TrendBucketPoint> = emptyList()
+        override suspend fun computeCategoryStatsForLedger(startMillis: Long, endMillis: Long, type: String, ledgerId: Long, displayCurrency: String): List<CategoryStat> = emptyList()
+        override suspend fun computeBudgetProgressForLedger(year: Int, month: Int, ledgerId: Long): List<BudgetProgress> = emptyList()
     }
 
     private class FakeAccountDao : AccountDao {
@@ -491,6 +511,22 @@ class YimuCsvImporterTest {
         override suspend fun confirmAllPending(updatedAt: Long) {
             items.replaceAll { _, tx ->
                 if (tx.status == "PENDING") tx.copy(status = "CONFIRMED", updatedAt = updatedAt) else tx
+            }
+            publish()
+        }
+
+        override suspend fun updateCategoryForIds(ids: List<Long>, categoryId: Long?, updatedAt: Long) {
+            val idSet = ids.toHashSet()
+            items.replaceAll { _, tx ->
+                if (tx.id in idSet) tx.copy(categoryId = categoryId, updatedAt = updatedAt) else tx
+            }
+            publish()
+        }
+
+        override suspend fun markReimbursed(ids: List<Long>, reimbursedTxId: Long, updatedAt: Long) {
+            val idSet = ids.toHashSet()
+            items.replaceAll { _, tx ->
+                if (tx.id in idSet) tx.copy(reimburseStatus = "REIMBURSED", reimbursedTxId = reimbursedTxId, updatedAt = updatedAt) else tx
             }
             publish()
         }
