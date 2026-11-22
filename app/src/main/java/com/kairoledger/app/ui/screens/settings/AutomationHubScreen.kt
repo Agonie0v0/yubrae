@@ -30,15 +30,21 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.rounded.MenuBook
+import androidx.compose.material.icons.automirrored.rounded.ReceiptLong
 import androidx.compose.material.icons.rounded.AdminPanelSettings
 import androidx.compose.material.icons.rounded.Backup
+import androidx.compose.material.icons.rounded.Category
 import androidx.compose.material.icons.rounded.CurrencyExchange
 import androidx.compose.material.icons.rounded.EventRepeat
 import androidx.compose.material.icons.rounded.ExpandLess
 import androidx.compose.material.icons.rounded.ExpandMore
+import androidx.compose.material.icons.rounded.Handshake
 import androidx.compose.material.icons.rounded.Info
+import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material.icons.rounded.ReceiptLong
 import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.RequestQuote
 import androidx.compose.material.icons.rounded.Rule
 import androidx.compose.material.icons.rounded.Security
 import androidx.compose.material.icons.rounded.SmartToy
@@ -71,6 +77,10 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.kairoledger.app.core.contract.DevicePermissionReport
+import com.kairoledger.app.data.prefs.ThemeMode
+import com.kairoledger.app.data.prefs.ThemeStyle
+import com.kairoledger.app.ui.components.YimuCard
+import com.kairoledger.app.ui.security.BiometricLockHelper
 import com.kairoledger.app.ui.theme.KairoTheme
 import com.kairoledger.app.ui.viewmodel.KairoMainViewModel
 
@@ -82,6 +92,9 @@ object SettingsRoutes {
     const val RATES = "settings_rates"
     const val RECURRING = "settings_recurring"
     const val IMPORT_BACKUP = "settings_import_backup"
+    const val CATEGORIES = "settings_categories"
+    const val REIMBURSE = "settings_reimburse"
+    const val DEBTS = "settings_debts"
 }
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -89,6 +102,7 @@ object SettingsRoutes {
 fun AutomationHubScreen(
     viewModel: KairoMainViewModel,
     onNavigate: (String) -> Unit,
+    onOpenLedgerManager: () -> Unit = {},
     contentPadding: PaddingValues = PaddingValues(0.dp)
 ) {
     val context = LocalContext.current
@@ -280,7 +294,15 @@ fun AutomationHubScreen(
                     )
 
                     AnimatedVisibility(visible = settings.floatingConfirmEnabled) {
-                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            SwitchSettingRow(
+                                title = "一木风可交互悬浮记账面板",
+                                subtitle = "直接在悬浮窗内切换支出/收入、改分类、换账户、设报销与编辑备注",
+                                checked = settings.floatingRichEditorEnabled,
+                                onCheckedChange = { checked ->
+                                    viewModel.updateSettings { it.copy(floatingRichEditorEnabled = checked) }
+                                }
+                            )
                             Text(
                                 text = "悬浮窗自动确认倒计时：",
                                 style = MaterialTheme.typography.labelMedium,
@@ -308,6 +330,120 @@ fun AutomationHubScreen(
                         onCheckedChange = { checked ->
                             viewModel.updateSettings { it.copy(defaultPendingWhenUncertain = checked) }
                         }
+                    )
+                }
+            }
+        }
+
+        // 外观与隐私安全设置（一木清新风 / 棱镜青蓝 / 深浅色 / 隐私打码 / 指纹应用锁）
+        item(key = "appearance_and_security") {
+            YimuCard(containerColor = MaterialTheme.colorScheme.surfaceContainerLowest) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(Icons.Rounded.Palette, null, tint = MaterialTheme.colorScheme.primary)
+                        Text(text = "一木风外观与隐私安全", style = MaterialTheme.typography.titleMedium)
+                    }
+
+                    Text(
+                        text = "界面视觉风格",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilterChip(
+                            selected = settings.themeStyle != ThemeStyle.PRISM_TEAL,
+                            onClick = { viewModel.updateSettings { it.copy(themeStyle = ThemeStyle.YIMU_FRESH, dynamicColor = false) } },
+                            label = { Text("一木清新绿卡片 (推荐)") }
+                        )
+                        FilterChip(
+                            selected = settings.themeStyle == ThemeStyle.PRISM_TEAL,
+                            onClick = { viewModel.updateSettings { it.copy(themeStyle = ThemeStyle.PRISM_TEAL) } },
+                            label = { Text("棱镜极简青蓝") }
+                        )
+                    }
+
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        listOf(
+                            ThemeMode.SYSTEM to "跟随系统",
+                            ThemeMode.LIGHT to "浅色模式",
+                            ThemeMode.DARK to "深色模式"
+                        ).forEach { (mode, label) ->
+                            FilterChip(
+                                selected = settings.themeMode == mode,
+                                onClick = { viewModel.updateSettings { it.copy(themeMode = mode) } },
+                                label = { Text(label) }
+                            )
+                        }
+                    }
+
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f))
+                    SwitchSettingRow(
+                        title = "全局金额隐私打码",
+                        subtitle = "首页、资产与报表所有金额隐藏显示为 ****",
+                        checked = settings.privacyMaskEnabled,
+                        onCheckedChange = { checked ->
+                            viewModel.updateSettings { it.copy(privacyMaskEnabled = checked) }
+                        }
+                    )
+
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f))
+                    SwitchSettingRow(
+                        title = "指纹 / 面容应用锁",
+                        subtitle = "启动或从后台切回棱账时自动要求生物识别或设备密码解锁",
+                        checked = settings.biometricLockEnabled,
+                        onCheckedChange = { checked ->
+                            if (checked && !BiometricLockHelper.canAuthenticate(context)) {
+                                viewModel.showMessage("当前设备未录入指纹/面容或锁屏密码，请先在系统设置中开启")
+                            } else {
+                                viewModel.updateSettings { it.copy(biometricLockEnabled = checked) }
+                            }
+                        }
+                    )
+                }
+            }
+        }
+
+        // 一木风格账务中心快捷入口
+        item(key = "ledger_finance_entries") {
+            YimuCard(containerColor = MaterialTheme.colorScheme.surfaceContainerLowest) {
+                Column(modifier = Modifier.padding(vertical = 8.dp)) {
+                    Text(
+                        text = "账本 · 分类 · 报销与借贷",
+                        style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                    )
+                    HubNavRow(
+                        icon = Icons.Rounded.Category,
+                        title = "一/二级分类管理",
+                        subtitle = "自定义收支一级分类、二级子分类、图标与色卡",
+                        onClick = { onNavigate(SettingsRoutes.CATEGORIES) }
+                    )
+                    HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f))
+                    HubNavRow(
+                        icon = Icons.AutoMirrored.Rounded.MenuBook,
+                        title = "多账本管理",
+                        subtitle = "新建或切换日常、旅行、装修独立账本与默认币种",
+                        onClick = onOpenLedgerManager
+                    )
+                    HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f))
+                    HubNavRow(
+                        icon = Icons.Rounded.RequestQuote,
+                        title = "报销中心",
+                        subtitle = "多选待报销账单、自动汇率折算并一键核销回款",
+                        onClick = { onNavigate(SettingsRoutes.REIMBURSE) }
+                    )
+                    HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp), color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f))
+                    HubNavRow(
+                        icon = Icons.Rounded.Handshake,
+                        title = "借入借出往来",
+                        subtitle = "按往来人管理应收/应付、分次核销并联动账户余额",
+                        onClick = { onNavigate(SettingsRoutes.DEBTS) }
                     )
                 }
             }

@@ -589,4 +589,254 @@ class ScreenBillParserTest {
             .toEpochMilli()
         assertEquals(expectedMillis, draft.timestamp)
     }
+
+    @Test
+    fun blocksWeChatAndAlipayChatOrFeedWindowClassesWhileAllowingRealBillActivities() {
+        // 微信聊天 / 公众号 / 服务号会话类拦截（含大小写变体）
+        assertTrue(ScreenBillParser.isBlockedChatOrFeedWindow("com.tencent.mm", "com.tencent.mm.ui.LauncherUI"))
+        assertTrue(ScreenBillParser.isBlockedChatOrFeedWindow("com.tencent.mm", "com.tencent.mm.ui.chatting.ChattingUI"))
+        assertTrue(ScreenBillParser.isBlockedChatOrFeedWindow("com.tencent.mm", "com.tencent.mm.ui.bizchat.BizChatConversationUI"))
+        assertTrue(ScreenBillParser.isBlockedChatOrFeedWindow("com.tencent.mm", "com.tencent.mm.plugin.brandservice.ui.timeline.BizTimeLineUI"))
+        assertTrue(ScreenBillParser.isBlockedChatOrFeedWindow("com.tencent.mm", "com.tencent.mm.ui.conversation.MainConversationUI"))
+        assertTrue(ScreenBillParser.isBlockedChatOrFeedWindow("com.tencent.mm", "launcherui"))
+
+        // 支付宝聊天 / 登录 / 首页 Tab 拦截
+        assertTrue(ScreenBillParser.isBlockedChatOrFeedWindow("com.eg.android.AlipayGphone", "com.alipay.mobile.chatapp.ui.ChatMessageActivity"))
+        assertTrue(ScreenBillParser.isBlockedChatOrFeedWindow("com.eg.android.AlipayGphone", "com.alipay.mobile.social.SocialChatActivity"))
+        assertTrue(ScreenBillParser.isBlockedChatOrFeedWindow("com.eg.android.AlipayGphone", "com.alipay.mobile.auth.AlipayLogin"))
+        assertTrue(ScreenBillParser.isBlockedChatOrFeedWindow("com.eg.android.AlipayGphone", "com.eg.android.AlipayGphone.TabLauncher"))
+
+        // 真实支付成功页与账单详情页绝不能被拦截
+        assertFalse(ScreenBillParser.isBlockedChatOrFeedWindow("com.tencent.mm", "com.tencent.mm.plugin.webview.ui.tools.MMWebViewUI"))
+        assertFalse(ScreenBillParser.isBlockedChatOrFeedWindow("com.tencent.mm", "com.tencent.mm.plugin.wallet_core.ui.WalletOrderInfoNewUI"))
+        assertFalse(ScreenBillParser.isBlockedChatOrFeedWindow("com.tencent.mm", "com.tencent.mm.plugin.wallet_core.ui.WalletPaidSuccessUI"))
+        assertFalse(ScreenBillParser.isBlockedChatOrFeedWindow("com.tencent.mm", "com.tencent.mm.plugin.mall.ui.MallOrderDetailInfoUI"))
+        assertFalse(ScreenBillParser.isBlockedChatOrFeedWindow("com.tencent.mm", "com.tencent.mm.framework.app.UIPageFragmentActivity"))
+        assertFalse(ScreenBillParser.isBlockedChatOrFeedWindow("com.tencent.mm", "com.tencent.mm.plugin.remittance.ui.RemittanceDetailUI"))
+        assertFalse(ScreenBillParser.isBlockedChatOrFeedWindow("com.tencent.mm", ""))
+    }
+
+    @Test
+    fun ignoresWeChatPayServiceAccountSingleVoucherCardInConversation() {
+        val withWindowClass = ScreenSnapshot(
+            packageName = "com.tencent.mm",
+            className = "com.tencent.mm.ui.LauncherUI",
+            texts = listOf(
+                "返回",
+                "微信支付",
+                "14:25",
+                "微信支付凭证",
+                "付款金额", "¥38.50",
+                "收款商户", "星巴克咖啡",
+                "支付方式", "零钱",
+                "查看账单详情",
+                "我的账单",
+                "支付服务"
+            )
+        )
+        val outcome1 = parser.parse(withWindowClass, aliases, accounts, categories)
+        assertEquals(ScreenPageKind.UNKNOWN, outcome1.pageKind)
+        assertNull(outcome1.draft)
+        assertFalse(outcome1.shouldFallbackToLlm)
+
+        // 即使类名退化为空，仅凭服务号凭证卡片特征（查看账单详情/收款商户/付款金额）也绝不误触发
+        val degradedClassSnapshot = ScreenSnapshot(
+            packageName = "com.tencent.mm",
+            className = "",
+            texts = listOf(
+                "微信支付",
+                "微信支付凭证",
+                "付款金额", "¥38.50",
+                "收款商户", "星巴克咖啡",
+                "查看账单详情",
+                "我的账单",
+                "支付服务"
+            )
+        )
+        val outcome2 = parser.parse(degradedClassSnapshot, aliases, accounts, categories)
+        assertEquals(ScreenPageKind.UNKNOWN, outcome2.pageKind)
+        assertNull(outcome2.draft)
+        assertFalse(outcome2.shouldFallbackToLlm)
+
+        // 标题滑出屏幕、只剩卡片正文与底部服务号菜单/跳详情按钮时仍拦截
+        val scrolledCardOnly = ScreenSnapshot(
+            packageName = "com.tencent.mm",
+            className = "android.widget.FrameLayout",
+            texts = listOf(
+                "付款金额", "¥38.50",
+                "收款商户", "星巴克咖啡",
+                "查看账单详情",
+                "我的账单",
+                "更多服务"
+            )
+        )
+        val outcome3 = parser.parse(scrolledCardOnly, aliases, accounts, categories)
+        assertEquals(ScreenPageKind.UNKNOWN, outcome3.pageKind)
+        assertNull(outcome3.draft)
+    }
+
+    @Test
+    fun ignoresWeChatPayServiceAccountScrollingMultiCardFeed() {
+        val multiCardFeed = ScreenSnapshot(
+            packageName = "com.tencent.mm",
+            className = "android.widget.FrameLayout",
+            texts = listOf(
+                "微信支付",
+                "昨天 18:40",
+                "付款成功通知",
+                "付款金额", "¥16.00",
+                "收款商户", "哆哆酸辣粉",
+                "支付时间", "2026-11-21 18:40:12",
+                "查看账单详情",
+                "12:15",
+                "付款金额", "¥28.00",
+                "收款商户", "瑞幸咖啡",
+                "支付时间", "2026-11-22 12:15:03",
+                "查看账单详情"
+            )
+        )
+        val outcome = parser.parse(multiCardFeed, aliases, accounts, categories)
+        assertEquals(ScreenPageKind.UNKNOWN, outcome.pageKind)
+        assertNull(outcome.draft)
+        assertFalse(outcome.shouldFallbackToLlm)
+
+        // 仅存在两个聊天时间分隔线 + 查看账单详情按钮（如顶部字段刚好滑出）同样拦截
+        val multiTimeDividerFeed = ScreenSnapshot(
+            packageName = "com.tencent.mm",
+            className = "",
+            texts = listOf(
+                "昨天 18:40",
+                "星巴克",
+                "¥32.00",
+                "查看账单详情",
+                "2026年11月22日",
+                "滴滴出行",
+                "¥24.50"
+            )
+        )
+        val outcome2 = parser.parse(multiTimeDividerFeed, aliases, accounts, categories)
+        assertEquals(ScreenPageKind.UNKNOWN, outcome2.pageKind)
+        assertNull(outcome2.draft)
+    }
+
+    @Test
+    fun ignoresWeChatChatWithRedPacketAndTransferBubbles() {
+        val chattingWindow = ScreenSnapshot(
+            packageName = "com.tencent.mm",
+            className = "com.tencent.mm.ui.chatting.ChattingUI",
+            texts = listOf(
+                "返回",
+                "张三",
+                "昨天 20:10",
+                "微信红包",
+                "恭喜发财，大吉大利",
+                "已被领完",
+                "微信转账",
+                "¥200.00",
+                "对方已收钱"
+            )
+        )
+        val outcome1 = parser.parse(chattingWindow, aliases, accounts, categories)
+        assertEquals(ScreenPageKind.UNKNOWN, outcome1.pageKind)
+        assertNull(outcome1.draft)
+
+        // 类名退化为空时，聊天页面红包与转账消息气泡同样绝不误触发
+        val degradedChatSnapshot = ScreenSnapshot(
+            packageName = "com.tencent.mm",
+            className = "",
+            texts = listOf(
+                "返回",
+                "张三",
+                "14:20",
+                "微信红包",
+                "恭喜发财，大吉大利",
+                "已被领完",
+                "14:22",
+                "微信转账",
+                "¥200.00",
+                "朋友已确认收钱"
+            )
+        )
+        val outcome2 = parser.parse(degradedChatSnapshot, aliases, accounts, categories)
+        assertEquals(ScreenPageKind.UNKNOWN, outcome2.pageKind)
+        assertNull(outcome2.draft)
+        assertFalse(outcome2.shouldFallbackToLlm)
+    }
+
+    @Test
+    fun ignoresAlipayChatAndServiceFeedMessages() {
+        val alipayChat = ScreenSnapshot(
+            packageName = "com.eg.android.AlipayGphone",
+            className = "com.alipay.mobile.chatapp.ui.ChatMessageActivity",
+            texts = listOf(
+                "返回",
+                "账单助手",
+                "动账提醒",
+                "付款金额", "¥19.80",
+                "收款方", "美团外卖",
+                "点击查看详情"
+            )
+        )
+        val outcome1 = parser.parse(alipayChat, aliases, accounts, categories)
+        assertEquals(ScreenPageKind.UNKNOWN, outcome1.pageKind)
+        assertNull(outcome1.draft)
+
+        val alipayFeedDegraded = ScreenSnapshot(
+            packageName = "com.eg.android.AlipayGphone",
+            className = "",
+            texts = listOf(
+                "账单助手",
+                "10:30",
+                "付款金额", "¥19.80",
+                "交易对方", "瑞幸咖啡",
+                "查看消费明细",
+                "11:45",
+                "付款金额", "¥35.00",
+                "查看账单详情"
+            )
+        )
+        val outcome2 = parser.parse(alipayFeedDegraded, aliases, accounts, categories)
+        assertEquals(ScreenPageKind.UNKNOWN, outcome2.pageKind)
+        assertNull(outcome2.draft)
+        assertFalse(outcome2.shouldFallbackToLlm)
+    }
+
+    @Test
+    fun stillAccuratelyParsesRealWeChatMMWebViewBillDetailAndWalletPaidSuccessAfterChatGuards() {
+        val realWebViewDetail = ScreenSnapshot(
+            packageName = "com.tencent.mm",
+            className = "com.tencent.mm.plugin.webview.ui.tools.MMWebViewUI",
+            texts = listOf(
+                "账单详情",
+                "霸王茶姬",
+                "-20.00",
+                "当前状态", "支付成功",
+                "支付时间", "2026-11-22 16:05:10",
+                "商品", "伯牙绝弦大杯",
+                "支付方式", "零钱",
+                "交易单号", "42000099992026112212345678",
+                "账单服务", "在此商户的交易",
+                "本服务由财付通提供",
+                "全部账单"
+            )
+        )
+        val detailOutcome = parser.parse(realWebViewDetail, aliases, accounts, categories)
+        assertEquals(ScreenPageKind.BILL_DETAIL, detailOutcome.pageKind)
+        assertNotNull(detailOutcome.draft)
+        assertEquals(MoneyAmount.parseToMicros("20.00"), detailOutcome.draft!!.origAmountMicros)
+        assertEquals("霸王茶姬", detailOutcome.draft!!.merchant)
+        assertEquals("42000099992026112212345678", detailOutcome.orderNo)
+
+        val realPaySuccess = ScreenSnapshot(
+            packageName = "com.tencent.mm",
+            className = "com.tencent.mm.plugin.wallet_core.ui.WalletPaidSuccessUI",
+            texts = listOf("支付成功", "霸王茶姬", "¥20.00", "支付方式", "零钱", "完成")
+        )
+        val payOutcome = parser.parse(realPaySuccess, aliases, accounts, categories)
+        assertEquals(ScreenPageKind.PAY_SUCCESS, payOutcome.pageKind)
+        assertNotNull(payOutcome.draft)
+        assertEquals(MoneyAmount.parseToMicros("20.00"), payOutcome.draft!!.origAmountMicros)
+        assertEquals("霸王茶姬", payOutcome.draft!!.merchant)
+        assertEquals("微信零钱", accounts.first { it.id == payOutcome.draft!!.accountId }.name)
+    }
 }

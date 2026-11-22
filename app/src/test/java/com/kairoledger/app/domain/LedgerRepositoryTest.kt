@@ -7,8 +7,15 @@ import com.kairoledger.app.data.db.AccountGroup
 import com.kairoledger.app.data.db.BudgetEntity
 import com.kairoledger.app.data.db.CaptureChannel
 import com.kairoledger.app.data.db.CategoryEntity
+import com.kairoledger.app.data.db.DebtDirection
+import com.kairoledger.app.data.db.DebtRecordEntity
+import com.kairoledger.app.data.db.DebtStatus
 import com.kairoledger.app.data.db.ExchangeRateEntity
+import com.kairoledger.app.data.db.InstallmentPlanEntity
+import com.kairoledger.app.data.db.LedgerEntity
 import com.kairoledger.app.data.db.RecurringRuleEntity
+import com.kairoledger.app.data.db.ReimburseStatus
+import com.kairoledger.app.data.db.StatsGranularity
 import com.kairoledger.app.data.db.TransactionStatus
 import com.kairoledger.app.data.db.TransactionType
 import com.kairoledger.app.data.network.ExchangeRateApi
@@ -19,6 +26,7 @@ import kotlinx.coroutines.test.runTest
 import okhttp3.OkHttpClient
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -38,6 +46,9 @@ class LedgerRepositoryTest {
     private lateinit var budgetDao: FakeBudgetDao
     private lateinit var recurringRuleDao: FakeRecurringRuleDao
     private lateinit var exchangeRateDao: FakeExchangeRateDao
+    private lateinit var ledgerDao: FakeLedgerDao
+    private lateinit var debtRecordDao: FakeDebtRecordDao
+    private lateinit var installmentPlanDao: FakeInstallmentPlanDao
     private lateinit var rateProvider: ExchangeRateRepositoryImpl
     private lateinit var ledger: LedgerRepositoryImpl
 
@@ -52,6 +63,9 @@ class LedgerRepositoryTest {
         budgetDao = FakeBudgetDao()
         recurringRuleDao = FakeRecurringRuleDao()
         exchangeRateDao = FakeExchangeRateDao()
+        ledgerDao = FakeLedgerDao()
+        debtRecordDao = FakeDebtRecordDao()
+        installmentPlanDao = FakeInstallmentPlanDao()
 
         rateProvider = ExchangeRateRepositoryImpl(
             exchangeRateDao = exchangeRateDao,
@@ -67,6 +81,9 @@ class LedgerRepositoryTest {
             budgetDao = budgetDao,
             recurringRuleDao = recurringRuleDao,
             exchangeRateProvider = rateProvider,
+            ledgerDao = ledgerDao,
+            debtRecordDao = debtRecordDao,
+            installmentPlanDao = installmentPlanDao,
             getSettings = { AppSettings(baseCurrency = baseCurrencySetting) },
             zoneId = zoneId,
             clockMillisProvider = { nowMillis }
@@ -462,5 +479,327 @@ class LedgerRepositoryTest {
             )
         )
         assertEquals(0, ledger.processDueRecurringRules(millisOf(2025, 4, 15, 0, 0)))
+    }
+
+    @Test
+    fun multiLedger_and_excludeFlags_isolateStats() = runTest {
+        val accId = accountDao.insert(
+            AccountEntity(name = "支付宝", groupType = AccountGroup.WALLET, currencyCode = "CNY", balanceMicros = MoneyAmount.parseToMicros("2000.00")!!)
+        )
+        val foodCatId = categoryDao.insert(CategoryEntity(name = "餐饮", type = TransactionType.EXPENSE))
+        ledgerDao.insert(LedgerEntity(id = 1L, name = "日常账本"))
+        val travelLedgerId = ledger.saveLedger(LedgerEntity(name = "日本旅行", currencyCode = "CNY"))
+
+        val ts1 = millisOf(2026, 11, 10, 12, 0)
+        val ts2 = millisOf(2026, 11, 11, 12, 0)
+        // 日常账本正常餐饮 50 元
+        ledger.saveTransaction(
+            RecordTransactionRequest(
+                type = TransactionType.EXPENSE,
+                timestamp = ts1,
+                origAmountMicros = MoneyAmount.parseToMicros("50.00")!!,
+                origCurrency = "CNY",
+                accountId = accId,
+                categoryId = foodCatId,
+                ledgerId = 1L
+            )
+        )
+        // 日常账本不计入统计 200 元
+        ledger.saveTransaction(
+            RecordTransactionRequest(
+                type = TransactionType.EXPENSE,
+                timestamp = ts1,
+                origAmountMicros = MoneyAmount.parseToMicros("200.00")!!,
+                origCurrency = "CNY",
+                accountId = accId,
+                categoryId = foodCatId,
+                ledgerId = 1L,
+                excludeFromStats = true
+            )
+        )
+        // 旅行账本餐饮 120 元
+        ledger.saveTransaction(
+            RecordTransactionRequest(
+                type = TransactionType.EXPENSE,
+                timestamp = ts2,
+                origAmountMicros = MoneyAmount.parseToMicros("120.00")!!,
+                origCurrency = "CNY",
+                accountId = accId,
+                categoryId = foodCatId,
+                ledgerId = travelLedgerId
+            )
+        )
+
+        val monthStart = millisOf(2026, 11, 1, 0, 0)
+        val monthEnd = millisOf(2026, 11, 30, 23, 59)
+
+        val ledger1Stats = ledger.computeCategoryStatsForLedger(monthStart, monthEnd, TransactionType.EXPENSE, 1L, "CNY")
+        assertEquals(MoneyAmount.parseToMicros("50.00")!!, ledger1Stats.sumOf { it.totalBaseMicros })
+
+        val travelStats = ledger.computeCategoryStatsForLedger(monthStart, monthEnd, TransactionType.EXPENSE, travelLedgerId, "CNY")
+        assertEquals(MoneyAmount.parseToMicros("120.00")!!, travelStats.sumOf { it.totalBaseMicros })
+
+        val allStats = ledger.computeCategoryStatsForLedger(monthStart, monthEnd, TransactionType.EXPENSE, 0L, "CNY")
+        assertEquals(MoneyAmount.parseToMicros("170.00")!!, allStats.sumOf { it.totalBaseMicros })
+
+        val trend = ledger.computeTrendBuckets(
+            granularity = StatsGranularity.MONTHLY,
+            anchorDateMillis = ts1,
+            customStartMillis = null,
+            customEndMillis = null,
+            ledgerId = travelLedgerId,
+            displayCurrency = "CNY"
+        )
+        assertEquals(MoneyAmount.parseToMicros("120.00")!!, trend.sumOf { it.expenseBaseMicros })
+    }
+
+    @Test
+    fun refundTransaction_deductsCategoryExpenseWithoutInflatingIncome() = runTest {
+        val accId = accountDao.insert(
+            AccountEntity(name = "微信", groupType = AccountGroup.WALLET, currencyCode = "CNY", balanceMicros = MoneyAmount.parseToMicros("1000.00")!!)
+        )
+        val shopCatId = categoryDao.insert(CategoryEntity(name = "购物", type = TransactionType.EXPENSE))
+        val ts = millisOf(2026, 11, 15, 14, 0)
+
+        val origTx = ledger.saveTransaction(
+            RecordTransactionRequest(
+                type = TransactionType.EXPENSE,
+                timestamp = ts,
+                origAmountMicros = MoneyAmount.parseToMicros("100.00")!!,
+                origCurrency = "CNY",
+                accountId = accId,
+                categoryId = shopCatId,
+                merchant = "淘宝"
+            )
+        ).getOrThrow()
+
+        // 退款 30 元关联原支出
+        ledger.saveTransaction(
+            RecordTransactionRequest(
+                type = TransactionType.INCOME,
+                timestamp = ts + 3_600_000L,
+                origAmountMicros = MoneyAmount.parseToMicros("30.00")!!,
+                origCurrency = "CNY",
+                accountId = accId,
+                categoryId = shopCatId,
+                merchant = "淘宝退款",
+                refundOfTxId = origTx.id
+            )
+        ).getOrThrow()
+
+        // 账户余额净支出 70 元
+        assertEquals(MoneyAmount.parseToMicros("930.00")!!, accountDao.getById(accId)!!.balanceMicros)
+
+        val monthStart = millisOf(2026, 11, 1, 0, 0)
+        val monthEnd = millisOf(2026, 11, 30, 23, 59)
+        val expenseStats = ledger.computeCategoryStatsForLedger(monthStart, monthEnd, TransactionType.EXPENSE, 1L, "CNY")
+        val incomeStats = ledger.computeCategoryStatsForLedger(monthStart, monthEnd, TransactionType.INCOME, 1L, "CNY")
+
+        // 退款冲减支出为 70，且不计入收入统计
+        assertEquals(MoneyAmount.parseToMicros("70.00")!!, expenseStats.sumOf { it.totalBaseMicros })
+        assertTrue(incomeStats.isEmpty())
+    }
+
+    @Test
+    fun settleReimbursements_convertsCrossCurrency_marksReimbursed_andExcludesFromStats() = runTest {
+        val usdCardId = accountDao.insert(
+            AccountEntity(name = "美元卡", groupType = AccountGroup.FOREIGN, currencyCode = "USD", balanceMicros = MoneyAmount.parseToMicros("500.00")!!)
+        )
+        val cnyBankId = accountDao.insert(
+            AccountEntity(name = "工资卡", groupType = AccountGroup.DEBIT, currencyCode = "CNY", balanceMicros = MoneyAmount.parseToMicros("1000.00")!!)
+        )
+        exchangeRateDao.upsertAll(
+            listOf(
+                ExchangeRateEntity(baseCurrency = "USD", targetCurrency = "CNY", rateMicros = 7_200_000L, date = "2026-11-22", source = "CUSTOM")
+            )
+        )
+        val travelCatId = categoryDao.insert(CategoryEntity(name = "差旅", type = TransactionType.EXPENSE))
+
+        val tx1 = ledger.saveTransaction(
+            RecordTransactionRequest(
+                type = TransactionType.EXPENSE,
+                timestamp = millisOf(2026, 11, 20, 10, 0),
+                origAmountMicros = MoneyAmount.parseToMicros("10.00")!!,
+                origCurrency = "USD",
+                accountId = usdCardId,
+                categoryId = travelCatId,
+                reimburseStatus = ReimburseStatus.PENDING
+            )
+        ).getOrThrow()
+        val tx2 = ledger.saveTransaction(
+            RecordTransactionRequest(
+                type = TransactionType.EXPENSE,
+                timestamp = millisOf(2026, 11, 20, 12, 0),
+                origAmountMicros = MoneyAmount.parseToMicros("28.00")!!,
+                origCurrency = "CNY",
+                accountId = cnyBankId,
+                categoryId = travelCatId,
+                reimburseStatus = ReimburseStatus.PENDING
+            )
+        ).getOrThrow()
+
+        // 10 USD * 7.2 + 28 CNY = 100 CNY
+        val settleTx = ledger.settleReimbursements(
+            txIds = listOf(tx1.id, tx2.id),
+            targetAccountId = cnyBankId,
+            timestamp = millisOf(2026, 11, 22, 15, 0),
+            note = "十一月出差核销"
+        ).getOrThrow()
+
+        assertEquals(MoneyAmount.parseToMicros("100.00")!!, settleTx.origAmountMicros)
+        assertTrue(settleTx.excludeFromStats)
+        assertEquals(MoneyAmount.parseToMicros("1072.00")!!, accountDao.getById(cnyBankId)!!.balanceMicros)
+
+        val updatedTx1 = transactionDao.getById(tx1.id)!!
+        val updatedTx2 = transactionDao.getById(tx2.id)!!
+        assertEquals(ReimburseStatus.REIMBURSED, updatedTx1.reimburseStatus)
+        assertEquals(settleTx.id, updatedTx1.reimbursedTxId)
+        assertEquals(ReimburseStatus.REIMBURSED, updatedTx2.reimburseStatus)
+    }
+
+    @Test
+    fun debtLifecycle_handlesPartialAndFullSettlementWithAccountSync() = runTest {
+        val bankId = accountDao.insert(
+            AccountEntity(name = "招商储蓄卡", groupType = AccountGroup.DEBIT, currencyCode = "CNY", balanceMicros = MoneyAmount.parseToMicros("1000.00")!!)
+        )
+
+        val debtId = ledger.saveDebt(
+            DebtRecordEntity(
+                direction = DebtDirection.LEND,
+                personName = "张三",
+                amountMicros = MoneyAmount.parseToMicros("300.00")!!,
+                currencyCode = "CNY",
+                accountId = bankId,
+                note = "垫付聚餐"
+            ),
+            syncAccountBalance = true
+        )
+        assertEquals(MoneyAmount.parseToMicros("700.00")!!, accountDao.getById(bankId)!!.balanceMicros)
+
+        // 部分归还 100 元
+        val afterPartial = ledger.settleDebt(
+            debtId = debtId,
+            settleAmountMicros = MoneyAmount.parseToMicros("100.00")!!,
+            accountId = bankId,
+            note = "先还一百"
+        ).getOrThrow()
+        assertEquals(DebtStatus.OPEN, afterPartial.status)
+        assertEquals(MoneyAmount.parseToMicros("100.00")!!, afterPartial.settledAmountMicros)
+        assertEquals(MoneyAmount.parseToMicros("800.00")!!, accountDao.getById(bankId)!!.balanceMicros)
+
+        // 归还剩余（传入超额金额应截断为剩余 200 元）
+        val afterFull = ledger.settleDebt(
+            debtId = debtId,
+            settleAmountMicros = MoneyAmount.parseToMicros("500.00")!!,
+            accountId = bankId,
+            note = "全部结清"
+        ).getOrThrow()
+        assertEquals(DebtStatus.SETTLED, afterFull.status)
+        assertEquals(MoneyAmount.parseToMicros("300.00")!!, afterFull.settledAmountMicros)
+        assertEquals(MoneyAmount.parseToMicros("1000.00")!!, accountDao.getById(bankId)!!.balanceMicros)
+    }
+
+    @Test
+    fun installmentPlan_recordsPeriodsAndDisablesOnCompletion() = runTest {
+        val creditId = accountDao.insert(
+            AccountEntity(name = "花呗分期", groupType = AccountGroup.CREDIT, currencyCode = "CNY", balanceMicros = 0L)
+        )
+        val planId = ledger.saveInstallment(
+            InstallmentPlanEntity(
+                accountId = creditId,
+                name = "iPhone 17 分期",
+                totalAmountMicros = MoneyAmount.parseToMicros("2000.00")!!,
+                feePerPeriodMicros = MoneyAmount.parseToMicros("10.00")!!,
+                currencyCode = "CNY",
+                totalPeriods = 2,
+                completedPeriods = 0,
+                billingDay = 15,
+                nextDueMillis = millisOf(2026, 11, 15, 9, 0)
+            )
+        )
+
+        // 第 1 期：本金 1000 + 手续费 10 = 1010
+        val tx1 = ledger.recordInstallmentPeriod(planId).getOrThrow()
+        assertEquals(MoneyAmount.parseToMicros("1010.00")!!, tx1.origAmountMicros)
+        val planAfter1 = installmentPlanDao.getById(planId)!!
+        assertEquals(1, planAfter1.completedPeriods)
+        assertTrue(planAfter1.enabled)
+
+        // 第 2 期：最后一期 -> completedPeriods = 2, enabled = false
+        ledger.recordInstallmentPeriod(planId).getOrThrow()
+        val planAfter2 = installmentPlanDao.getById(planId)!!
+        assertEquals(2, planAfter2.completedPeriods)
+        assertFalse(planAfter2.enabled)
+        assertEquals(MoneyAmount.parseToMicros("-2020.00")!!, accountDao.getById(creditId)!!.balanceMicros)
+    }
+
+    @Test
+    fun netWorthHistory_and_budgetRollover_computeExpectedValues() = runTest {
+        nowMillis = millisOf(2026, 11, 22, 10, 0)
+        val bankId = accountDao.insert(
+            AccountEntity(name = "现金账户", groupType = AccountGroup.DEBIT, currencyCode = "CNY", balanceMicros = MoneyAmount.parseToMicros("1000.00")!!)
+        )
+        val foodCatId = categoryDao.insert(CategoryEntity(name = "餐饮", type = TransactionType.EXPENSE))
+
+        // 10 月支出 200 元；11 月收入 500 元、支出 100 元 -> 当前余额已在上面设为 1000
+        // 往回反推：10 月末余额 = 1000 - (500 - 100) = 600
+        ledger.saveTransaction(
+            RecordTransactionRequest(
+                type = TransactionType.EXPENSE,
+                timestamp = millisOf(2026, 10, 10, 12, 0),
+                origAmountMicros = MoneyAmount.parseToMicros("200.00")!!,
+                origCurrency = "CNY",
+                accountId = bankId,
+                categoryId = foodCatId
+            )
+        )
+        ledger.saveTransaction(
+            RecordTransactionRequest(
+                type = TransactionType.INCOME,
+                timestamp = millisOf(2026, 11, 5, 12, 0),
+                origAmountMicros = MoneyAmount.parseToMicros("500.00")!!,
+                origCurrency = "CNY",
+                accountId = bankId
+            )
+        )
+        ledger.saveTransaction(
+            RecordTransactionRequest(
+                type = TransactionType.EXPENSE,
+                timestamp = millisOf(2026, 11, 18, 12, 0),
+                origAmountMicros = MoneyAmount.parseToMicros("100.00")!!,
+                origCurrency = "CNY",
+                accountId = bankId,
+                categoryId = foodCatId
+            )
+        )
+
+        val history = ledger.computeNetWorthHistory(monthsBack = 3, displayCurrency = "CNY")
+        assertEquals(3, history.size)
+        val octPoint = history.firstOrNull { it.label.contains("10") }
+        val novPoint = history.last()
+        assertNotNull(octPoint)
+        assertEquals(MoneyAmount.parseToMicros("1200.00")!!, novPoint.netWorthMicros)
+        assertEquals(MoneyAmount.parseToMicros("800.00")!!, octPoint!!.netWorthMicros)
+
+        // 预算结转：月预算 500 元、启用 rollover，10 月花了 200 元 -> 结转 300 元 -> 11 月有效预算 = 800 元
+        budgetDao.insert(
+            BudgetEntity(
+                name = "餐饮月预算",
+                categoryId = foodCatId,
+                limitAmountMicros = MoneyAmount.parseToMicros("500.00")!!,
+                currencyCode = "CNY",
+                ledgerId = 1L,
+                rolloverEnabled = true
+            )
+        )
+        val progress = ledger.computeBudgetProgressForLedger(2026, 11, 1L)
+        assertEquals(1, progress.size)
+        val item = progress.first()
+        assertEquals(MoneyAmount.parseToMicros("300.00")!!, item.rolloverMicros)
+        assertEquals(MoneyAmount.parseToMicros("800.00")!!, item.limitInBudgetCurrencyMicros)
+        assertEquals(MoneyAmount.parseToMicros("100.00")!!, item.spentInBudgetCurrencyMicros)
+        assertEquals(9, item.remainingDays)
+        // 11月22日..30日共 9 天，可用余额 700 元，日均约 77.7777 元
+        assertEquals(MoneyAmount.parseToMicros("700.00")!! / 9L, item.dailyAvailableMicros)
     }
 }

@@ -87,13 +87,19 @@ class KairoAccessibilityService : AccessibilityService() {
             return
         }
 
-        val pkg = event.packageName?.toString() ?: return
+        val pkg = event.packageName?.toString()?.trim().orEmpty()
+        if (pkg.isEmpty()) return
         if (pkg == packageName || !ScreenBillParser.isWatchedPackage(pkg)) {
             if (eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
                 !pkg.contains("systemui") &&
                 !pkg.contains("inputmethod") &&
                 !pkg.contains("keyboard")
             ) {
+                val cls = event.className?.toString()?.trim().orEmpty()
+                if (pkg != packageName && isWindowClassCandidate(cls)) {
+                    latestWindowPackage = ""
+                    latestWindowClassName = ""
+                }
                 synchronized(cacheLock) {
                     lastActivePackage = ""
                     lastActiveDedupKey = ""
@@ -105,18 +111,29 @@ class KairoAccessibilityService : AccessibilityService() {
             return
         }
 
-        if (eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED || latestWindowPackage != pkg) {
+        if (latestWindowPackage != pkg) {
             latestWindowPackage = pkg
-            val cls = event.className?.toString().orEmpty()
-            if (cls.isNotBlank() && !cls.startsWith("android.widget.") && !cls.startsWith("androidx.")) {
-                latestWindowClassName = cls
-            } else if (eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+            latestWindowClassName = ""
+        }
+
+        if (eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+            val cls = event.className?.toString()?.trim().orEmpty()
+            if (isWindowClassCandidate(cls)) {
                 latestWindowClassName = cls
             }
+            if (ScreenBillParser.isBlockedChatOrFeedWindow(pkg, latestWindowClassName)) {
+                debugLog("event=WINDOW_STATE blocked pkg=$pkg cls=$latestWindowClassName")
+                scanJob?.cancel()
+                activeScanPackage = ""
+                dirtyContentWhileScanning = false
+                return
+            }
+        } else if (ScreenBillParser.isBlockedChatOrFeedWindow(pkg, latestWindowClassName)) {
+            return
         }
 
         val retryDelays = if (eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
-            debugLog("event=WINDOW_STATE pkg=$pkg cls=${event.className}")
+            debugLog("event=WINDOW_STATE pkg=$pkg cls=${event.className} tracked=$latestWindowClassName")
             WINDOW_STATE_RETRY_DELAYS
         } else {
             // 正在针对同一应用等待/扫描时不再 cancel 重建协程，防止 XWeb 高频内容刷新饿死扫描
@@ -454,6 +471,23 @@ class KairoAccessibilityService : AccessibilityService() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             runCatching { recycle() }
         }
+    }
+
+    private fun isWindowClassCandidate(cls: String): Boolean {
+        if (cls.isBlank()) return false
+        if (cls.startsWith("android.widget.") ||
+            cls.startsWith("android.view.") ||
+            cls.startsWith("androidx.")
+        ) {
+            return false
+        }
+        if (cls.endsWith("Dialog", ignoreCase = true) ||
+            cls.endsWith("PopupWindow", ignoreCase = true) ||
+            cls.endsWith("Toast", ignoreCase = true)
+        ) {
+            return false
+        }
+        return true
     }
 
     private fun debugLog(msg: String) {

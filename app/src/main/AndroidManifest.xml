@@ -113,6 +113,24 @@
             </intent-filter>
         </activity>
 
+        <!-- 7.5. 系统图片分享小票识图记账入口 -->
+        <activity
+            android:name=".capture.ShareImageCaptureActivity"
+            android:excludeFromRecents="true"
+            android:exported="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="image/*" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="image/*" />
+            </intent-filter>
+        </activity>
+
         <!-- 8. 无障碍屏幕账单页与支付成功页监听服务 -->
         <service
             android:name=".capture.screen.KairoAccessibilityService"
@@ -138,6 +156,19 @@
             <meta-data
                 android:name="android.appwidget.provider"
                 android:resource="@xml/kairo_widget_info" />
+        </receiver>
+
+        <!-- 10. Jetpack Glance 4x1 极速记账工具条小组件 -->
+        <receiver
+            android:name="com.kairoledger.app.widget.KairoQuickRecordWidgetReceiver"
+            android:exported="true"
+            android:label="@string/quick_widget_label">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/kairo_quick_widget_info" />
         </receiver>
 
     </application>

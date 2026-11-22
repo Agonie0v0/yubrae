@@ -1,7 +1,17 @@
 package com.kairoledger.app.ui.components
 
+import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Matrix
+import android.media.ExifInterface
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -12,6 +22,7 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
@@ -27,20 +38,27 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Backspace
+import androidx.compose.material.icons.automirrored.rounded.MenuBook
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.AddPhotoAlternate
+import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Calculate
 import androidx.compose.material.icons.rounded.CalendarMonth
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.CurrencyExchange
 import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.rounded.Image
 import androidx.compose.material.icons.rounded.KeyboardHide
 import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.Replay
 import androidx.compose.material.icons.rounded.Schedule
 import androidx.compose.material.icons.rounded.SwapHoriz
+import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -64,24 +82,33 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import com.kairoledger.app.core.contract.ConversionPreview
+import com.kairoledger.app.core.contract.ParsedBillDraft
 import com.kairoledger.app.core.contract.RecordTransactionRequest
 import com.kairoledger.app.core.model.CurrencyCatalog
 import com.kairoledger.app.core.model.MoneyAmount
 import com.kairoledger.app.data.db.AccountEntity
 import com.kairoledger.app.data.db.CaptureChannel
 import com.kairoledger.app.data.db.CategoryEntity
+import com.kairoledger.app.data.db.LedgerEntity
 import com.kairoledger.app.data.db.ReimburseStatus
 import com.kairoledger.app.data.db.TransactionEntity
 import com.kairoledger.app.data.db.TransactionStatus
@@ -89,6 +116,11 @@ import com.kairoledger.app.data.db.TransactionType
 import com.kairoledger.app.ui.theme.KairoTheme
 import com.kairoledger.app.ui.theme.tabular
 import com.kairoledger.app.ui.viewmodel.KairoMainViewModel
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
+import java.io.FileOutputStream
 import java.math.BigDecimal
 import java.math.RoundingMode
 import java.time.Instant
@@ -98,18 +130,44 @@ import java.time.ZoneId
 import java.time.ZoneOffset
 
 private object QuickExprEval {
+    private val OPERATOR_CHARS = charArrayOf('+', '-', '×', '÷', '*', '/')
+
+    fun isOperator(ch: Char): Boolean = ch in OPERATOR_CHARS
+
+    fun containsOperator(expr: String): Boolean {
+        if (expr.isEmpty()) return false
+        for (i in 1 until expr.length) {
+            if (isOperator(expr[i])) return true
+        }
+        return false
+    }
+
+    private fun lastOperatorIndex(expr: String): Int {
+        var idx = -1
+        for (i in expr.indices) {
+            if (isOperator(expr[i]) && i > 0) {
+                idx = i
+            }
+        }
+        return idx
+    }
+
     fun appendDigit(expr: String, digit: String): String {
-        if (expr == "0") return digit
-        val lastSep = maxOf(expr.lastIndexOf('+'), expr.lastIndexOf('-'))
+        if (expr == "0" && digit != "00") return digit
+        if (expr == "0" && digit == "00") return "0"
+        val lastSep = lastOperatorIndex(expr)
         val currentSeg = expr.substring(lastSep + 1)
         if (currentSeg == "0") {
-            return expr.dropLast(1) + digit
+            return if (digit == "00" || digit == "0") expr else expr.dropLast(1) + digit
+        }
+        if (currentSeg.isEmpty() && digit == "00") {
+            return "${expr}0"
         }
         return expr + digit
     }
 
     fun appendDot(expr: String): String {
-        val lastSep = maxOf(expr.lastIndexOf('+'), expr.lastIndexOf('-'))
+        val lastSep = lastOperatorIndex(expr)
         val currentSeg = expr.substring(lastSep + 1)
         if (currentSeg.contains('.')) return expr
         return if (currentSeg.isEmpty()) "${expr}0." else "$expr."
@@ -118,24 +176,22 @@ private object QuickExprEval {
     fun appendOperator(expr: String, op: Char): String {
         if (expr.isEmpty()) return ""
         val last = expr.last()
-        return if (last == '+' || last == '-') {
-            expr.dropLast(1) + op
-        } else {
-            expr + op
+        return when {
+            isOperator(last) -> expr.dropLast(1) + op
+            last == '.' -> expr.dropLast(1) + op
+            else -> expr + op
         }
     }
 
     fun evaluate(expr: String): BigDecimal? {
-        val cleaned = expr.trim().trimEnd('+', '-', '.')
+        val cleaned = expr.trim().trimEnd('+', '-', '×', '÷', '*', '/', '.')
         if (cleaned.isEmpty()) return null
         val tokens = mutableListOf<String>()
         val sb = StringBuilder()
         cleaned.forEachIndexed { index, ch ->
-            if ((ch == '+' || ch == '-') && index > 0) {
-                if (sb.isNotEmpty()) {
-                    tokens.add(sb.toString())
-                    sb.clear()
-                }
+            if (isOperator(ch) && index > 0 && sb.isNotEmpty()) {
+                tokens.add(sb.toString())
+                sb.clear()
                 tokens.add(ch.toString())
             } else {
                 sb.append(ch)
@@ -145,18 +201,55 @@ private object QuickExprEval {
         if (tokens.isEmpty()) return null
 
         return try {
+            // 第一遍：先计算 × 和 ÷（支持高优先级四则运算）
+            val reduced = mutableListOf<String>()
             var acc = BigDecimal(tokens[0])
             var i = 1
             while (i + 1 < tokens.size) {
                 val op = tokens[i]
                 val rhs = BigDecimal(tokens[i + 1])
-                acc = if (op == "+") acc.add(rhs) else acc.subtract(rhs)
+                when (op) {
+                    "×", "*" -> {
+                        acc = acc.multiply(rhs)
+                    }
+                    "÷", "/" -> {
+                        if (rhs.compareTo(BigDecimal.ZERO) == 0) return null
+                        acc = acc.divide(rhs, 8, RoundingMode.HALF_UP)
+                    }
+                    else -> {
+                        reduced.add(acc.toPlainString())
+                        reduced.add(op)
+                        acc = rhs
+                    }
+                }
                 i += 2
             }
-            acc
+            reduced.add(acc.toPlainString())
+
+            // 第二遍：再从左向右计算 + 和 -
+            var result = BigDecimal(reduced[0])
+            var j = 1
+            while (j + 1 < reduced.size) {
+                val op = reduced[j]
+                val rhs = BigDecimal(reduced[j + 1])
+                result = when (op) {
+                    "+" -> result.add(rhs)
+                    "-" -> result.subtract(rhs)
+                    else -> return null
+                }
+                j += 2
+            }
+            result
         } catch (_: Exception) {
             null
         }
+    }
+
+    fun evaluateAndFormat(expr: String, maxScale: Int = 4): String? {
+        val bd = evaluate(expr) ?: return null
+        val scaled = bd.setScale(maxScale.coerceIn(2, 4), RoundingMode.HALF_UP)
+            .stripTrailingZeros()
+        return if (scaled.compareTo(BigDecimal.ZERO) == 0) "0" else scaled.toPlainString()
     }
 
     fun evaluateToMicros(expr: String): Long? {
@@ -172,6 +265,251 @@ private object QuickExprEval {
     }
 }
 
+internal object ReceiptImageUtils {
+    private const val MAX_EDGE_PX = 1600
+
+    private fun receiptsDir(context: Context): File =
+        File(context.filesDir, "receipts").apply { if (!exists()) mkdirs() }
+
+    private fun computeInSampleSize(width: Int, height: Int, maxEdge: Int): Int {
+        var inSampleSize = 1
+        var longest = maxOf(width, height)
+        while (longest / inSampleSize > maxEdge) {
+            inSampleSize *= 2
+        }
+        return inSampleSize.coerceAtLeast(1)
+    }
+
+    private fun rotateIfNeeded(bitmap: Bitmap, orientation: Int): Bitmap {
+        val degrees = when (orientation) {
+            ExifInterface.ORIENTATION_ROTATE_90 -> 90f
+            ExifInterface.ORIENTATION_ROTATE_180 -> 180f
+            ExifInterface.ORIENTATION_ROTATE_270 -> 270f
+            else -> 0f
+        }
+        if (degrees == 0f) return bitmap
+        val matrix = Matrix().apply { postRotate(degrees) }
+        return runCatching {
+            val rotated = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
+            if (rotated !== bitmap) bitmap.recycle()
+            rotated
+        }.getOrDefault(bitmap)
+    }
+
+    private fun scaleBitmapDown(bitmap: Bitmap, maxEdge: Int): Bitmap {
+        val longest = maxOf(bitmap.width, bitmap.height)
+        if (longest <= maxEdge) return bitmap
+        val ratio = maxEdge.toFloat() / longest.toFloat()
+        val targetW = (bitmap.width * ratio).toInt().coerceAtLeast(1)
+        val targetH = (bitmap.height * ratio).toInt().coerceAtLeast(1)
+        return runCatching {
+            val scaled = Bitmap.createScaledBitmap(bitmap, targetW, targetH, true)
+            if (scaled !== bitmap) bitmap.recycle()
+            scaled
+        }.getOrDefault(bitmap)
+    }
+
+    suspend fun savePickedImageToReceipts(context: Context, uri: Uri): String? = withContext(Dispatchers.IO) {
+        val resolver = context.contentResolver
+        val dir = receiptsDir(context)
+        val destFile = File(dir, "receipt_${System.currentTimeMillis()}.jpg")
+
+        val decoded = runCatching {
+            val orientation = resolver.openInputStream(uri)?.use { stream ->
+                runCatching {
+                    ExifInterface(stream).getAttributeInt(
+                        ExifInterface.TAG_ORIENTATION,
+                        ExifInterface.ORIENTATION_NORMAL
+                    )
+                }.getOrDefault(ExifInterface.ORIENTATION_NORMAL)
+            } ?: ExifInterface.ORIENTATION_NORMAL
+
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            resolver.openInputStream(uri)?.use { stream ->
+                BitmapFactory.decodeStream(stream, null, bounds)
+            }
+            if (bounds.outWidth > 0 && bounds.outHeight > 0) {
+                val opts = BitmapFactory.Options().apply {
+                    inSampleSize = computeInSampleSize(bounds.outWidth, bounds.outHeight, MAX_EDGE_PX)
+                }
+                resolver.openInputStream(uri)?.use { stream ->
+                    BitmapFactory.decodeStream(stream, null, opts)
+                }?.let { bmp ->
+                    scaleBitmapDown(rotateIfNeeded(bmp, orientation), MAX_EDGE_PX)
+                }
+            } else {
+                null
+            }
+        }.getOrNull()
+
+        if (decoded != null) {
+            return@withContext runCatching {
+                FileOutputStream(destFile).use { out ->
+                    decoded.compress(Bitmap.CompressFormat.JPEG, 88, out)
+                }
+                decoded.recycle()
+                destFile.absolutePath
+            }.getOrNull()
+        }
+
+        // 若位图解码不可用，回退流式复制原始字节
+        runCatching {
+            resolver.openInputStream(uri)?.use { input ->
+                FileOutputStream(destFile).use { output ->
+                    input.copyTo(output)
+                }
+                destFile.absolutePath
+            }
+        }.getOrNull()
+    }
+
+    suspend fun saveBitmapToReceipts(context: Context, bitmap: Bitmap): String? = withContext(Dispatchers.IO) {
+        runCatching {
+            val destFile = File(receiptsDir(context), "receipt_cam_${System.currentTimeMillis()}.jpg")
+            val longest = maxOf(bitmap.width, bitmap.height)
+            val toSave = if (longest > MAX_EDGE_PX) {
+                val ratio = MAX_EDGE_PX.toFloat() / longest.toFloat()
+                Bitmap.createScaledBitmap(
+                    bitmap,
+                    (bitmap.width * ratio).toInt().coerceAtLeast(1),
+                    (bitmap.height * ratio).toInt().coerceAtLeast(1),
+                    true
+                )
+            } else {
+                bitmap
+            }
+            FileOutputStream(destFile).use { out ->
+                toSave.compress(Bitmap.CompressFormat.JPEG, 88, out)
+            }
+            if (toSave !== bitmap) toSave.recycle()
+            destFile.absolutePath
+        }.getOrNull()
+    }
+
+    suspend fun loadThumbnailBitmap(path: String, maxSizePx: Int = 600): Bitmap? = withContext(Dispatchers.IO) {
+        val file = File(path)
+        if (!file.exists() || !file.isFile) return@withContext null
+        runCatching {
+            val orientation = runCatching {
+                ExifInterface(file.absolutePath).getAttributeInt(
+                    ExifInterface.TAG_ORIENTATION,
+                    ExifInterface.ORIENTATION_NORMAL
+                )
+            }.getOrDefault(ExifInterface.ORIENTATION_NORMAL)
+
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFile(file.absolutePath, bounds)
+            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return@withContext null
+
+            val opts = BitmapFactory.Options().apply {
+                inSampleSize = computeInSampleSize(bounds.outWidth, bounds.outHeight, maxSizePx)
+            }
+            val bmp = BitmapFactory.decodeFile(file.absolutePath, opts) ?: return@withContext null
+            rotateIfNeeded(bmp, orientation)
+        }.getOrNull()
+    }
+}
+
+@Composable
+internal fun ReceiptThumbnailImage(
+    path: String,
+    modifier: Modifier = Modifier,
+    maxSizePx: Int = 480,
+    contentScale: ContentScale = ContentScale.Crop
+) {
+    var bitmap by remember(path, maxSizePx) { mutableStateOf<Bitmap?>(null) }
+    LaunchedEffect(path, maxSizePx) {
+        bitmap = ReceiptImageUtils.loadThumbnailBitmap(path, maxSizePx)
+    }
+    if (bitmap != null) {
+        Image(
+            bitmap = bitmap!!.asImageBitmap(),
+            contentDescription = "小票图片",
+            contentScale = contentScale,
+            modifier = modifier
+        )
+    } else {
+        Box(
+            modifier = modifier.background(MaterialTheme.colorScheme.surfaceContainerHigh),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.Image,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(22.dp)
+            )
+        }
+    }
+}
+
+@Composable
+internal fun ReceiptZoomPreviewDialog(
+    imagePath: String,
+    onDismiss: () -> Unit
+) {
+    var bitmap by remember(imagePath) { mutableStateOf<Bitmap?>(null) }
+    LaunchedEffect(imagePath) {
+        bitmap = ReceiptImageUtils.loadThumbnailBitmap(imagePath, maxSizePx = 1800)
+    }
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.92f))
+                .clickable(onClick = onDismiss)
+                .padding(16.dp)
+        ) {
+            if (bitmap != null) {
+                Image(
+                    bitmap = bitmap!!.asImageBitmap(),
+                    contentDescription = "小票原图预览",
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .align(Alignment.Center)
+                )
+            } else {
+                Column(
+                    modifier = Modifier.align(Alignment.Center),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Image,
+                        contentDescription = null,
+                        tint = Color.White.copy(alpha = 0.7f),
+                        modifier = Modifier.size(48.dp)
+                    )
+                    Text(
+                        text = "无法加载图片或文件已被清理",
+                        color = Color.White.copy(alpha = 0.8f),
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
+            }
+            Surface(
+                shape = CircleShape,
+                color = Color.Black.copy(alpha = 0.6f),
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = 12.dp, end = 4.dp)
+            ) {
+                IconButton(onClick = onDismiss) {
+                    Icon(
+                        imageVector = Icons.Rounded.Close,
+                        contentDescription = "关闭预览",
+                        tint = Color.White
+                    )
+                }
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun QuickRecordSheet(
@@ -183,88 +521,207 @@ fun QuickRecordSheet(
     existingTransaction: TransactionEntity? = null,
     initialType: String = TransactionType.EXPENSE,
     initialAccountId: Long? = null,
+    ledgers: List<LedgerEntity> = emptyList(),
+    initialLedgerId: Long = 1L,
+    refundOfTransaction: TransactionEntity? = null,
+    initialDraft: ParsedBillDraft? = null,
+    initialAttachmentPath: String? = null,
+    llmEnabled: Boolean = false,
+    onAnalyzeReceiptImage: (suspend (imagePath: String) -> Result<ParsedBillDraft?>)? = null,
+    onOpenCategoryManager: (() -> Unit)? = null,
     onDismiss: () -> Unit
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val focusManager = LocalFocusManager.current
+    val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
     val semantic = KairoTheme.semantic
 
     val isEditMode = existingTransaction != null
-    val initialAccount = remember(existingTransaction?.id, initialAccountId) {
-        if (existingTransaction != null) {
-            accounts.firstOrNull { it.id == existingTransaction.accountId } ?: accounts.firstOrNull()
-        } else {
-            accounts.firstOrNull { it.id == initialAccountId } ?: accounts.firstOrNull()
+    val isRefundMode = !isEditMode && refundOfTransaction != null
+    val stateKey = remember(
+        existingTransaction?.id,
+        refundOfTransaction?.id,
+        initialDraft,
+        initialAttachmentPath,
+        initialAccountId,
+        initialType,
+        initialLedgerId
+    ) {
+        "${existingTransaction?.id}_${refundOfTransaction?.id}_${initialDraft?.hashCode()}_${initialAttachmentPath}_${initialAccountId}_${initialType}_$initialLedgerId"
+    }
+
+    val initialAccount = remember(stateKey, accounts) {
+        when {
+            existingTransaction != null -> accounts.firstOrNull { it.id == existingTransaction.accountId }
+            refundOfTransaction != null -> accounts.firstOrNull { it.id == refundOfTransaction.accountId }
+            initialDraft?.accountId != null -> accounts.firstOrNull { it.id == initialDraft.accountId }
+            initialAccountId != null -> accounts.firstOrNull { it.id == initialAccountId }
+            else -> null
+        } ?: accounts.firstOrNull()
+    }
+
+    val resolvedInitialType = remember(stateKey) {
+        when {
+            existingTransaction != null -> existingTransaction.type
+            refundOfTransaction != null -> TransactionType.INCOME
+            initialDraft != null -> initialDraft.type
+            else -> initialType
         }
     }
 
-    var txType by remember(existingTransaction?.id, initialType) {
-        mutableStateOf(existingTransaction?.type ?: initialType)
+    var txType by remember(stateKey) { mutableStateOf(resolvedInitialType) }
+    var selectedAccountId by remember(stateKey) {
+        mutableLongStateOf(
+            existingTransaction?.accountId
+                ?: refundOfTransaction?.accountId
+                ?: initialDraft?.accountId
+                ?: initialAccount?.id
+                ?: 0L
+        )
     }
-    var selectedAccountId by remember(existingTransaction?.id, initialAccountId) {
-        mutableLongStateOf(existingTransaction?.accountId ?: initialAccount?.id ?: 0L)
-    }
-    var toAccountId by remember(existingTransaction?.id, initialAccountId) {
+    var toAccountId by remember(stateKey) {
+        val srcId = existingTransaction?.accountId
+            ?: refundOfTransaction?.accountId
+            ?: initialDraft?.accountId
+            ?: initialAccount?.id
         val initialTo = existingTransaction?.toAccountId
-            ?: accounts.firstOrNull { it.id != (existingTransaction?.accountId ?: initialAccount?.id) }?.id
+            ?: accounts.firstOrNull { it.id != srcId }?.id
         mutableStateOf(initialTo)
     }
-    var origCurrency by remember(existingTransaction?.id, initialAccountId) {
-        mutableStateOf(existingTransaction?.origCurrency ?: initialAccount?.currencyCode ?: baseCurrency)
+    var origCurrency by remember(stateKey) {
+        mutableStateOf(
+            existingTransaction?.origCurrency
+                ?: refundOfTransaction?.origCurrency
+                ?: initialDraft?.origCurrency?.takeIf { it.isNotBlank() }
+                ?: initialAccount?.currencyCode
+                ?: baseCurrency
+        )
     }
 
-    LaunchedEffect(accounts, existingTransaction?.id, initialAccountId) {
+    LaunchedEffect(accounts, stateKey) {
         if (existingTransaction == null && selectedAccountId == 0L && accounts.isNotEmpty()) {
-            val acc = accounts.firstOrNull { it.id == initialAccountId } ?: accounts.first()
+            val acc = accounts.firstOrNull {
+                it.id == (refundOfTransaction?.accountId ?: initialDraft?.accountId ?: initialAccountId)
+            } ?: accounts.first()
             selectedAccountId = acc.id
-            origCurrency = acc.currencyCode
+            if (refundOfTransaction == null && initialDraft == null) {
+                origCurrency = acc.currencyCode
+            }
             if (toAccountId == null || toAccountId == acc.id) {
                 toAccountId = accounts.firstOrNull { it.id != acc.id }?.id
             }
         }
     }
-    var amountExpr by remember(existingTransaction?.id) {
+
+    var amountExpr by remember(stateKey) {
         mutableStateOf(
-            if (existingTransaction != null) {
-                val digits = CurrencyCatalog.find(existingTransaction.origCurrency).minorDigits
-                MoneyAmount.formatPlain(existingTransaction.origAmountMicros, digits, grouping = false)
-            } else {
-                ""
+            when {
+                existingTransaction != null -> {
+                    val digits = CurrencyCatalog.find(existingTransaction.origCurrency).minorDigits
+                    MoneyAmount.formatPlain(existingTransaction.origAmountMicros, digits, grouping = false)
+                }
+                refundOfTransaction != null -> {
+                    val digits = CurrencyCatalog.find(refundOfTransaction.origCurrency).minorDigits
+                    MoneyAmount.formatPlain(refundOfTransaction.origAmountMicros, digits, grouping = false)
+                }
+                initialDraft != null && initialDraft.origAmountMicros > 0L -> {
+                    val digits = CurrencyCatalog.find(initialDraft.origCurrency).minorDigits
+                    MoneyAmount.formatPlain(initialDraft.origAmountMicros, digits, grouping = false)
+                }
+                else -> ""
             }
         )
     }
-    var selectedCategoryId by remember(existingTransaction?.id, initialType) {
-        val defaultCat = existingTransaction?.categoryId
-            ?: categories.firstOrNull { it.type == (existingTransaction?.type ?: initialType) && it.parentId == null }?.id
+
+    var selectedCategoryId by remember(stateKey) {
+        val defaultCat = when {
+            existingTransaction != null -> existingTransaction.categoryId
+            refundOfTransaction != null -> refundOfTransaction.categoryId
+            initialDraft?.categoryId != null -> initialDraft.categoryId
+            else -> categories.firstOrNull { it.type == resolvedInitialType && it.parentId == null }?.id
+        }
         mutableStateOf(defaultCat)
     }
     LaunchedEffect(categories, txType) {
-        if (selectedCategoryId == null && (txType == TransactionType.EXPENSE || txType == TransactionType.INCOME)) {
+        if (selectedCategoryId == null && !isRefundMode && (txType == TransactionType.EXPENSE || txType == TransactionType.INCOME)) {
             selectedCategoryId = categories.firstOrNull { it.type == txType && it.parentId == null }?.id
         }
     }
-    var merchant by remember(existingTransaction?.id) { mutableStateOf(existingTransaction?.merchant ?: "") }
-    var note by remember(existingTransaction?.id) { mutableStateOf(existingTransaction?.note ?: "") }
-    var tags by remember(existingTransaction?.id) { mutableStateOf(existingTransaction?.tags ?: "") }
-    var reimburseStatus by remember(existingTransaction?.id) {
-        mutableStateOf(existingTransaction?.reimburseStatus ?: ReimburseStatus.NONE)
+
+    var selectedLedgerId by remember(stateKey) {
+        val defaultLedger = existingTransaction?.ledgerId
+            ?: refundOfTransaction?.ledgerId
+            ?: initialLedgerId.takeIf { it > 0L }
+            ?: 1L
+        mutableLongStateOf(defaultLedger)
     }
-    var timestampMillis by remember(existingTransaction?.id) {
-        mutableLongStateOf(existingTransaction?.timestamp ?: System.currentTimeMillis())
+    var excludeFromStats by remember(stateKey) {
+        mutableStateOf(existingTransaction?.excludeFromStats ?: false)
+    }
+    var excludeFromBudget by remember(stateKey) {
+        mutableStateOf(existingTransaction?.excludeFromBudget ?: false)
     }
 
-    // 跨币种换算手动覆写状态
-    var manualAccountAmountMicros by remember(existingTransaction?.id) {
+    var merchant by remember(stateKey) {
         mutableStateOf(
-            if (existingTransaction != null && existingTransaction.origCurrency != existingTransaction.accountCurrency) {
-                existingTransaction.accountAmountMicros
-            } else {
-                null
+            existingTransaction?.merchant
+                ?: refundOfTransaction?.merchant
+                ?: initialDraft?.merchant
+                ?: ""
+        )
+    }
+    var note by remember(stateKey) {
+        mutableStateOf(
+            when {
+                existingTransaction != null -> existingTransaction.note
+                refundOfTransaction != null -> {
+                    val refLabel = refundOfTransaction.merchant.ifBlank { "原单 #${refundOfTransaction.id}" }
+                    "退款：$refLabel"
+                }
+                initialDraft != null -> initialDraft.note
+                else -> ""
             }
         )
     }
-    var manualRateToAccountMicros by remember(existingTransaction?.id) { mutableStateOf<Long?>(null) }
-    var accountAmountText by remember(existingTransaction?.id) {
+    var tags by remember(stateKey) { mutableStateOf(existingTransaction?.tags ?: "") }
+    var reimburseStatus by remember(stateKey) {
+        mutableStateOf(existingTransaction?.reimburseStatus ?: ReimburseStatus.NONE)
+    }
+    var timestampMillis by remember(stateKey) {
+        mutableLongStateOf(
+            existingTransaction?.timestamp
+                ?: initialDraft?.timestamp
+                ?: System.currentTimeMillis()
+        )
+    }
+
+    var attachmentPaths by remember(stateKey) {
+        val existingList = existingTransaction?.attachmentPaths
+            ?.split(";")
+            ?.map { it.trim() }
+            ?.filter { it.isNotEmpty() }
+            .orEmpty()
+        val initialList = listOfNotNull(initialAttachmentPath?.trim()?.takeIf { it.isNotEmpty() })
+        mutableStateOf((existingList + initialList).distinct())
+    }
+    var previewImagePath by remember { mutableStateOf<String?>(null) }
+    var isAnalyzingReceipt by remember { mutableStateOf(false) }
+
+    // 跨币种换算手动覆写状态
+    var manualAccountAmountMicros by remember(stateKey) {
+        mutableStateOf(
+            when {
+                existingTransaction != null && existingTransaction.origCurrency != existingTransaction.accountCurrency ->
+                    existingTransaction.accountAmountMicros
+                initialDraft?.manualAccountAmountMicros != null ->
+                    initialDraft.manualAccountAmountMicros
+                else -> null
+            }
+        )
+    }
+    var manualRateToAccountMicros by remember(stateKey) { mutableStateOf<Long?>(null) }
+    var accountAmountText by remember(stateKey) {
         mutableStateOf(
             if (existingTransaction != null && existingTransaction.origCurrency != existingTransaction.accountCurrency) {
                 val digits = CurrencyCatalog.find(existingTransaction.accountCurrency).minorDigits
@@ -274,7 +731,7 @@ fun QuickRecordSheet(
             }
         )
     }
-    var rateText by remember(existingTransaction?.id) {
+    var rateText by remember(stateKey) {
         mutableStateOf(
             if (existingTransaction != null && existingTransaction.origCurrency != existingTransaction.accountCurrency) {
                 MoneyAmount.formatRate(existingTransaction.rateToAccountMicros, 4)
@@ -287,11 +744,11 @@ fun QuickRecordSheet(
     var editingRateField by remember { mutableStateOf(false) }
 
     // 转账目标账户跨币种状态
-    var manualToAmountMicros by remember(existingTransaction?.id) {
+    var manualToAmountMicros by remember(stateKey) {
         mutableStateOf(existingTransaction?.toAmountMicros)
     }
-    var manualTransferRateMicros by remember(existingTransaction?.id) { mutableStateOf<Long?>(null) }
-    var transferToAmountText by remember(existingTransaction?.id) {
+    var manualTransferRateMicros by remember(stateKey) { mutableStateOf<Long?>(null) }
+    var transferToAmountText by remember(stateKey) {
         mutableStateOf(
             if (existingTransaction?.toAmountMicros != null && existingTransaction.toCurrency != null) {
                 val digits = CurrencyCatalog.find(existingTransaction.toCurrency).minorDigits
@@ -301,7 +758,7 @@ fun QuickRecordSheet(
             }
         )
     }
-    var transferRateText by remember(existingTransaction?.id) { mutableStateOf("1.00") }
+    var transferRateText by remember(stateKey) { mutableStateOf("1.00") }
     var editingTransferToAmountField by remember { mutableStateOf(false) }
     var editingTransferRateField by remember { mutableStateOf(false) }
 
@@ -311,15 +768,32 @@ fun QuickRecordSheet(
     var showDatePicker by remember { mutableStateOf(false) }
     var showTimePicker by remember { mutableStateOf(false) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
-    var showExtraDetails by remember(existingTransaction?.id) {
+    var showExtraDetails by remember(stateKey) {
         mutableStateOf(
-            existingTransaction != null && (
+            (existingTransaction != null && (
                 existingTransaction.merchant.isNotBlank() ||
                     existingTransaction.note.isNotBlank() ||
                     existingTransaction.tags.isNotBlank() ||
                     existingTransaction.reimburseStatus != ReimburseStatus.NONE
-                )
+                )) ||
+                refundOfTransaction != null ||
+                (initialDraft != null && (initialDraft.merchant.isNotBlank() || initialDraft.note.isNotBlank()))
         )
+    }
+
+    val pickImageLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia()
+    ) { uri ->
+        if (uri != null) {
+            coroutineScope.launch {
+                val savedPath = ReceiptImageUtils.savePickedImageToReceipts(context, uri)
+                if (savedPath != null) {
+                    attachmentPaths = (attachmentPaths + savedPath).distinct()
+                } else {
+                    viewModel.showMessage("小票图片保存失败，请重试")
+                }
+            }
+        }
     }
 
     val selectedAccount = accounts.firstOrNull { it.id == selectedAccountId }
@@ -410,6 +884,10 @@ fun QuickRecordSheet(
         if (base.any { it.equals(origCurrency, true) }) base else base + origCurrency
     }
 
+    val selectableLedgers = remember(ledgers) {
+        ledgers.filter { !it.archived }
+    }
+
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
@@ -474,7 +952,7 @@ fun QuickRecordSheet(
                                     txType = mode
                                     if (mode != TransactionType.TRANSFER) {
                                         val matchingCat = categories.firstOrNull { it.id == selectedCategoryId && it.type == mode }
-                                        if (matchingCat == null) {
+                                        if (matchingCat == null && !isRefundMode) {
                                             selectedCategoryId = categories.firstOrNull { it.type == mode && it.parentId == null }?.id
                                         }
                                     } else if (toAccountId == null || toAccountId == selectedAccountId) {
@@ -518,6 +996,57 @@ fun QuickRecordSheet(
                     .padding(horizontal = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
+                // 关联原单退款提示横幅
+                if (isRefundMode && refundOfTransaction != null) {
+                    val origCatName = refundOfTransaction.categoryId?.let { id ->
+                        categories.firstOrNull { it.id == id }?.name
+                    }
+                    Surface(
+                        shape = RoundedCornerShape(14.dp),
+                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.25f)),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Replay,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "关联原单退款，统计将自动冲减原分类支出",
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                val origSummary = buildString {
+                                    append("原支出 ")
+                                    append(
+                                        MoneyAmount.format(
+                                            refundOfTransaction.origAmountMicros,
+                                            refundOfTransaction.origCurrency,
+                                            showCurrencyCode = true
+                                        )
+                                    )
+                                    if (!origCatName.isNullOrBlank()) append(" · $origCatName")
+                                    if (refundOfTransaction.merchant.isNotBlank()) append(" · ${refundOfTransaction.merchant}")
+                                }
+                                Text(
+                                    text = origSummary,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.8f)
+                                )
+                            }
+                        }
+                    }
+                }
+
                 // 大字号金额与表达式展示卡片（点击唤起内置计算器）
                 val currencyInfo = CurrencyCatalog.find(origCurrency)
                 val accentColor = transactionAmountColor(txType)
@@ -549,10 +1078,14 @@ fun QuickRecordSheet(
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
-                            if (amountExpr.contains("+") || amountExpr.contains("-")) {
+                            if (QuickExprEval.containsOperator(amountExpr)) {
                                 val evalMicros = parsedOrigMicros
                                 Text(
-                                    text = "= ${MoneyAmount.format(evalMicros, origCurrency, showCurrencyCode = true)}",
+                                    text = if (evalMicros > 0L) {
+                                        "= ${MoneyAmount.format(evalMicros, origCurrency, showCurrencyCode = true)}"
+                                    } else {
+                                        "继续输入..."
+                                    },
                                     style = MaterialTheme.typography.titleSmall.tabular(),
                                     color = accentColor,
                                     fontWeight = FontWeight.SemiBold
@@ -636,6 +1169,48 @@ fun QuickRecordSheet(
                     }
                 }
 
+                // 多账本切换胶囊（存在多个未归档账本时展示）
+                if (selectableLedgers.size > 1) {
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(
+                            text = "所属账本",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            items(selectableLedgers, key = { it.id }) { ledger ->
+                                val selected = ledger.id == selectedLedgerId
+                                val ledgerColor = Color(ledger.colorHex)
+                                Surface(
+                                    shape = CircleShape,
+                                    color = if (selected) ledgerColor.copy(alpha = 0.16f) else MaterialTheme.colorScheme.surfaceContainerHigh,
+                                    border = if (selected) BorderStroke(1.2.dp, ledgerColor) else null,
+                                    modifier = Modifier.clickable { selectedLedgerId = ledger.id }
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(5.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.AutoMirrored.Rounded.MenuBook,
+                                            contentDescription = null,
+                                            tint = if (selected) ledgerColor else MaterialTheme.colorScheme.onSurfaceVariant,
+                                            modifier = Modifier.size(14.dp)
+                                        )
+                                        Text(
+                                            text = ledger.name,
+                                            style = MaterialTheme.typography.labelLarge,
+                                            color = if (selected) ledgerColor else MaterialTheme.colorScheme.onSurface,
+                                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // 账户选择器（选中某账户时自动切换输入币种至该账户币种）
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text(
@@ -658,7 +1233,6 @@ fun QuickRecordSheet(
                                     selected = selected,
                                     onClick = {
                                         selectedAccountId = acc.id
-                                        // 核心痛点修复：选定账户时自动切到该账户币种
                                         origCurrency = acc.currencyCode
                                         manualAccountAmountMicros = null
                                         manualRateToAccountMicros = null
@@ -904,55 +1478,115 @@ fun QuickRecordSheet(
                     }
                 }
 
-                // 一级 / 二级分类网格（支出 / 收入）
+                // 一木清爽 5 列网格分类选择器（一级网格 + 二级胶囊展开）
                 if (txType == TransactionType.EXPENSE || txType == TransactionType.INCOME) {
-                    val typeCats = categories.filter { it.type == txType }
-                    val parents = typeCats.filter { it.parentId == null }
+                    val typeCats = remember(categories, txType) {
+                        categories.filter { it.type == txType }.sortedWith(compareBy({ it.sortOrder }, { it.id }))
+                    }
+                    val parents = remember(typeCats) { typeCats.filter { it.parentId == null } }
                     val selectedCatObj = typeCats.firstOrNull { it.id == selectedCategoryId }
                     val activeParentId = selectedCatObj?.parentId ?: selectedCatObj?.id
-                    val subCategories = if (activeParentId != null) {
-                        typeCats.filter { it.parentId == activeParentId }
-                    } else {
-                        emptyList()
+                    val subCategories = remember(typeCats, activeParentId) {
+                        if (activeParentId != null) typeCats.filter { it.parentId == activeParentId } else emptyList()
                     }
+                    val refundOrigCategory = if (isRefundMode && refundOfTransaction?.categoryId != null) {
+                        categories.firstOrNull { it.id == refundOfTransaction.categoryId }
+                    } else null
 
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text(
-                            text = "分类",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        FlowRow(
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
                         ) {
-                            parents.forEach { cat ->
-                                val isSelected = activeParentId == cat.id
-                                CategorySelectChip(
-                                    category = cat,
-                                    selected = isSelected,
-                                    onClick = { selectedCategoryId = cat.id }
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Text(
+                                    text = "分类",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
+                                if (refundOrigCategory != null && selectedCategoryId == refundOrigCategory.id && refundOrigCategory.type != txType) {
+                                    Surface(
+                                        shape = CircleShape,
+                                        color = MaterialTheme.colorScheme.secondaryContainer
+                                    ) {
+                                        Text(
+                                            text = "沿用原分类：${refundOrigCategory.name}",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                                        )
+                                    }
+                                }
+                            }
+                            if (onOpenCategoryManager != null) {
+                                TextButton(
+                                    onClick = onOpenCategoryManager,
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                                    modifier = Modifier.height(28.dp)
+                                ) {
+                                    Icon(Icons.Rounded.Tune, null, modifier = Modifier.size(14.dp))
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Text("管理分类", style = MaterialTheme.typography.labelMedium)
+                                }
                             }
                         }
+
+                        // 5 列规整分类网格
+                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            parents.chunked(5).forEach { rowCats ->
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    rowCats.forEach { cat ->
+                                        val isSelected = activeParentId == cat.id
+                                        CategoryGridCell(
+                                            category = cat,
+                                            selected = isSelected,
+                                            onClick = { selectedCategoryId = cat.id },
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                    }
+                                    repeat(5 - rowCats.size) {
+                                        Spacer(modifier = Modifier.weight(1f))
+                                    }
+                                }
+                            }
+                        }
+
+                        // 二级分类胶囊展开区
                         if (subCategories.isNotEmpty()) {
                             Surface(
-                                shape = RoundedCornerShape(12.dp),
+                                shape = RoundedCornerShape(14.dp),
                                 color = MaterialTheme.colorScheme.surfaceContainerLow,
+                                border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
                                 modifier = Modifier.fillMaxWidth()
                             ) {
-                                FlowRow(
-                                    modifier = Modifier.padding(8.dp),
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                Column(
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
                                     verticalArrangement = Arrangement.spacedBy(6.dp)
                                 ) {
-                                    subCategories.forEach { sub ->
-                                        CategorySelectChip(
-                                            category = sub,
-                                            selected = selectedCategoryId == sub.id,
-                                            compact = true,
-                                            onClick = { selectedCategoryId = sub.id }
-                                        )
+                                    Text(
+                                        text = "二级分类",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                    FlowRow(
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        subCategories.forEach { sub ->
+                                            CategorySelectChip(
+                                                category = sub,
+                                                selected = selectedCategoryId == sub.id,
+                                                compact = true,
+                                                onClick = { selectedCategoryId = sub.id }
+                                            )
+                                        }
                                     }
                                 }
                             }
@@ -960,7 +1594,7 @@ fun QuickRecordSheet(
                     }
                 }
 
-                // 日期时间与补充信息开关条
+                // 日期时间、高级统计开关与小票附件开关条
                 FlowRow(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp)
@@ -982,10 +1616,168 @@ fun QuickRecordSheet(
                         label = { Text(KairoFormats.formatTime(timestampMillis)) }
                     )
                     FilterChip(
+                        selected = excludeFromStats,
+                        onClick = { excludeFromStats = !excludeFromStats },
+                        label = { Text("不计入收支") }
+                    )
+                    FilterChip(
+                        selected = excludeFromBudget,
+                        onClick = { excludeFromBudget = !excludeFromBudget },
+                        label = { Text("不计入预算") }
+                    )
+                    FilterChip(
+                        selected = attachmentPaths.isNotEmpty(),
+                        onClick = {
+                            pickImageLauncher.launch(
+                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                            )
+                        },
+                        leadingIcon = {
+                            Icon(Icons.Rounded.AddPhotoAlternate, null, modifier = Modifier.size(16.dp))
+                        },
+                        label = {
+                            Text(if (attachmentPaths.isEmpty()) "小票图片" else "小票(${attachmentPaths.size})")
+                        }
+                    )
+                    FilterChip(
                         selected = showExtraDetails,
                         onClick = { showExtraDetails = !showExtraDetails },
                         label = { Text(if (showExtraDetails) "收起商户/备注/报销" else "商户 · 备注 · 报销") }
                     )
+                }
+
+                // 小票图片附件缩略图区 + AI 识别小票填单胶囊按钮
+                AnimatedVisibility(visible = attachmentPaths.isNotEmpty()) {
+                    YimuCard(
+                        containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+                        cornerRadius = 14.dp
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(10.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    text = "小票图片附件 (${attachmentPaths.size})",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                if (onAnalyzeReceiptImage != null) {
+                                    Surface(
+                                        shape = CircleShape,
+                                        color = MaterialTheme.colorScheme.primaryContainer,
+                                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)),
+                                        modifier = Modifier.clickable(enabled = !isAnalyzingReceipt) {
+                                            val targetPath = attachmentPaths.lastOrNull() ?: return@clickable
+                                            isAnalyzingReceipt = true
+                                            coroutineScope.launch {
+                                                val res = runCatching { onAnalyzeReceiptImage(targetPath) }
+                                                    .getOrElse { Result.failure(it) }
+                                                isAnalyzingReceipt = false
+                                                res.onSuccess { draft ->
+                                                    if (draft != null) {
+                                                        if (draft.type == TransactionType.EXPENSE ||
+                                                            draft.type == TransactionType.INCOME ||
+                                                            draft.type == TransactionType.TRANSFER
+                                                        ) {
+                                                            txType = draft.type
+                                                        }
+                                                        if (draft.origAmountMicros > 0L) {
+                                                            val digits = CurrencyCatalog.find(draft.origCurrency).minorDigits
+                                                            amountExpr = MoneyAmount.formatPlain(draft.origAmountMicros, digits, grouping = false)
+                                                        }
+                                                        if (draft.origCurrency.isNotBlank()) {
+                                                            origCurrency = draft.origCurrency
+                                                        }
+                                                        if (draft.merchant.isNotBlank()) merchant = draft.merchant
+                                                        if (draft.note.isNotBlank()) note = draft.note
+                                                        if (draft.categoryId != null) selectedCategoryId = draft.categoryId
+                                                        if (draft.accountId != null) selectedAccountId = draft.accountId
+                                                        if (draft.timestamp > 0L) timestampMillis = draft.timestamp
+                                                        if (draft.manualAccountAmountMicros != null) {
+                                                            manualAccountAmountMicros = draft.manualAccountAmountMicros
+                                                        }
+                                                        showExtraDetails = true
+                                                        viewModel.showMessage("AI 已识别小票并填入表单")
+                                                    } else {
+                                                        viewModel.showMessage(
+                                                            if (llmEnabled) "未能从小票中提取出有效账单" else "请先在「自动化 -> AI 设置」中开启并配置大模型"
+                                                        )
+                                                    }
+                                                }.onFailure { err ->
+                                                    viewModel.showMessage("小票识别失败：${err.message ?: "请检查 AI 配置"}")
+                                                }
+                                            }
+                                        }
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(5.dp)
+                                        ) {
+                                            if (isAnalyzingReceipt) {
+                                                CircularProgressIndicator(
+                                                    modifier = Modifier.size(14.dp),
+                                                    strokeWidth = 2.dp
+                                                )
+                                            } else {
+                                                Icon(
+                                                    imageVector = Icons.Rounded.AutoAwesome,
+                                                    contentDescription = null,
+                                                    tint = MaterialTheme.colorScheme.primary,
+                                                    modifier = Modifier.size(14.dp)
+                                                )
+                                            }
+                                            Text(
+                                                text = if (isAnalyzingReceipt) "正在识别..." else "AI 识别小票填单",
+                                                style = MaterialTheme.typography.labelMedium,
+                                                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                                fontWeight = FontWeight.SemiBold
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+
+                            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                items(attachmentPaths, key = { it }) { path ->
+                                    Box(modifier = Modifier.size(72.dp)) {
+                                        ReceiptThumbnailImage(
+                                            path = path,
+                                            modifier = Modifier
+                                                .fillMaxSize()
+                                                .clip(RoundedCornerShape(10.dp))
+                                                .clickable { previewImagePath = path }
+                                        )
+                                        Surface(
+                                            shape = CircleShape,
+                                            color = Color.Black.copy(alpha = 0.65f),
+                                            modifier = Modifier
+                                                .align(Alignment.TopEnd)
+                                                .padding(3.dp)
+                                                .size(20.dp)
+                                                .clickable {
+                                                    attachmentPaths = attachmentPaths.filterNot { it == path }
+                                                }
+                                        ) {
+                                            Box(contentAlignment = Alignment.Center) {
+                                                Icon(
+                                                    imageVector = Icons.Rounded.Close,
+                                                    contentDescription = "移除图片",
+                                                    tint = Color.White,
+                                                    modifier = Modifier.size(12.dp)
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
 
                 // 商户、备注、标签、报销状态
@@ -1045,7 +1837,7 @@ fun QuickRecordSheet(
                 Spacer(modifier = Modifier.height(4.dp))
             }
 
-            // 底部计算器键盘或确认按钮
+            // 底部四则计算器键盘或确认按钮
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
 
             val performSave: () -> Unit = {
@@ -1078,7 +1870,13 @@ fun QuickRecordSheet(
                             reimburseStatus = reimburseStatus,
                             sourceType = existingTransaction?.sourceType ?: CaptureChannel.MANUAL,
                             rawEventId = existingTransaction?.rawEventId,
-                            status = TransactionStatus.CONFIRMED
+                            status = TransactionStatus.CONFIRMED,
+                            ledgerId = selectedLedgerId.takeIf { it > 0L } ?: 1L,
+                            excludeFromStats = excludeFromStats,
+                            excludeFromBudget = excludeFromBudget,
+                            refundOfTxId = existingTransaction?.refundOfTxId ?: refundOfTransaction?.id,
+                            attachmentPaths = attachmentPaths.joinToString(";"),
+                            reimbursedTxId = existingTransaction?.reimbursedTxId
                         )
                         viewModel.saveTransaction(req, onSuccess = onDismiss)
                     }
@@ -1090,12 +1888,25 @@ fun QuickRecordSheet(
                     onDigit = { d -> amountExpr = QuickExprEval.appendDigit(amountExpr, d) },
                     onDot = { amountExpr = QuickExprEval.appendDot(amountExpr) },
                     onOperator = { op -> amountExpr = QuickExprEval.appendOperator(amountExpr, op) },
+                    onEquals = {
+                        if (QuickExprEval.containsOperator(amountExpr)) {
+                            val evaluated = QuickExprEval.evaluateAndFormat(
+                                amountExpr,
+                                CurrencyCatalog.find(origCurrency).minorDigits
+                            )
+                            if (evaluated != null) {
+                                amountExpr = evaluated
+                            } else {
+                                viewModel.showMessage("表达式无法计算（请检查除数或格式）")
+                            }
+                        }
+                    },
                     onBackspace = {
                         if (amountExpr.isNotEmpty()) amountExpr = amountExpr.dropLast(1)
                     },
                     onClear = { amountExpr = "" },
                     onSave = performSave,
-                    saveLabel = if (isEditMode) "保存修改" else "完成"
+                    saveLabel = if (isEditMode) "保存" else "完成"
                 )
             } else {
                 Row(
@@ -1124,6 +1935,13 @@ fun QuickRecordSheet(
                 }
             }
         }
+    }
+
+    previewImagePath?.let { path ->
+        ReceiptZoomPreviewDialog(
+            imagePath = path,
+            onDismiss = { previewImagePath = null }
+        )
     }
 
     if (showMoreCurrencies) {
@@ -1209,6 +2027,41 @@ fun QuickRecordSheet(
                 viewModel.deleteTransaction(existingTransaction.id, onSuccess = onDismiss)
             },
             onDismiss = { showDeleteConfirm = false }
+        )
+    }
+}
+
+@Composable
+private fun CategoryGridCell(
+    category: CategoryEntity,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val catColor = Color(category.colorHex)
+    Column(
+        modifier = modifier
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(onClick = onClick)
+            .padding(vertical = 4.dp, horizontal = 2.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        CategoryIconBadge(
+            iconKey = category.icon,
+            colorHex = category.colorHex,
+            size = 40.dp,
+            iconSize = 20.dp,
+            selected = selected
+        )
+        Text(
+            text = category.name,
+            style = MaterialTheme.typography.labelSmall,
+            color = if (selected) catColor else MaterialTheme.colorScheme.onSurfaceVariant,
+            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center
         )
     }
 }
@@ -1312,6 +2165,7 @@ private fun CalculatorKeypad(
     onDigit: (String) -> Unit,
     onDot: () -> Unit,
     onOperator: (Char) -> Unit,
+    onEquals: () -> Unit,
     onBackspace: () -> Unit,
     onClear: () -> Unit,
     onSave: () -> Unit,
@@ -1324,28 +2178,33 @@ private fun CalculatorKeypad(
             .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        // 5 列 × 4 行布局：1~3 列为数字与小数点，第 4 列为 ÷ × - +，第 5 列为 退格 / 清零 / = / 完成
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
             CalcKey("7", Modifier.weight(1f)) { onDigit("7") }
             CalcKey("8", Modifier.weight(1f)) { onDigit("8") }
             CalcKey("9", Modifier.weight(1f)) { onDigit("9") }
+            CalcKey("÷", Modifier.weight(1f), isOperator = true) { onOperator('÷') }
             CalcIconKey(Icons.AutoMirrored.Rounded.Backspace, "退格", Modifier.weight(1f), onBackspace)
         }
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
             CalcKey("4", Modifier.weight(1f)) { onDigit("4") }
             CalcKey("5", Modifier.weight(1f)) { onDigit("5") }
             CalcKey("6", Modifier.weight(1f)) { onDigit("6") }
-            CalcKey("+", Modifier.weight(1f), isOperator = true) { onOperator('+') }
+            CalcKey("×", Modifier.weight(1f), isOperator = true) { onOperator('×') }
+            CalcKey("清零", Modifier.weight(1f), isSecondary = true, onClick = onClear)
         }
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
             CalcKey("1", Modifier.weight(1f)) { onDigit("1") }
             CalcKey("2", Modifier.weight(1f)) { onDigit("2") }
             CalcKey("3", Modifier.weight(1f)) { onDigit("3") }
             CalcKey("-", Modifier.weight(1f), isOperator = true) { onOperator('-') }
+            CalcKey("=", Modifier.weight(1f), isOperator = true, onClick = onEquals)
         }
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            CalcKey("清零", Modifier.weight(1f), isSecondary = true, onClick = onClear)
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(7.dp)) {
             CalcKey("0", Modifier.weight(1f)) { onDigit("0") }
+            CalcKey("00", Modifier.weight(1f)) { onDigit("00") }
             CalcKey(".", Modifier.weight(1f), onClick = onDot)
+            CalcKey("+", Modifier.weight(1f), isOperator = true) { onOperator('+') }
             Button(
                 onClick = onSave,
                 shape = RoundedCornerShape(14.dp),
@@ -1356,12 +2215,13 @@ private fun CalculatorKeypad(
                 contentPadding = PaddingValues(0.dp),
                 modifier = Modifier
                     .weight(1f)
-                    .height(48.dp)
+                    .height(46.dp)
             ) {
                 Text(
                     text = saveLabel,
                     style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.Bold
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1
                 )
             }
         }
@@ -1390,16 +2250,17 @@ private fun CalcKey(
         shape = RoundedCornerShape(14.dp),
         color = bg,
         modifier = modifier
-            .height(48.dp)
+            .height(46.dp)
             .clip(RoundedCornerShape(14.dp))
             .clickable(onClick = onClick)
     ) {
         Box(contentAlignment = Alignment.Center) {
             Text(
                 text = label,
-                style = if (isSecondary) MaterialTheme.typography.labelLarge else MaterialTheme.typography.titleLarge.tabular(),
+                style = if (isSecondary || label == "00") MaterialTheme.typography.labelLarge else MaterialTheme.typography.titleLarge.tabular(),
                 color = fg,
-                fontWeight = FontWeight.SemiBold
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1
             )
         }
     }
@@ -1416,7 +2277,7 @@ private fun CalcIconKey(
         shape = RoundedCornerShape(14.dp),
         color = MaterialTheme.colorScheme.surfaceContainerHigh,
         modifier = modifier
-            .height(48.dp)
+            .height(46.dp)
             .clip(RoundedCornerShape(14.dp))
             .clickable(onClick = onClick)
     ) {

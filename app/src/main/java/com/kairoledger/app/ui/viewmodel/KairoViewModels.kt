@@ -4,31 +4,47 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.kairoledger.app.AppContainer
+import com.kairoledger.app.capture.LlmBillParser
+import com.kairoledger.app.capture.SmartInputParser
 import com.kairoledger.app.core.contract.BudgetProgress
 import com.kairoledger.app.core.contract.CategoryStat
 import com.kairoledger.app.core.contract.ConversionPreview
 import com.kairoledger.app.core.contract.DevicePermissionReport
 import com.kairoledger.app.core.contract.ImportPreview
 import com.kairoledger.app.core.contract.MonthlyPoint
+import com.kairoledger.app.core.contract.NetWorthPoint
 import com.kairoledger.app.core.contract.NetWorthSummary
 import com.kairoledger.app.core.contract.ParsedBillDraft
 import com.kairoledger.app.core.contract.RateQuote
 import com.kairoledger.app.core.contract.RecordTransactionRequest
 import com.kairoledger.app.core.contract.RemoteBackupFile
+import com.kairoledger.app.core.contract.TrendBucketPoint
 import com.kairoledger.app.core.model.CurrencyCatalog
 import com.kairoledger.app.core.model.MoneyAmount
 import com.kairoledger.app.data.db.AccountAliasEntity
 import com.kairoledger.app.data.db.AccountEntity
 import com.kairoledger.app.data.db.BudgetEntity
+import com.kairoledger.app.data.db.CaptureChannel
 import com.kairoledger.app.data.db.CategoryEntity
+import com.kairoledger.app.data.db.DebtRecordEntity
+import com.kairoledger.app.data.db.DebtStatus
 import com.kairoledger.app.data.db.ExchangeRateEntity
+import com.kairoledger.app.data.db.InstallmentPlanEntity
+import com.kairoledger.app.data.db.LedgerEntity
 import com.kairoledger.app.data.db.ParseRuleEntity
 import com.kairoledger.app.data.db.RawCaptureLogEntity
 import com.kairoledger.app.data.db.RecurringRuleEntity
+import com.kairoledger.app.data.db.ReimburseStatus
+import com.kairoledger.app.data.db.StatsGranularity
 import com.kairoledger.app.data.db.TransactionEntity
 import com.kairoledger.app.data.db.TransactionStatus
 import com.kairoledger.app.data.db.TransactionType
 import com.kairoledger.app.data.prefs.AppSettings
+import com.kairoledger.app.domain.LedgerAnalytics
+import java.io.File
+import java.time.DayOfWeek
+import java.time.temporal.TemporalAdjusters
+import android.util.Base64
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -97,11 +113,28 @@ data class StatsUiState(
     val selectedMonth: YearMonth = YearMonth.now(),
     val displayCurrency: String = CurrencyCatalog.DEFAULT_BASE_CURRENCY,
     val selectedType: String = TransactionType.EXPENSE,
+    val granularity: String = StatsGranularity.MONTHLY,
+    val anchorDateMillis: Long = System.currentTimeMillis(),
+    val customStartMillis: Long? = null,
+    val customEndMillis: Long? = null,
     val monthlyTrend: List<MonthlyPoint> = emptyList(),
+    val trendBuckets: List<TrendBucketPoint> = emptyList(),
+    val netWorthHistory: List<NetWorthPoint> = emptyList(),
     val categoryStats: List<CategoryStat> = emptyList(),
     val budgetProgressList: List<BudgetProgress> = emptyList(),
     val totalCategoryAmountMicros: Long = 0L,
     val isLoading: Boolean = false
+)
+
+private data class StatsQueryParams(
+    val month: YearMonth,
+    val displayCurrency: String,
+    val type: String,
+    val granularity: String,
+    val anchorDateMillis: Long,
+    val customStartMillis: Long?,
+    val customEndMillis: Long?,
+    val activeLedgerId: Long
 )
 
 data class SandboxTestUiState(
@@ -130,12 +163,31 @@ class KairoMainViewModel(
     private val billImporter = container.requireBillImporter()
     private val cloudSyncService = container.requireCloudSyncService()
     private val settingsStore = container.settingsStore
+    private val llmBillParser = LlmBillParser(container.okHttpClient)
+    private val smartInputParser = SmartInputParser(llmBillParser = llmBillParser)
 
     private val _snackbarEvents = MutableSharedFlow<String>(extraBufferCapacity = 24)
     val snackbarEvents: SharedFlow<String> = _snackbarEvents.asSharedFlow()
 
     val settings: StateFlow<AppSettings> = settingsStore.settingsFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), AppSettings())
+
+    val ledgers: StateFlow<List<LedgerEntity>> = ledgerService.observeLedgers()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    val debts: StateFlow<List<DebtRecordEntity>> = ledgerService.observeDebts()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    val installments: StateFlow<List<InstallmentPlanEntity>> = ledgerService.observeInstallments()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    val pendingReimburseCount: StateFlow<Int> = ledgerService.observeTransactions()
+        .combine(settings) { txs, _ -> txs.count { it.reimburseStatus == ReimburseStatus.PENDING } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
+
+    val openDebtCount: StateFlow<Int> = debts
+        .combine(settings) { list, _ -> list.count { it.status == DebtStatus.OPEN } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
 
     val activeAccounts: StateFlow<List<AccountEntity>> = ledgerService.observeActiveAccounts()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
@@ -191,15 +243,26 @@ class KairoMainViewModel(
         val inMonth = transactions.filter { it.timestamp in monthStart..monthEnd }
         var monthExpense = 0L
         var monthIncome = 0L
+        val ledgerFilterId = appSettings.activeLedgerId
         inMonth.forEach { tx ->
-            if (tx.status == TransactionStatus.CONFIRMED) {
+            if (tx.status == TransactionStatus.CONFIRMED &&
+                !tx.excludeFromStats &&
+                (ledgerFilterId <= 0L || tx.ledgerId == ledgerFilterId)
+            ) {
                 val baseMicros = convertTxToDisplayBase(tx, base, rates)
                 when (tx.type) {
                     TransactionType.EXPENSE -> monthExpense += baseMicros
-                    TransactionType.INCOME -> monthIncome += baseMicros
+                    TransactionType.INCOME -> {
+                        if (tx.refundOfTxId != null) {
+                            monthExpense -= baseMicros
+                        } else {
+                            monthIncome += baseMicros
+                        }
+                    }
                 }
             }
         }
+        monthExpense = monthExpense.coerceAtLeast(0L)
 
         val queryLower = filters.query.trim().lowercase()
         val filtered = inMonth.filter { tx ->
@@ -290,32 +353,110 @@ class KairoMainViewModel(
     private val _statsMonth = MutableStateFlow(YearMonth.now())
     private val _statsCurrency = MutableStateFlow<String?>(null)
     private val _statsType = MutableStateFlow(TransactionType.EXPENSE)
+    private val _statsGranularity = MutableStateFlow(StatsGranularity.MONTHLY)
+    private val _statsAnchorMillis = MutableStateFlow(System.currentTimeMillis())
+    private val _statsCustomStart = MutableStateFlow<Long?>(null)
+    private val _statsCustomEnd = MutableStateFlow<Long?>(null)
+
+    private val _statsTimeFlow = combine(
+        _statsGranularity,
+        _statsAnchorMillis,
+        _statsCustomStart,
+        _statsCustomEnd
+    ) { gran, anchor, cStart, cEnd ->
+        listOf(gran, anchor, cStart, cEnd)
+    }
 
     val statsUiState: StateFlow<StatsUiState> = combine(
         allTransactions,
         budgets,
         exchangeRates,
         settings,
-        combine(_statsMonth, _statsCurrency, _statsType) { m, c, t -> Triple(m, c, t) }
-    ) { _, _, _, appSettings, (month, chosenCurrency, type) ->
-        Triple(month, chosenCurrency ?: appSettings.baseCurrency, type)
-    }.flatMapLatest { (month, displayCurrency, type) ->
+        combine(_statsMonth, _statsCurrency, _statsType, _statsTimeFlow) { m, c, t, timeArgs ->
+            Triple(Triple(m, c, t), timeArgs[0] as String, Triple(timeArgs[1] as Long, timeArgs[2] as Long?, timeArgs[3] as Long?))
+        }
+    ) { _, _, _, appSettings, (baseTriple, granularity, timeRange) ->
+        StatsQueryParams(
+            month = baseTriple.first,
+            displayCurrency = baseTriple.second ?: appSettings.baseCurrency,
+            type = baseTriple.third,
+            granularity = granularity,
+            anchorDateMillis = timeRange.first,
+            customStartMillis = timeRange.second,
+            customEndMillis = timeRange.third,
+            activeLedgerId = appSettings.activeLedgerId
+        )
+    }.flatMapLatest { params ->
         flow {
             val zone = ZoneId.systemDefault()
-            val startMillis = month.atDay(1).atStartOfDay(zone).toInstant().toEpochMilli()
-            val endMillis = month.plusMonths(1).atDay(1).atStartOfDay(zone).toInstant().toEpochMilli() - 1L
-            val (trend, catStats, budgetProgress) = withContext(Dispatchers.IO) {
-                val t = runCatching { ledgerService.computeMonthlyTrend(6, displayCurrency) }.getOrDefault(emptyList())
-                val c = runCatching { ledgerService.computeCategoryStats(startMillis, endMillis, type, displayCurrency) }.getOrDefault(emptyList())
-                val b = runCatching { ledgerService.computeBudgetProgress(month.year, month.monthValue) }.getOrDefault(emptyList())
-                Triple(t, c, b)
+            val (windowStart, windowEnd) = computeStatsWindowMillis(
+                granularity = params.granularity,
+                selectedMonth = params.month,
+                anchorDateMillis = params.anchorDateMillis,
+                customStartMillis = params.customStartMillis,
+                customEndMillis = params.customEndMillis,
+                zone = zone
+            )
+            val effectiveAnchorMillis = if (params.granularity == StatsGranularity.MONTHLY) {
+                params.month.atDay(1).atStartOfDay(zone).toInstant().toEpochMilli()
+            } else {
+                params.anchorDateMillis
             }
+            val result = withContext(Dispatchers.IO) {
+                val t = runCatching { ledgerService.computeMonthlyTrend(6, params.displayCurrency) }.getOrDefault(emptyList())
+                val buckets = runCatching {
+                    ledgerService.computeTrendBuckets(
+                        granularity = params.granularity,
+                        anchorDateMillis = effectiveAnchorMillis,
+                        customStartMillis = params.customStartMillis,
+                        customEndMillis = params.customEndMillis,
+                        ledgerId = params.activeLedgerId,
+                        displayCurrency = params.displayCurrency
+                    )
+                }.getOrDefault(emptyList())
+                val nwHistory = runCatching {
+                    ledgerService.computeNetWorthHistory(6, params.displayCurrency)
+                }.getOrDefault(emptyList())
+                val c = runCatching {
+                    ledgerService.computeCategoryStatsForLedger(
+                        startMillis = windowStart,
+                        endMillis = windowEnd,
+                        type = params.type,
+                        ledgerId = params.activeLedgerId,
+                        displayCurrency = params.displayCurrency
+                    )
+                }.getOrDefault(emptyList())
+                val b = runCatching {
+                    ledgerService.computeBudgetProgressForLedger(
+                        year = params.month.year,
+                        month = params.month.monthValue,
+                        ledgerId = params.activeLedgerId
+                    )
+                }.getOrDefault(emptyList())
+                listOf(t, buckets, nwHistory, c, b)
+            }
+            @Suppress("UNCHECKED_CAST")
+            val trend = result[0] as List<MonthlyPoint>
+            @Suppress("UNCHECKED_CAST")
+            val buckets = result[1] as List<TrendBucketPoint>
+            @Suppress("UNCHECKED_CAST")
+            val nwHistory = result[2] as List<NetWorthPoint>
+            @Suppress("UNCHECKED_CAST")
+            val catStats = result[3] as List<CategoryStat>
+            @Suppress("UNCHECKED_CAST")
+            val budgetProgress = result[4] as List<BudgetProgress>
             emit(
                 StatsUiState(
-                    selectedMonth = month,
-                    displayCurrency = displayCurrency,
-                    selectedType = type,
+                    selectedMonth = params.month,
+                    displayCurrency = params.displayCurrency,
+                    selectedType = params.type,
+                    granularity = params.granularity,
+                    anchorDateMillis = effectiveAnchorMillis,
+                    customStartMillis = params.customStartMillis,
+                    customEndMillis = params.customEndMillis,
                     monthlyTrend = trend,
+                    trendBuckets = buckets,
+                    netWorthHistory = nwHistory,
                     categoryStats = catStats,
                     budgetProgressList = budgetProgress,
                     totalCategoryAmountMicros = catStats.sumOf { it.totalBaseMicros },
@@ -324,6 +465,36 @@ class KairoMainViewModel(
             )
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), StatsUiState(isLoading = true))
+
+    private fun computeStatsWindowMillis(
+        granularity: String,
+        selectedMonth: YearMonth,
+        anchorDateMillis: Long,
+        customStartMillis: Long?,
+        customEndMillis: Long?,
+        zone: ZoneId
+    ): Pair<Long, Long> {
+        val anchorDate = Instant.ofEpochMilli(anchorDateMillis).atZone(zone).toLocalDate()
+        return when (granularity) {
+            StatsGranularity.WEEKLY -> {
+                val mon = anchorDate.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY))
+                val sun = mon.plusDays(6)
+                val s = mon.atStartOfDay(zone).toInstant().toEpochMilli()
+                val e = sun.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli() - 1L
+                s to e
+            }
+            StatsGranularity.YEARLY -> LedgerAnalytics.yearRangeMillis(anchorDate.year, zone)
+            StatsGranularity.CUSTOM -> {
+                val sDate = Instant.ofEpochMilli(customStartMillis ?: anchorDateMillis).atZone(zone).toLocalDate()
+                val eDate = Instant.ofEpochMilli(customEndMillis ?: anchorDateMillis).atZone(zone).toLocalDate()
+                val safeS = if (sDate.isAfter(eDate)) eDate else sDate
+                val safeE = if (sDate.isAfter(eDate)) sDate else eDate
+                safeS.atStartOfDay(zone).toInstant().toEpochMilli() to
+                    (safeE.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli() - 1L)
+            }
+            else -> LedgerAnalytics.monthRangeMillis(selectedMonth.year, selectedMonth.monthValue, zone)
+        }
+    }
 
     // Tab 4: Automation & Settings state
     private val _permissionReport = MutableStateFlow<DevicePermissionReport?>(null)
@@ -512,6 +683,259 @@ class KairoMainViewModel(
 
     fun setStatsType(type: String) {
         _statsType.value = type
+    }
+
+    fun setStatsGranularity(granularity: String) {
+        _statsGranularity.value = granularity
+    }
+
+    fun shiftStatsPeriod(delta: Int) {
+        val zone = ZoneId.systemDefault()
+        when (_statsGranularity.value) {
+            StatsGranularity.WEEKLY -> {
+                val cur = Instant.ofEpochMilli(_statsAnchorMillis.value).atZone(zone).toLocalDate()
+                _statsAnchorMillis.value = cur.plusWeeks(delta.toLong()).atTime(12, 0).atZone(zone).toInstant().toEpochMilli()
+            }
+            StatsGranularity.YEARLY -> {
+                val cur = Instant.ofEpochMilli(_statsAnchorMillis.value).atZone(zone).toLocalDate()
+                _statsAnchorMillis.value = cur.plusYears(delta.toLong()).atTime(12, 0).atZone(zone).toInstant().toEpochMilli()
+            }
+            else -> shiftStatsMonth(delta.toLong())
+        }
+    }
+
+    fun setStatsCustomRange(startMillis: Long, endMillis: Long) {
+        _statsCustomStart.value = startMillis
+        _statsCustomEnd.value = endMillis
+    }
+
+    // --- Ledger, Category, Batch, Reimburse, Debt, Installment, Smart Input actions ---
+    fun setActiveLedger(ledgerId: Long) {
+        updateSettings { it.copy(activeLedgerId = ledgerId) }
+    }
+
+    fun saveLedger(ledger: LedgerEntity, onDone: () -> Unit = {}) {
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) { ledgerService.saveLedger(ledger) }
+            showMessage("已保存账本「${ledger.name}」")
+            onDone()
+        }
+    }
+
+    fun archiveLedger(ledgerId: Long, archived: Boolean) {
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) { ledgerService.archiveLedger(ledgerId, archived) }
+            if (archived && settings.value.activeLedgerId == ledgerId) {
+                updateSettings { it.copy(activeLedgerId = 1L) }
+            }
+            showMessage(if (archived) "账本已归档" else "账本已恢复")
+        }
+    }
+
+    fun saveCategory(category: CategoryEntity, onDone: () -> Unit = {}) {
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) { ledgerService.saveCategory(category) }
+            showMessage("已保存分类「${category.name}」")
+            onDone()
+        }
+    }
+
+    fun deleteCategory(categoryId: Long) {
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) { ledgerService.deleteCategory(categoryId) }
+            showMessage("分类已删除")
+        }
+    }
+
+    fun batchUpdateCategory(txIds: List<Long>, categoryId: Long?) {
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) { ledgerService.batchUpdateCategory(txIds, categoryId) }
+                .onSuccess { count -> showMessage("已批量更新 $count 笔交易分类") }
+                .onFailure { showMessage("批量改分类失败：${it.message}") }
+        }
+    }
+
+    fun batchDeleteTransactions(txIds: List<Long>) {
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) { ledgerService.batchDeleteTransactions(txIds) }
+                .onSuccess { count -> showMessage("已批量删除 $count 笔交易并回滚余额") }
+                .onFailure { showMessage("批量删除失败：${it.message}") }
+        }
+    }
+
+    fun settleReimbursements(txIds: List<Long>, targetAccountId: Long, note: String) {
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                ledgerService.settleReimbursements(txIds, targetAccountId, System.currentTimeMillis(), note)
+            }.onSuccess {
+                showMessage("已完成 ${txIds.size} 笔报销入账核销")
+            }.onFailure { err ->
+                showMessage("报销核销失败：${err.message}")
+            }
+        }
+    }
+
+    fun clearTransactionReimburseFlag(txId: Long) {
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                val tx = container.database.transactionDao().getById(txId) ?: return@withContext
+                ledgerService.saveTransaction(
+                    RecordTransactionRequest(
+                        existingId = tx.id,
+                        type = tx.type,
+                        timestamp = tx.timestamp,
+                        origAmountMicros = tx.origAmountMicros,
+                        origCurrency = tx.origCurrency,
+                        accountId = tx.accountId,
+                        manualAccountAmountMicros = tx.accountAmountMicros,
+                        manualRateToAccountMicros = tx.rateToAccountMicros,
+                        toAccountId = tx.toAccountId,
+                        manualToAmountMicros = tx.toAmountMicros,
+                        categoryId = tx.categoryId,
+                        merchant = tx.merchant,
+                        note = tx.note,
+                        tags = tx.tags,
+                        reimburseStatus = ReimburseStatus.NONE,
+                        sourceType = tx.sourceType,
+                        rawEventId = tx.rawEventId,
+                        status = tx.status,
+                        ledgerId = tx.ledgerId,
+                        excludeFromStats = tx.excludeFromStats,
+                        excludeFromBudget = tx.excludeFromBudget,
+                        refundOfTxId = tx.refundOfTxId,
+                        attachmentPaths = tx.attachmentPaths,
+                        reimbursedTxId = tx.reimbursedTxId
+                    )
+                )
+            }
+            showMessage("已取消该笔账单待报销标记")
+        }
+    }
+
+    fun saveDebt(debt: DebtRecordEntity, syncAccountBalance: Boolean) {
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) { ledgerService.saveDebt(debt, syncAccountBalance) }
+            showMessage("已保存借贷往来「${debt.personName}」")
+        }
+    }
+
+    fun settleDebt(debtId: Long, settleAmountMicros: Long, accountId: Long?, note: String) {
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                ledgerService.settleDebt(debtId, settleAmountMicros, accountId, note)
+            }.onSuccess { updated ->
+                showMessage(if (updated.status == DebtStatus.SETTLED) "该笔往来已全部结清" else "已完成部分核销")
+            }.onFailure {
+                showMessage("核销失败：${it.message}")
+            }
+        }
+    }
+
+    fun deleteDebt(debtId: Long) {
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) { ledgerService.deleteDebt(debtId) }
+            showMessage("已删除借贷记录")
+        }
+    }
+
+    fun saveInstallment(plan: InstallmentPlanEntity) {
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) { ledgerService.saveInstallment(plan) }
+            showMessage("已保存分期计划「${plan.name}」")
+        }
+    }
+
+    fun recordInstallmentPeriod(planId: Long) {
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) { ledgerService.recordInstallmentPeriod(planId) }
+                .onSuccess { showMessage("已记入本期分期账单") }
+                .onFailure { showMessage("分期记账失败：${it.message}") }
+        }
+    }
+
+    fun deleteInstallment(planId: Long) {
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) { ledgerService.deleteInstallment(planId) }
+            showMessage("已删除分期计划")
+        }
+    }
+
+    suspend fun parseSmartInputText(text: String): List<ParsedBillDraft> = withContext(Dispatchers.IO) {
+        smartInputParser.parseSmartInput(
+            text = text,
+            settings = settingsStore.getSnapshot(),
+            accounts = container.database.accountDao().getAll().filter { !it.archived },
+            categories = container.database.categoryDao().getAll(),
+            aliases = container.database.accountAliasDao().getEnabled()
+        )
+    }
+
+    suspend fun parseReceiptImage(imagePath: String): Result<ParsedBillDraft?> = withContext(Dispatchers.IO) {
+        runCatching {
+            val file = File(imagePath)
+            require(file.exists() && file.length() > 0L) { "小票图片文件不存在" }
+            val bytes = file.readBytes()
+            val base64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
+            val mimeType = when (file.extension.lowercase()) {
+                "png" -> "image/png"
+                "webp" -> "image/webp"
+                else -> "image/jpeg"
+            }
+            val curSettings = settingsStore.getSnapshot()
+            val accounts = container.database.accountDao().getAll().filter { !it.archived }
+            val categories = container.database.categoryDao().getAll()
+            llmBillParser.parseReceiptImage(
+                imageBase64 = base64,
+                mimeType = mimeType,
+                settings = curSettings,
+                accounts = accounts,
+                categories = categories
+            ).getOrThrow()
+        }
+    }
+
+    fun saveSmartDrafts(
+        drafts: List<ParsedBillDraft>,
+        ledgerId: Long,
+        attachmentPath: String?,
+        onDone: () -> Unit = {}
+    ) {
+        if (drafts.isEmpty()) return
+        viewModelScope.launch {
+            var savedCount = 0
+            val resolvedLedger = ledgerId.takeIf { it > 0L } ?: 1L
+            withContext(Dispatchers.IO) {
+                val activeAccs = container.database.accountDao().getAll().filter { !it.archived }
+                val fallbackAcc = activeAccs.firstOrNull() ?: return@withContext
+                for (draft in drafts) {
+                    val accId = draft.accountId ?: fallbackAcc.id
+                    val res = ledgerService.saveTransaction(
+                        RecordTransactionRequest(
+                            type = draft.type,
+                            timestamp = draft.timestamp,
+                            origAmountMicros = draft.origAmountMicros,
+                            origCurrency = draft.origCurrency,
+                            accountId = accId,
+                            manualAccountAmountMicros = draft.manualAccountAmountMicros,
+                            categoryId = draft.categoryId,
+                            merchant = draft.merchant,
+                            note = draft.note,
+                            sourceType = if (attachmentPath != null) CaptureChannel.AI else CaptureChannel.MANUAL,
+                            status = TransactionStatus.CONFIRMED,
+                            ledgerId = resolvedLedger,
+                            attachmentPaths = attachmentPath.orEmpty()
+                        )
+                    )
+                    if (res.isSuccess) savedCount++
+                }
+            }
+            if (savedCount > 0) {
+                showMessage("已成功记入 $savedCount 笔账单")
+                onDone()
+            } else {
+                showMessage("记账保存失败，请检查金额与账户设置")
+            }
+        }
     }
 
     fun saveBudget(budget: BudgetEntity, onDone: () -> Unit = {}) {

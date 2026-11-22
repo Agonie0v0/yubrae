@@ -75,10 +75,13 @@ class ScreenBillParser(
 
     fun classifyPage(snapshot: ScreenSnapshot): ScreenPageKind {
         if (!isWatchedPackage(snapshot.packageName)) return ScreenPageKind.UNKNOWN
+        if (isBlockedChatOrFeedWindow(snapshot.packageName, snapshot.className)) {
+            return ScreenPageKind.UNKNOWN
+        }
         val lines = normalizeLines(snapshot.texts)
         if (lines.isEmpty()) return ScreenPageKind.UNKNOWN
         val fields = extractFields(lines)
-        return classifyPageInternal(snapshot.packageName, lines, fields).first
+        return classifyPageInternal(snapshot.packageName, snapshot.className, lines, fields).first
     }
 
     fun parse(
@@ -90,6 +93,13 @@ class ScreenBillParser(
         if (!isWatchedPackage(snapshot.packageName)) {
             return ScreenParseOutcome(pageKind = ScreenPageKind.UNKNOWN, draft = null)
         }
+        if (isBlockedChatOrFeedWindow(snapshot.packageName, snapshot.className)) {
+            return ScreenParseOutcome(
+                pageKind = ScreenPageKind.UNKNOWN,
+                draft = null,
+                ignoredReason = "聊天或服务号对话框不触发"
+            )
+        }
 
         val lines = normalizeLines(snapshot.texts)
         if (lines.isEmpty()) {
@@ -97,9 +107,26 @@ class ScreenBillParser(
         }
 
         val fields = extractFields(lines)
-        val (pageKind, prepayReason) = classifyPageInternal(snapshot.packageName, lines, fields)
+        val (pageKind, prepayReason) = classifyPageInternal(
+            packageName = snapshot.packageName,
+            className = snapshot.className,
+            lines = lines,
+            fields = fields
+        )
         val summaryText = buildSummaryText(lines)
         val orderNo = extractOrderNo(fields)
+
+        if (pageKind == ScreenPageKind.UNKNOWN && prepayReason == "聊天或服务号对话框不触发") {
+            return ScreenParseOutcome(
+                pageKind = ScreenPageKind.UNKNOWN,
+                draft = null,
+                orderNo = "",
+                dedupFingerprint = "",
+                summaryText = "",
+                shouldFallbackToLlm = false,
+                ignoredReason = prepayReason
+            )
+        }
 
         val ignoredStatus = detectIgnoredStatus(lines, fields)
         if (ignoredStatus != null) {
@@ -369,22 +396,51 @@ class ScreenBillParser(
 
     private fun classifyPageInternal(
         packageName: String,
+        className: String,
         lines: List<String>,
         fields: List<ExtractedField>
     ): Pair<ScreenPageKind, String> {
+        if (isBlockedChatOrFeedWindow(packageName, className)) {
+            return ScreenPageKind.UNKNOWN to "聊天或服务号对话框不触发"
+        }
+
         val lowerLines = lines.map { it.lowercase(Locale.ROOT) }
         val lowerJoined = lowerLines.joinToString("\n")
 
         if (CHAT_STRONG_MARKERS.any { lowerJoined.contains(it) }) {
-            return ScreenPageKind.UNKNOWN to ""
+            return ScreenPageKind.UNKNOWN to "聊天或服务号对话框不触发"
         }
         if (lowerLines.contains("表情") && lowerLines.contains("发送")) {
-            return ScreenPageKind.UNKNOWN to ""
+            return ScreenPageKind.UNKNOWN to "聊天或服务号对话框不触发"
         }
         if ((lowerLines.contains("通讯录") && lowerLines.contains("发现")) ||
             (lowerLines.contains("首页") && lowerLines.contains("理财") && lowerLines.contains("我的"))
         ) {
             return ScreenPageKind.UNKNOWN to ""
+        }
+
+        // 微信支付 / 支付宝服务号通知卡片标题（即使退化为通用类名也立即屏蔽）
+        if (SERVICE_CARD_TITLES.any { title -> lowerLines.any { it.contains(title) } }) {
+            return ScreenPageKind.UNKNOWN to "聊天或服务号对话框不触发"
+        }
+
+        // 微信支付服务号对话框底部菜单特征
+        val hasServiceBottomMenu = (lowerLines.contains("我的账单") && lowerLines.contains("支付服务")) ||
+            (lowerLines.contains("我的账单") && lowerLines.contains("更多服务")) ||
+            (lowerLines.contains("账单") && lowerLines.contains("支付服务"))
+        if (hasServiceBottomMenu) {
+            return ScreenPageKind.UNKNOWN to "聊天或服务号对话框不触发"
+        }
+
+        // 同一屏幕重复出现 ≥ 2 次同种凭证字段键（服务号/消息流滑动多张卡片）
+        val voucherKeyCounts = HashMap<String, Int>(4)
+        for (line in lowerLines) {
+            val matchedKey = matchRepeatedVoucherKey(line) ?: continue
+            val nextCount = (voucherKeyCounts[matchedKey] ?: 0) + 1
+            if (nextCount >= 2) {
+                return ScreenPageKind.UNKNOWN to "聊天或服务号对话框不触发"
+            }
+            voucherKeyCounts[matchedKey] = nextCount
         }
 
         val distinctDetailKeys = fields
@@ -398,6 +454,48 @@ class ScreenBillParser(
         }
         val hasDetailAnchorMarker = DETAIL_ANCHOR_MARKERS.any { marker ->
             lowerLines.any { it.contains(marker) }
+        }
+        val strongDetailOnlyCount = fields
+            .map { it.key }
+            .filter { it == FieldKey.TIME || it == FieldKey.ORDER_NO || it == FieldKey.STATUS }
+            .toSet()
+            .size
+
+        // 聊天红包 / 转账消息气泡强特征（排除带完整账单服务锚点的真实详情页）
+        if (!hasDetailAnchorMarker &&
+            strongDetailOnlyCount < 2 &&
+            CHAT_BUBBLE_MARKERS.any { marker -> lowerLines.any { it.contains(marker) } }
+        ) {
+            return ScreenPageKind.UNKNOWN to "聊天或服务号对话框不触发"
+        }
+
+        // 支付宝服务号/聊天助手通知（无真实账单详情头与完整字段时屏蔽）
+        if (packageName.equals(PKG_ALIPAY, ignoreCase = true) &&
+            !hasDetailHeader &&
+            strongDetailOnlyCount < 2 &&
+            ALIPAY_FEED_CARD_MARKERS.any { marker -> lowerLines.any { it.contains(marker) } }
+        ) {
+            return ScreenPageKind.UNKNOWN to "聊天或服务号对话框不触发"
+        }
+
+        val timeFieldValueLines = fields
+            .asSequence()
+            .filter { it.key == FieldKey.TIME }
+            .map { it.lineIndex }
+            .toSet()
+        val chatTimeDividerCount = lowerLines.withIndex().count { (idx, line) ->
+            idx !in timeFieldValueLines && CHAT_TIME_DIVIDER_REGEX.matches(line)
+        }
+        val cardJumpDetailCount = lowerLines.count { line ->
+            CARD_JUMP_DETAIL_BUTTONS.any { btn -> line == btn || line.contains(btn) }
+        }
+        val hasCardJumpDetailButton = cardJumpDetailCount > 0
+
+        if (cardJumpDetailCount >= 2) {
+            return ScreenPageKind.UNKNOWN to "聊天或服务号对话框不触发"
+        }
+        if (chatTimeDividerCount >= 2 && (hasCardJumpDetailButton || (!hasDetailHeader && !hasDetailAnchorMarker))) {
+            return ScreenPageKind.UNKNOWN to "聊天或服务号对话框不触发"
         }
 
         // 仅当顶部 6 行内出现“全部账单/月账单/筛选”等列表页特征且不存在任何详情页锚点时，才判为账单列表页（避免微信详情页底部的“全部账单”按钮误杀）
@@ -437,15 +535,32 @@ class ScreenBillParser(
             return ScreenPageKind.UNKNOWN to "待付款/收银台页面不触发"
         }
 
+        val isWeChatOrAlipay = packageName.equals(PKG_WECHAT, ignoreCase = true) ||
+            packageName.equals(PKG_ALIPAY, ignoreCase = true)
+        val doneKeywords = if (isWeChatOrAlipay) {
+            WALLET_STRICT_DONE_ANCHOR_KEYWORDS
+        } else {
+            DONE_ANCHOR_KEYWORDS
+        }
         val hasDoneAnchor = lowerLines.any { line ->
-            DONE_ANCHOR_KEYWORDS.any { line == it || line.startsWith("$it(") || line.startsWith("$it（") }
+            doneKeywords.any { line == it || line.startsWith("$it(") || line.startsWith("$it（") }
+        }
+        val hasStrictResultDoneButton = lowerLines.any { line ->
+            STRICT_PAY_RESULT_DONE_BUTTONS.any { line == it || line.startsWith("$it(") || line.startsWith("$it（") }
         }
 
-        val strongDetailOnlyCount = fields
-            .map { it.key }
-            .filter { it == FieldKey.TIME || it == FieldKey.ORDER_NO || it == FieldKey.STATUS }
-            .toSet()
-            .size
+        // 服务号消息卡片常包含“查看账单详情 / 点击查看详情 / 查看消费明细”按钮：
+        // 若不具备真实支付结果页（支付成功+完成）特征，则判定为服务号对话卡片
+        if (hasCardJumpDetailButton) {
+            val isRealPayResultWithJump = hasPaySuccessPhrase &&
+                hasStrictResultDoneButton &&
+                !hasDetailAnchorMarker &&
+                strongDetailOnlyCount == 0 &&
+                chatTimeDividerCount == 0
+            if (!isRealPayResultWithJump) {
+                return ScreenPageKind.UNKNOWN to "聊天或服务号对话框不触发"
+            }
+        }
 
         // 支付结果页常伴随“支付成功 + 完成 + 商户/支付方式”，但不含时间/单号/状态或独立详情标题/详情服务锚点
         val isPaySuccessResultLayout = hasPaySuccessPhrase && hasDoneAnchor &&
@@ -461,8 +576,8 @@ class ScreenBillParser(
         }
 
         if (hasPaySuccessPhrase) {
-            val isWeChat = packageName == PKG_WECHAT
-            val isAlipay = packageName == PKG_ALIPAY
+            val isWeChat = packageName.equals(PKG_WECHAT, ignoreCase = true)
+            val isAlipay = packageName.equals(PKG_ALIPAY, ignoreCase = true)
             val hasBankOrDetailAnchor = hasDoneAnchor || hasDetailHeader || distinctDetailKeys >= 1 ||
                 lowerLines.any { line ->
                     BANK_RESULT_ANCHORS.any { line.contains(it) }
@@ -478,6 +593,20 @@ class ScreenBillParser(
         }
 
         return ScreenPageKind.UNKNOWN to ""
+    }
+
+    private fun matchRepeatedVoucherKey(lowerLine: String): String? {
+        for (key in REPEATED_VOUCHER_KEYS) {
+            if (lowerLine == key ||
+                lowerLine.startsWith("$key:") ||
+                lowerLine.startsWith("$key：") ||
+                lowerLine.startsWith("$key ") ||
+                lowerLine.startsWith("$key\t")
+            ) {
+                return key
+            }
+        }
+        return null
     }
 
     private fun hasStandaloneDetailTitleWithoutDone(lowerLines: List<String>): Boolean {
@@ -1103,6 +1232,55 @@ class ScreenBillParser(
             return false
         }
 
+        /**
+         * 拦截微信聊天与公众号/服务号消息流窗口、支付宝聊天/主 Tab/登录窗口，避免滑动消息列表时误弹记账悬浮窗。
+         * 明确放行真实支付成功页与账单详情页（MMWebViewUI、WalletOrderInfoNewUI 等）。
+         */
+        fun isBlockedChatOrFeedWindow(packageName: String, className: String): Boolean {
+            val pkg = packageName.trim()
+            val lowerCls = className.trim().lowercase(Locale.ROOT)
+            if (pkg.isEmpty() || lowerCls.isEmpty()) return false
+            return when {
+                pkg.equals(PKG_WECHAT, ignoreCase = true) -> {
+                    if (WECHAT_SAFE_WINDOW_CLASSES.any { lowerCls.contains(it) }) {
+                        false
+                    } else {
+                        WECHAT_BLOCKED_WINDOW_TOKENS.any { lowerCls.contains(it) }
+                    }
+                }
+                pkg.equals(PKG_ALIPAY, ignoreCase = true) -> {
+                    ALIPAY_BLOCKED_WINDOW_TOKENS.any { lowerCls.contains(it) }
+                }
+                else -> false
+            }
+        }
+
+        private val WECHAT_SAFE_WINDOW_CLASSES = listOf(
+            "mmwebviewui",
+            "walletorderinfonewui",
+            "walletpaidsuccessui",
+            "mallorderdetailinfoui",
+            "uipagefragmentactivity",
+            "remittancedetailui",
+            "remittanceresui",
+            "walletrefundsuccessui"
+        )
+
+        private val WECHAT_BLOCKED_WINDOW_TOKENS = listOf(
+            "launcherui",
+            "chattingui",
+            "bizchatconversationui",
+            "biztimelineui",
+            "conversation"
+        )
+
+        private val ALIPAY_BLOCKED_WINDOW_TOKENS = listOf(
+            "chatmessageactivity",
+            "socialchatactivity",
+            "alipaylogin",
+            "tablauncher"
+        )
+
         private val WHITESPACE_RUN_REGEX = Regex("\\s+")
 
         private val SPLIT_CURRENCY_ONLY_REGEX = Regex(
@@ -1364,6 +1542,33 @@ class ScreenBillParser(
             "按住 说话", "按住说话", "切换到按住说话", "更多功能按钮", "语音输入", "聊天信息", "置顶聊天", "消息免打扰"
         )
 
+        private val SERVICE_CARD_TITLES = listOf(
+            "微信支付凭证", "付款成功通知", "收款到账通知", "零钱入账通知",
+            "支付成功凭证", "转账过期退还通知", "微信支付分", "微信支付小助手"
+        )
+
+        private val CARD_JUMP_DETAIL_BUTTONS = listOf(
+            "查看账单详情", "点击查看详情", "查看消费明细"
+        )
+
+        private val REPEATED_VOUCHER_KEYS = listOf(
+            "付款金额", "交易单号", "支付时间", "交易时间"
+        )
+
+        private val CHAT_BUBBLE_MARKERS = listOf(
+            "恭喜发财", "大吉大利", "领取红包", "查看红包", "发红包给你",
+            "转账给你", "待确认收钱", "待确认收款", "朋友已确认收钱",
+            "已被对方领取", "已被对方领完", "点击领取", "收款后存入零钱"
+        )
+
+        private val ALIPAY_FEED_CARD_MARKERS = listOf(
+            "账单助手", "支付助手", "动账提醒", "交易提醒", "收款助手"
+        )
+
+        private val CHAT_TIME_DIVIDER_REGEX = Regex(
+            "^(?:(?:今天|昨天|前天|上午|下午|晚上|凌晨|星期[一二三四五六日天]|周[一二三四五六日天])\\s*\\d{1,2}:\\d{2}|\\d{1,2}:\\d{2}|\\d{4}年\\d{1,2}月\\d{1,2}日(?:\\s*(?:今天|昨天|前天|上午|下午|晚上)?\\s*\\d{1,2}:\\d{2})?|\\d{1,2}月\\d{1,2}日(?:\\s*(?:上午|下午|晚上)?\\s*\\d{1,2}:\\d{2})?)$"
+        )
+
         private val BILL_LIST_MARKERS = listOf(
             "全部账单", "月账单", "账单筛选", "收支分析", "账单统计", "筛选", "本月账单"
         )
@@ -1399,6 +1604,15 @@ class ScreenBillParser(
         private val DONE_ANCHOR_KEYWORDS = listOf(
             "完成", "返回商家", "查看账单", "查看零钱", "账单详情", "查看详情",
             "done", "ok", "close", "返回", "电子回单"
+        )
+
+        private val WALLET_STRICT_DONE_ANCHOR_KEYWORDS = listOf(
+            "完成", "返回商家", "查看账单", "查看零钱", "账单详情",
+            "done", "ok", "close", "电子回单"
+        )
+
+        private val STRICT_PAY_RESULT_DONE_BUTTONS = listOf(
+            "完成", "返回商家", "done", "ok"
         )
 
         private val BANK_RESULT_ANCHORS = listOf(

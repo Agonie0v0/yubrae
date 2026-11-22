@@ -1,8 +1,11 @@
 package com.kairoledger.app.ui.screens.assets
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -26,24 +29,33 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ReceiptLong
 import androidx.compose.material.icons.rounded.AccountBalanceWallet
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Archive
 import androidx.compose.material.icons.rounded.ArrowDropDown
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.ExpandLess
+import androidx.compose.material.icons.rounded.ExpandMore
+import androidx.compose.material.icons.rounded.Handshake
+import androidx.compose.material.icons.rounded.MoreVert
+import androidx.compose.material.icons.rounded.Schedule
 import androidx.compose.material.icons.rounded.SwapHoriz
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material.icons.rounded.Unarchive
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
@@ -61,8 +73,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -70,23 +85,38 @@ import com.kairoledger.app.core.model.CurrencyCatalog
 import com.kairoledger.app.core.model.MoneyAmount
 import com.kairoledger.app.data.db.AccountEntity
 import com.kairoledger.app.data.db.AccountGroup
+import com.kairoledger.app.ui.components.CategoryIconBadge
 import com.kairoledger.app.ui.components.CurrencyBadge
 import com.kairoledger.app.ui.components.CurrencyPickerDialog
 import com.kairoledger.app.ui.components.EmptyStateCard
 import com.kairoledger.app.ui.components.KairoIcons
+import com.kairoledger.app.ui.components.LocalPrivacyMasked
+import com.kairoledger.app.ui.components.YimuCard
+import com.kairoledger.app.ui.components.formatPrivacyAmount
 import com.kairoledger.app.ui.theme.KairoTheme
 import com.kairoledger.app.ui.theme.tabular
 import com.kairoledger.app.ui.viewmodel.KairoMainViewModel
+import java.time.LocalDate
+import java.time.temporal.ChronoUnit
+
+private val DefaultOpenAccountDetail: (AccountEntity) -> Unit = {}
 
 @Composable
 fun AssetsScreen(
     viewModel: KairoMainViewModel,
     onOpenQuickTransfer: () -> Unit,
     onOpenQuickRecordForAccount: (Long) -> Unit,
-    contentPadding: PaddingValues = PaddingValues(0.dp)
+    contentPadding: PaddingValues = PaddingValues(0.dp),
+    pendingReimburseCount: Int = 0,
+    openDebtCount: Int = 0,
+    onOpenAccountDetail: (AccountEntity) -> Unit = DefaultOpenAccountDetail,
+    onOpenReimburseCenter: () -> Unit = {},
+    onOpenDebtCenter: () -> Unit = {}
 ) {
     val uiState by viewModel.assetsUiState.collectAsStateWithLifecycle()
     val settings by viewModel.settings.collectAsStateWithLifecycle()
+    val privacyMasked = LocalPrivacyMasked.current
+    val hasDetailCallback = onOpenAccountDetail !== DefaultOpenAccountDetail
 
     var actionAccount by remember { mutableStateOf<AccountEntity?>(null) }
     var editingAccount by remember { mutableStateOf<AccountEntity?>(null) }
@@ -94,6 +124,11 @@ fun AssetsScreen(
     var calibrateTarget by remember { mutableStateOf<AccountEntity?>(null) }
     var showDisplayCurrencyMenu by remember { mutableStateOf(false) }
     var showMoreDisplayCurrencies by remember { mutableStateOf(false) }
+    var collapsedGroups by remember { mutableStateOf<Set<String>>(emptySet()) }
+
+    val totalVisibleCount = remember(uiState.groupedAccounts) {
+        uiState.groupedAccounts.values.sumOf { it.size }
+    }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -105,13 +140,14 @@ fun AssetsScreen(
         ),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        // 顶部净资产卡（含展示币种即时切换）
+        // 顶部一木柔和薄荷绿渐变净资产英雄卡
         item(key = "net_worth_card") {
             NetWorthHeroCard(
                 displayCurrency = uiState.displayCurrency,
                 totalAssetsMicros = uiState.netWorth.totalAssetsMicros,
                 totalLiabilitiesMicros = uiState.netWorth.totalLiabilitiesMicros,
                 netWorthMicros = uiState.netWorth.netWorthMicros,
+                privacyMasked = privacyMasked,
                 pinnedCurrencies = settings.pinnedCurrencies,
                 showMenu = showDisplayCurrencyMenu,
                 onToggleMenu = { showDisplayCurrencyMenu = it },
@@ -126,32 +162,32 @@ fun AssetsScreen(
             )
         }
 
-        // 快捷操作条
-        item(key = "assets_actions") {
+        // 4 格圆角快捷功能条
+        item(key = "quick_feature_bar") {
+            AssetsQuickActionStrip(
+                pendingReimburseCount = pendingReimburseCount,
+                openDebtCount = openDebtCount,
+                onOpenReimburseCenter = onOpenReimburseCenter,
+                onOpenDebtCenter = onOpenDebtCenter,
+                onOpenQuickTransfer = onOpenQuickTransfer,
+                onCreateAccount = { showCreateAccountDialog = true }
+            )
+        }
+
+        // 账户列表头部与归档筛选
+        item(key = "accounts_section_header") {
             Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Button(
-                    onClick = { showCreateAccountDialog = true },
-                    shape = CircleShape,
-                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)
-                ) {
-                    Icon(Icons.Rounded.Add, null, modifier = Modifier.size(18.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("新建账户")
-                }
-                OutlinedButton(
-                    onClick = onOpenQuickTransfer,
-                    shape = CircleShape,
-                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)
-                ) {
-                    Icon(Icons.Rounded.SwapHoriz, null, modifier = Modifier.size(18.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("快捷转账")
-                }
-                Spacer(modifier = Modifier.weight(1f))
+                Text(
+                    text = "我的账户 ($totalVisibleCount)",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
                 FilterChip(
                     selected = uiState.showArchived,
                     onClick = { viewModel.setShowArchivedAccounts(!uiState.showArchived) },
@@ -175,12 +211,29 @@ fun AssetsScreen(
                 val list = uiState.groupedAccounts[groupCode].orEmpty()
                 if (list.isNotEmpty()) {
                     item(key = "group_$groupCode") {
+                        val isCollapsed = groupCode in collapsedGroups
                         AccountGroupSection(
                             groupLabel = AccountGroup.labelZh(groupCode),
                             accounts = list,
                             displayCurrency = uiState.displayCurrency,
                             convertedMap = uiState.netWorth.accountConvertedBalances,
-                            onClickAccount = { actionAccount = it }
+                            privacyMasked = privacyMasked,
+                            collapsed = isCollapsed,
+                            onToggleCollapse = {
+                                collapsedGroups = if (isCollapsed) {
+                                    collapsedGroups - groupCode
+                                } else {
+                                    collapsedGroups + groupCode
+                                }
+                            },
+                            onClickAccount = { acc ->
+                                if (hasDetailCallback) {
+                                    onOpenAccountDetail(acc)
+                                } else {
+                                    actionAccount = acc
+                                }
+                            },
+                            onOpenQuickMenu = { acc -> actionAccount = acc }
                         )
                     }
                 }
@@ -188,8 +241,12 @@ fun AssetsScreen(
         }
     }
 
-    // 账户操作菜单弹窗
+    // 账户快捷操作菜单弹窗
     actionAccount?.let { acc ->
+        val balanceFormatted = formatPrivacyAmount(
+            privacyMasked,
+            MoneyAmount.format(acc.balanceMicros, acc.currencyCode, showCurrencyCode = true)
+        )
         AlertDialog(
             onDismissRequest = { actionAccount = null },
             title = {
@@ -197,20 +254,12 @@ fun AssetsScreen(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    Surface(
-                        shape = CircleShape,
-                        color = Color(acc.colorHex).copy(alpha = 0.16f),
-                        modifier = Modifier.size(36.dp)
-                    ) {
-                        Box(contentAlignment = Alignment.Center) {
-                            Icon(
-                                imageVector = KairoIcons.iconFor(acc.icon),
-                                contentDescription = null,
-                                tint = Color(acc.colorHex),
-                                modifier = Modifier.size(20.dp)
-                            )
-                        }
-                    }
+                    CategoryIconBadge(
+                        iconKey = acc.icon,
+                        colorHex = acc.colorHex,
+                        size = 38.dp,
+                        iconSize = 20.dp
+                    )
                     Column {
                         Text(acc.name, style = MaterialTheme.typography.titleMedium)
                         Text(
@@ -223,6 +272,16 @@ fun AssetsScreen(
             },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (hasDetailCallback) {
+                        AccountActionRow(
+                            icon = Icons.Rounded.AccountBalanceWallet,
+                            label = "查看账户详情与流水",
+                            onClick = {
+                                actionAccount = null
+                                onOpenAccountDetail(acc)
+                            }
+                        )
+                    }
                     AccountActionRow(
                         icon = Icons.Rounded.Add,
                         label = "用此账户记一笔",
@@ -233,7 +292,7 @@ fun AssetsScreen(
                     )
                     AccountActionRow(
                         icon = Icons.Rounded.Tune,
-                        label = "余额校准（当前 ${MoneyAmount.format(acc.balanceMicros, acc.currencyCode, showCurrencyCode = true)}）",
+                        label = "余额校准（当前 $balanceFormatted）",
                         onClick = {
                             actionAccount = null
                             calibrateTarget = acc
@@ -287,6 +346,7 @@ fun AssetsScreen(
     calibrateTarget?.let { acc ->
         CalibrateBalanceDialog(
             account = acc,
+            privacyMasked = privacyMasked,
             onConfirm = { targetMicros, note ->
                 viewModel.calibrateAccountBalance(acc.id, targetMicros, note) {
                     calibrateTarget = null
@@ -312,6 +372,7 @@ private fun NetWorthHeroCard(
     totalAssetsMicros: Long,
     totalLiabilitiesMicros: Long,
     netWorthMicros: Long,
+    privacyMasked: Boolean,
     pinnedCurrencies: List<String>,
     showMenu: Boolean,
     onToggleMenu: (Boolean) -> Unit,
@@ -320,22 +381,32 @@ private fun NetWorthHeroCard(
 ) {
     val semantic = KairoTheme.semantic
     val info = CurrencyCatalog.find(displayCurrency)
+    val gradientColors = if (semantic.isDark) {
+        listOf(Color(0xFF143E2D), Color(0xFF1D4F3B), Color(0xFF15382A))
+    } else {
+        listOf(Color(0xFFE3F7EE), Color(0xFFD2EFE1), Color(0xFFEDF9F3))
+    }
+    val titleColor = if (semantic.isDark) Color(0xFFCFF7E3) else Color(0xFF0A3D28)
+    val borderColor = if (semantic.isDark) {
+        Color(0xFF5BD2A0).copy(alpha = 0.25f)
+    } else {
+        Color(0xFF2AA876).copy(alpha = 0.22f)
+    }
+    val pillBgColor = if (semantic.isDark) {
+        Color(0xFF0F251C).copy(alpha = 0.72f)
+    } else {
+        Color.White.copy(alpha = 0.86f)
+    }
+
     Surface(
         shape = RoundedCornerShape(24.dp),
-        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.58f),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)),
+        color = Color.Transparent,
+        border = BorderStroke(1.dp, borderColor),
         modifier = Modifier.fillMaxWidth()
     ) {
         Box(
             modifier = Modifier
-                .background(
-                    Brush.linearGradient(
-                        colors = listOf(
-                            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.72f),
-                            MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.45f)
-                        )
-                    )
-                )
+                .background(Brush.linearGradient(colors = gradientColors))
                 .padding(18.dp)
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -347,12 +418,13 @@ private fun NetWorthHeroCard(
                     Text(
                         text = "净资产估值",
                         style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                        color = titleColor,
+                        fontWeight = FontWeight.SemiBold
                     )
                     Box {
                         Surface(
                             shape = CircleShape,
-                            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.88f),
+                            color = pillBgColor,
                             modifier = Modifier.clickable { onToggleMenu(true) }
                         ) {
                             Row(
@@ -364,9 +436,15 @@ private fun NetWorthHeroCard(
                                 Text(
                                     text = info.code,
                                     style = MaterialTheme.typography.labelLarge,
-                                    fontWeight = FontWeight.Bold
+                                    fontWeight = FontWeight.Bold,
+                                    color = titleColor
                                 )
-                                Icon(Icons.Rounded.ArrowDropDown, null, modifier = Modifier.size(16.dp))
+                                Icon(
+                                    imageVector = Icons.Rounded.ArrowDropDown,
+                                    contentDescription = "切换展示币种",
+                                    tint = titleColor,
+                                    modifier = Modifier.size(16.dp)
+                                )
                             }
                         }
                         DropdownMenu(
@@ -390,9 +468,16 @@ private fun NetWorthHeroCard(
                 }
 
                 Text(
-                    text = MoneyAmount.format(netWorthMicros, displayCurrency, showCurrencyCode = displayCurrency != "CNY"),
+                    text = formatPrivacyAmount(
+                        privacyMasked,
+                        MoneyAmount.format(
+                            amountMicros = netWorthMicros,
+                            currencyCode = displayCurrency,
+                            showCurrencyCode = displayCurrency != "CNY"
+                        )
+                    ),
                     style = MaterialTheme.typography.displaySmall.tabular(),
-                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                    color = titleColor
                 )
 
                 Row(
@@ -401,7 +486,7 @@ private fun NetWorthHeroCard(
                 ) {
                     Surface(
                         shape = RoundedCornerShape(14.dp),
-                        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f),
+                        color = pillBgColor,
                         modifier = Modifier.weight(1f)
                     ) {
                         Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
@@ -412,16 +497,21 @@ private fun NetWorthHeroCard(
                             )
                             Spacer(modifier = Modifier.height(2.dp))
                             Text(
-                                text = MoneyAmount.format(totalAssetsMicros, displayCurrency),
+                                text = formatPrivacyAmount(
+                                    privacyMasked,
+                                    MoneyAmount.format(totalAssetsMicros, displayCurrency)
+                                ),
                                 style = MaterialTheme.typography.titleMedium.tabular(),
                                 color = semantic.income,
-                                fontWeight = FontWeight.Bold
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                         }
                     }
                     Surface(
                         shape = RoundedCornerShape(14.dp),
-                        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f),
+                        color = pillBgColor,
                         modifier = Modifier.weight(1f)
                     ) {
                         Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
@@ -432,10 +522,15 @@ private fun NetWorthHeroCard(
                             )
                             Spacer(modifier = Modifier.height(2.dp))
                             Text(
-                                text = MoneyAmount.format(totalLiabilitiesMicros, displayCurrency),
+                                text = formatPrivacyAmount(
+                                    privacyMasked,
+                                    MoneyAmount.format(totalLiabilitiesMicros, displayCurrency)
+                                ),
                                 style = MaterialTheme.typography.titleMedium.tabular(),
                                 color = semantic.expense,
-                                fontWeight = FontWeight.Bold
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                         }
                     }
@@ -446,64 +541,224 @@ private fun NetWorthHeroCard(
 }
 
 @Composable
-private fun AccountGroupSection(
-    groupLabel: String,
-    accounts: List<AccountEntity>,
-    displayCurrency: String,
-    convertedMap: Map<Long, Long>,
-    onClickAccount: (AccountEntity) -> Unit
+private fun AssetsQuickActionStrip(
+    pendingReimburseCount: Int,
+    openDebtCount: Int,
+    onOpenReimburseCenter: () -> Unit,
+    onOpenDebtCenter: () -> Unit,
+    onOpenQuickTransfer: () -> Unit,
+    onCreateAccount: () -> Unit
 ) {
-    Surface(
-        shape = RoundedCornerShape(20.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
-        tonalElevation = 1.dp,
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Column(modifier = Modifier.padding(vertical = 10.dp)) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 14.dp, vertical = 4.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = groupLabel,
-                    style = MaterialTheme.typography.titleSmall,
-                    color = MaterialTheme.colorScheme.primary
-                )
-                Text(
-                    text = "${accounts.size} 个账户",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-
-            accounts.forEachIndexed { idx, acc ->
-                if (idx > 0) {
-                    HorizontalDivider(
-                        modifier = Modifier.padding(horizontal = 14.dp),
-                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)
-                    )
-                }
-                AccountRowItem(
-                    account = acc,
-                    displayCurrency = displayCurrency,
-                    convertedBalanceMicros = convertedMap[acc.id],
-                    onClick = { onClickAccount(acc) }
-                )
-            }
+    YimuCard(cornerRadius = 18.dp) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 8.dp, vertical = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            QuickActionGridCell(
+                icon = Icons.AutoMirrored.Rounded.ReceiptLong,
+                label = "报销中心",
+                accentColor = Color(0xFF2AA876),
+                badgeCount = pendingReimburseCount,
+                onClick = onOpenReimburseCenter,
+                modifier = Modifier.weight(1f)
+            )
+            QuickActionGridCell(
+                icon = Icons.Rounded.Handshake,
+                label = "借贷往来",
+                accentColor = Color(0xFF0284C7),
+                badgeCount = openDebtCount,
+                onClick = onOpenDebtCenter,
+                modifier = Modifier.weight(1f)
+            )
+            QuickActionGridCell(
+                icon = Icons.Rounded.SwapHoriz,
+                label = "账户转账",
+                accentColor = Color(0xFF6D28D9),
+                badgeCount = 0,
+                onClick = onOpenQuickTransfer,
+                modifier = Modifier.weight(1f)
+            )
+            QuickActionGridCell(
+                icon = Icons.Rounded.Add,
+                label = "新建账户",
+                accentColor = Color(0xFFEA580C),
+                badgeCount = 0,
+                onClick = onCreateAccount,
+                modifier = Modifier.weight(1f)
+            )
         }
     }
 }
 
 @Composable
+private fun QuickActionGridCell(
+    icon: ImageVector,
+    label: String,
+    accentColor: Color,
+    badgeCount: Int,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier
+            .clip(RoundedCornerShape(14.dp))
+            .clickable(onClick = onClick)
+            .padding(vertical = 6.dp, horizontal = 4.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        BadgedBox(
+            badge = {
+                if (badgeCount > 0) {
+                    Badge(
+                        containerColor = MaterialTheme.colorScheme.error,
+                        contentColor = MaterialTheme.colorScheme.onError
+                    ) {
+                        Text(
+                            text = if (badgeCount > 99) "99+" else badgeCount.toString(),
+                            style = MaterialTheme.typography.labelSmall
+                        )
+                    }
+                }
+            }
+        ) {
+            Surface(
+                shape = CircleShape,
+                color = accentColor.copy(alpha = 0.13f),
+                modifier = Modifier.size(40.dp)
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        imageVector = icon,
+                        contentDescription = label,
+                        tint = accentColor,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
+            }
+        }
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurface,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center
+        )
+    }
+}
+
+@Composable
+private fun AccountGroupSection(
+    groupLabel: String,
+    accounts: List<AccountEntity>,
+    displayCurrency: String,
+    convertedMap: Map<Long, Long>,
+    privacyMasked: Boolean,
+    collapsed: Boolean,
+    onToggleCollapse: () -> Unit,
+    onClickAccount: (AccountEntity) -> Unit,
+    onOpenQuickMenu: (AccountEntity) -> Unit
+) {
+    val groupSubtotalMicros = remember(accounts, convertedMap) {
+        accounts.sumOf { convertedMap[it.id] ?: 0L }
+    }
+
+    YimuCard(cornerRadius = 18.dp) {
+        Column(modifier = Modifier.padding(vertical = 6.dp)) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(onClick = onToggleCollapse)
+                    .padding(horizontal = 14.dp, vertical = 10.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Text(
+                        text = groupLabel,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Surface(
+                        shape = CircleShape,
+                        color = MaterialTheme.colorScheme.surfaceContainerHigh
+                    ) {
+                        Text(
+                            text = "${accounts.size}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp)
+                        )
+                    }
+                }
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    if (convertedMap.isNotEmpty()) {
+                        Text(
+                            text = formatPrivacyAmount(
+                                privacyMasked,
+                                MoneyAmount.format(groupSubtotalMicros, displayCurrency)
+                            ),
+                            style = MaterialTheme.typography.labelMedium.tabular(),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Icon(
+                        imageVector = if (collapsed) Icons.Rounded.ExpandMore else Icons.Rounded.ExpandLess,
+                        contentDescription = if (collapsed) "展开分组" else "收起分组",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+            }
+
+            AnimatedVisibility(visible = !collapsed) {
+                Column {
+                    accounts.forEachIndexed { idx, acc ->
+                        HorizontalDivider(
+                            modifier = Modifier.padding(horizontal = 14.dp),
+                            color = MaterialTheme.colorScheme.outlineVariant.copy(
+                                alpha = if (idx == 0) 0.45f else 0.3f
+                            )
+                        )
+                        AccountRowItem(
+                            account = acc,
+                            displayCurrency = displayCurrency,
+                            convertedBalanceMicros = convertedMap[acc.id],
+                            privacyMasked = privacyMasked,
+                            onClick = { onClickAccount(acc) },
+                            onLongClick = { onOpenQuickMenu(acc) },
+                            onMoreClick = { onOpenQuickMenu(acc) }
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
 private fun AccountRowItem(
     account: AccountEntity,
     displayCurrency: String,
     convertedBalanceMicros: Long?,
-    onClick: () -> Unit
+    privacyMasked: Boolean,
+    onClick: () -> Unit,
+    onLongClick: () -> Unit,
+    onMoreClick: () -> Unit
 ) {
+    val semantic = KairoTheme.semantic
     val accColor = Color(account.colorHex)
     val currencyInfo = CurrencyCatalog.find(account.currencyCode)
     val isForeignFromDisplay = !account.currencyCode.equals(displayCurrency, ignoreCase = true)
@@ -511,28 +766,23 @@ private fun AccountRowItem(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 12.dp),
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = onLongClick
+            )
+            .padding(start = 14.dp, end = 6.dp, top = 12.dp, bottom = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Surface(
-            shape = CircleShape,
-            color = accColor.copy(alpha = 0.14f),
-            modifier = Modifier.size(42.dp)
-        ) {
-            Box(contentAlignment = Alignment.Center) {
-                Icon(
-                    imageVector = KairoIcons.iconFor(account.icon),
-                    contentDescription = null,
-                    tint = accColor,
-                    modifier = Modifier.size(22.dp)
-                )
-            }
-        }
+        CategoryIconBadge(
+            iconKey = account.icon,
+            colorHex = account.colorHex,
+            size = 42.dp,
+            iconSize = 22.dp
+        )
 
         Spacer(modifier = Modifier.width(12.dp))
 
-        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -540,8 +790,10 @@ private fun AccountRowItem(
                 Text(
                     text = account.name,
                     style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false)
                 )
                 Surface(
                     shape = RoundedCornerShape(6.dp),
@@ -569,19 +821,87 @@ private fun AccountRowItem(
             }
 
             if (account.groupType == AccountGroup.CREDIT) {
+                val limitMicros = account.creditLimitMicros.coerceAtLeast(0L)
+                val usedMicros = (-account.balanceMicros).coerceAtLeast(0L)
                 val availableMicros = (account.creditLimitMicros + account.balanceMicros).coerceAtLeast(0L)
-                val billingText = listOfNotNull(
-                    account.billingDay?.let { "账单日${it}日" },
-                    account.repaymentDay?.let { "还款日${it}日" }
-                ).joinToString(" · ")
-                Text(
-                    text = "可用 ${MoneyAmount.format(availableMicros, account.currencyCode)}" +
-                        if (billingText.isNotEmpty()) " · $billingText" else "",
-                    style = MaterialTheme.typography.bodySmall.tabular(),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
+                val usedRatio = if (limitMicros > 0L) {
+                    (usedMicros.toDouble() / limitMicros.toDouble()).toFloat().coerceIn(0f, 1f)
+                } else {
+                    0f
+                }
+                val usedPercent = (usedRatio * 100f).toInt()
+                val progressColor = when {
+                    usedRatio >= 0.9f -> semantic.expense
+                    usedRatio >= 0.7f -> semantic.warning
+                    else -> accColor
+                }
+
+                if (limitMicros > 0L) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        LinearProgressIndicator(
+                            progress = { usedRatio },
+                            color = progressColor,
+                            trackColor = progressColor.copy(alpha = 0.14f),
+                            strokeCap = StrokeCap.Round,
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(5.dp)
+                                .clip(CircleShape)
+                        )
+                        Text(
+                            text = if (privacyMasked) "已用 **" else "已用 $usedPercent%",
+                            style = MaterialTheme.typography.labelSmall.tabular(),
+                            color = progressColor
+                        )
+                    }
+                }
+
+                val countdownText = formatCreditCountdown(account.billingDay, account.repaymentDay)
+                val availableStr = formatPrivacyAmount(
+                    privacyMasked,
+                    MoneyAmount.format(availableMicros, account.currencyCode)
                 )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Text(
+                        text = "可用 $availableStr",
+                        style = MaterialTheme.typography.bodySmall.tabular(),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    if (countdownText.isNotEmpty()) {
+                        Surface(
+                            shape = RoundedCornerShape(6.dp),
+                            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(2.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Schedule,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(10.dp)
+                                )
+                                Text(
+                                    text = countdownText,
+                                    style = MaterialTheme.typography.labelSmall.tabular(),
+                                    color = MaterialTheme.colorScheme.primary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -589,29 +909,76 @@ private fun AccountRowItem(
 
         Column(horizontalAlignment = Alignment.End) {
             Text(
-                text = MoneyAmount.format(
-                    amountMicros = account.balanceMicros,
-                    currencyCode = account.currencyCode,
-                    showCurrencyCode = !account.currencyCode.equals("CNY", true)
+                text = formatPrivacyAmount(
+                    privacyMasked,
+                    MoneyAmount.format(
+                        amountMicros = account.balanceMicros,
+                        currencyCode = account.currencyCode,
+                        showCurrencyCode = !account.currencyCode.equals("CNY", true)
+                    )
                 ),
                 style = MaterialTheme.typography.titleMedium.tabular(),
-                color = if (account.balanceMicros < 0L) KairoTheme.semantic.expense else MaterialTheme.colorScheme.onSurface,
+                color = if (account.balanceMicros < 0L) semantic.expense else MaterialTheme.colorScheme.onSurface,
                 fontWeight = FontWeight.Bold
             )
             if (isForeignFromDisplay && convertedBalanceMicros != null) {
                 Text(
-                    text = "≈ ${MoneyAmount.format(convertedBalanceMicros, displayCurrency)}",
+                    text = formatPrivacyAmount(
+                        privacyMasked,
+                        "≈ ${MoneyAmount.format(convertedBalanceMicros, displayCurrency)}"
+                    ),
                     style = MaterialTheme.typography.bodySmall.tabular(),
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
         }
+
+        IconButton(
+            onClick = onMoreClick,
+            modifier = Modifier.size(32.dp)
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.MoreVert,
+                contentDescription = "账户操作",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(18.dp)
+            )
+        }
     }
+}
+
+internal fun daysUntilDayOfMonth(dayOfMonth: Int, today: LocalDate = LocalDate.now()): Int {
+    val safeDayThisMonth = dayOfMonth.coerceIn(1, today.lengthOfMonth())
+    val candidateThisMonth = today.withDayOfMonth(safeDayThisMonth)
+    val nextOccurrence = if (!candidateThisMonth.isBefore(today)) {
+        candidateThisMonth
+    } else {
+        val nextMonth = today.plusMonths(1)
+        nextMonth.withDayOfMonth(dayOfMonth.coerceIn(1, nextMonth.lengthOfMonth()))
+    }
+    return ChronoUnit.DAYS.between(today, nextOccurrence).toInt().coerceAtLeast(0)
+}
+
+internal fun formatCreditCountdown(
+    billingDay: Int?,
+    repaymentDay: Int?,
+    today: LocalDate = LocalDate.now()
+): String {
+    val parts = mutableListOf<String>()
+    repaymentDay?.let { day ->
+        val days = daysUntilDayOfMonth(day, today)
+        parts += if (days == 0) "今日还款" else "${days}天后还款"
+    }
+    billingDay?.let { day ->
+        val days = daysUntilDayOfMonth(day, today)
+        parts += if (days == 0) "今日出账" else "${days}天后出账"
+    }
+    return parts.joinToString(" · ")
 }
 
 @Composable
 private fun AccountActionRow(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    icon: ImageVector,
     label: String,
     onClick: () -> Unit
 ) {
@@ -627,7 +994,12 @@ private fun AccountActionRow(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(20.dp)
+            )
             Text(label, style = MaterialTheme.typography.bodyLarge)
         }
     }
@@ -635,7 +1007,7 @@ private fun AccountActionRow(
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun AccountEditorDialog(
+internal fun AccountEditorDialog(
     existing: AccountEntity?,
     pinnedCurrencies: List<String>,
     onSave: (AccountEntity) -> Unit,
@@ -665,9 +1037,9 @@ private fun AccountEditorDialog(
     var billingDayInput by remember { mutableStateOf(existing?.billingDay?.toString() ?: "5") }
     var repaymentDayInput by remember { mutableStateOf(existing?.repaymentDay?.toString() ?: "23") }
     var iconKey by remember { mutableStateOf(existing?.icon ?: "account_balance_wallet") }
-    var colorHex by remember { mutableLongStateOf(existing?.colorHex ?: 0xFF006874L) }
+    var colorHex by remember { mutableLongStateOf(existing?.colorHex ?: 0xFF2AA876L) }
     var includeInNetWorth by remember { mutableStateOf(existing?.includeInNetWorth ?: true) }
-    var sortOrder by remember { mutableIntStateOf(existing?.sortOrder ?: 100) }
+    val sortOrder by remember { mutableIntStateOf(existing?.sortOrder ?: 100) }
     var showMoreCurrencies by remember { mutableStateOf(false) }
     var errorMsg by remember { mutableStateOf<String?>(null) }
 
@@ -880,14 +1252,17 @@ private fun AccountEditorDialog(
 }
 
 @Composable
-private fun CalibrateBalanceDialog(
+internal fun CalibrateBalanceDialog(
     account: AccountEntity,
+    privacyMasked: Boolean = LocalPrivacyMasked.current,
     onConfirm: (Long, String) -> Unit,
     onDismiss: () -> Unit
 ) {
     val digits = CurrencyCatalog.find(account.currencyCode).minorDigits
     var targetInput by remember {
-        mutableStateOf(MoneyAmount.formatPlain(account.balanceMicros, digits, grouping = false))
+        mutableStateOf(
+            if (privacyMasked) "" else MoneyAmount.formatPlain(account.balanceMicros, digits, grouping = false)
+        )
     }
     var noteInput by remember { mutableStateOf("余额校准") }
     var errorMsg by remember { mutableStateOf<String?>(null) }
@@ -898,7 +1273,7 @@ private fun CalibrateBalanceDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(
-                    text = "当前账面余额：${MoneyAmount.format(account.balanceMicros, account.currencyCode, showCurrencyCode = true)}",
+                    text = "当前账面余额：${formatPrivacyAmount(privacyMasked, MoneyAmount.format(account.balanceMicros, account.currencyCode, showCurrencyCode = true))}",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
