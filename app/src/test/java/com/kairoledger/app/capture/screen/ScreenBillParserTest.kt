@@ -839,4 +839,308 @@ class ScreenBillParserTest {
         assertEquals("霸王茶姬", payOutcome.draft!!.merchant)
         assertEquals("微信零钱", accounts.first { it.id == payOutcome.draft!!.accountId }.name)
     }
+
+    @Test
+    fun ignoresPaymentDiscountLineAndPrefersTopBareNegativeHeroAmount() {
+        val wechatInlineDiscount = ScreenSnapshot(
+            packageName = "com.tencent.mm",
+            className = "com.tencent.mm.plugin.webview.ui.tools.MMWebViewUI",
+            texts = listOf(
+                "账单详情",
+                "瑞幸咖啡",
+                "-15.80",
+                "支付优惠 -¥3.00",
+                "当前状态", "支付成功",
+                "支付时间", "2026-11-22 09:15:00",
+                "支付方式", "零钱",
+                "交易单号", "420000112233445566"
+            )
+        )
+        val outcome1 = parser.parse(wechatInlineDiscount, aliases, accounts, categories)
+        assertEquals(ScreenPageKind.BILL_DETAIL, outcome1.pageKind)
+        val draft1 = outcome1.draft
+        assertNotNull(draft1)
+        assertEquals(TransactionType.EXPENSE, draft1!!.type)
+        assertEquals(MoneyAmount.parseToMicros("15.80"), draft1.origAmountMicros)
+        assertEquals("CNY", draft1.origCurrency)
+        assertEquals("瑞幸咖啡", draft1.merchant)
+
+        // 即使顶部裸数字下方出现独立正数/无标签优惠金额，仍优先顶部带符号裸数字，且详情字段之后的独立行不得进入 HERO 区间
+        val heroOrderingAndLowerDiscount = ScreenSnapshot(
+            packageName = "com.tencent.mm",
+            className = "com.tencent.mm.plugin.webview.ui.tools.MMWebViewUI",
+            texts = listOf(
+                "账单详情",
+                "瑞幸咖啡",
+                "-15.80",
+                "当前状态", "支付成功",
+                "支付优惠", "-¥3.00",
+                "¥3.00",
+                "支付方式", "零钱",
+                "交易单号", "420000112233445567"
+            )
+        )
+        val outcome2 = parser.parse(heroOrderingAndLowerDiscount, aliases, accounts, categories)
+        assertEquals(ScreenPageKind.BILL_DETAIL, outcome2.pageKind)
+        assertEquals(MoneyAmount.parseToMicros("15.80"), outcome2.draft!!.origAmountMicros)
+    }
+
+    @Test
+    fun ignoresMultilineDiscountDescriptionAndSubItemsWithoutSwallowingNextFields() {
+        val wechatCouponMultiline = ScreenSnapshot(
+            packageName = "com.tencent.mm",
+            className = "com.tencent.mm.plugin.webview.ui.tools.MMWebViewUI",
+            texts = listOf(
+                "账单详情",
+                "美团外卖",
+                "-25.00",
+                "当前状态", "支付成功",
+                "优惠说明",
+                "微信立减金",
+                "-¥5.00",
+                "支付时间", "2026-11-22 12:00:00",
+                "支付方式", "招商银行信用卡(6688)",
+                "交易单号", "420000887766554433"
+            )
+        )
+        val outcome1 = parser.parse(wechatCouponMultiline, aliases, accounts, categories)
+        assertEquals(ScreenPageKind.BILL_DETAIL, outcome1.pageKind)
+        val draft1 = outcome1.draft
+        assertNotNull(draft1)
+        assertEquals(MoneyAmount.parseToMicros("25.00"), draft1!!.origAmountMicros)
+        assertEquals("美团外卖", draft1.merchant)
+        assertEquals("6688", draft1.accountHint)
+        assertEquals("招商信用卡6688", accounts.first { it.id == draft1.accountId }.name)
+        assertEquals("420000887766554433", draft1.externalOrderNo)
+
+        // 子描述为“满30减5”非字段标签，同样向后穿透跳过关联优惠金额且不吞并下方字段
+        val fullReductionMultiline = ScreenSnapshot(
+            packageName = "com.tencent.mm",
+            className = "com.tencent.mm.plugin.wallet_core.ui.WalletPaidSuccessUI",
+            texts = listOf(
+                "支付成功",
+                "美团外卖",
+                "¥25.00",
+                "优惠说明：",
+                "满30减5",
+                "-¥5.00",
+                "支付方式", "招商银行信用卡(6688)",
+                "完成"
+            )
+        )
+        val outcome2 = parser.parse(fullReductionMultiline, aliases, accounts, categories)
+        assertEquals(ScreenPageKind.PAY_SUCCESS, outcome2.pageKind)
+        val draft2 = outcome2.draft
+        assertNotNull(draft2)
+        assertEquals(MoneyAmount.parseToMicros("25.00"), draft2!!.origAmountMicros)
+        assertEquals("招商信用卡6688", accounts.first { it.id == draft2.accountId }.name)
+    }
+
+    @Test
+    fun prefersActualPaidOverOrderAmountMerchantDiscountAndRedPacketInAlipayDetail() {
+        val alipayDetail = ScreenSnapshot(
+            packageName = "com.eg.android.AlipayGphone",
+            className = "com.alipay.mobile.bill.detail.ui.BillDetailActivity",
+            texts = listOf(
+                "账单详情",
+                "盒马鲜生",
+                "当前状态", "交易成功",
+                "原价", "¥35.00",
+                "商家优惠", "-¥5.00",
+                "红包抵扣", "-¥2.00",
+                "实付金额", "¥28.00",
+                "付款方式", "花呗",
+                "创建时间", "2026-11-22 18:30:00",
+                "订单号", "202611222200148899112233"
+            )
+        )
+        val outcome1 = parser.parse(alipayDetail, aliases, accounts, categories)
+        assertEquals(ScreenPageKind.BILL_DETAIL, outcome1.pageKind)
+        val draft1 = outcome1.draft
+        assertNotNull(draft1)
+        assertEquals(TransactionType.EXPENSE, draft1!!.type)
+        assertEquals(MoneyAmount.parseToMicros("28.00"), draft1.origAmountMicros)
+        assertEquals("CNY", draft1.origCurrency)
+        assertEquals("盒马鲜生", draft1.merchant)
+        assertEquals("支付宝", accounts.first { it.id == draft1.accountId }.name)
+
+        // 含“订单金额”与各种券/补贴/集分宝抵扣共存时仍精确取实付
+        val alipayOrderAmountSnapshot = ScreenSnapshot(
+            packageName = "com.eg.android.AlipayGphone",
+            className = "BillDetailActivity",
+            texts = listOf(
+                "账单详情",
+                "盒马鲜生",
+                "-28.00",
+                "当前状态", "交易成功",
+                "订单金额", "¥35.00",
+                "平台消费券", "-¥4.00",
+                "集分宝抵扣", "-¥1.00",
+                "商家券", "-¥2.00",
+                "实付金额", "¥28.00",
+                "付款方式", "支付宝",
+                "订单号", "202611222200148899112244"
+            )
+        )
+        val outcome2 = parser.parse(alipayOrderAmountSnapshot, aliases, accounts, categories)
+        assertEquals(ScreenPageKind.BILL_DETAIL, outcome2.pageKind)
+        assertEquals(MoneyAmount.parseToMicros("28.00"), outcome2.draft!!.origAmountMicros)
+    }
+
+    @Test
+    fun ignoresInlineDiscountAttachedToPaymentMethodAndPreservesAccountRouting() {
+        val twoLinePaymentDiscount = ScreenSnapshot(
+            packageName = "com.tencent.mm",
+            className = "com.tencent.mm.plugin.webview.ui.tools.MMWebViewUI",
+            texts = listOf(
+                "账单详情",
+                "霸王茶姬",
+                "-18.00",
+                "当前状态", "支付成功",
+                "支付方式", "招商银行信用卡(6688) (立减¥2.00)",
+                "支付时间", "2026-11-22 14:20:00",
+                "交易单号", "420000556677889900"
+            )
+        )
+        val outcome1 = parser.parse(twoLinePaymentDiscount, aliases, accounts, categories)
+        assertEquals(ScreenPageKind.BILL_DETAIL, outcome1.pageKind)
+        val draft1 = outcome1.draft
+        assertNotNull(draft1)
+        assertEquals(MoneyAmount.parseToMicros("18.00"), draft1!!.origAmountMicros)
+        assertEquals("6688", draft1.accountHint)
+        assertEquals("招商信用卡6688", accounts.first { it.id == draft1.accountId }.name)
+
+        val inlinePaySuccess = ScreenSnapshot(
+            packageName = "com.tencent.mm",
+            className = "com.tencent.mm.plugin.wallet_core.ui.WalletPaidSuccessUI",
+            texts = listOf(
+                "支付成功",
+                "霸王茶姬",
+                "¥18.00",
+                "付款方式：零钱(立减¥2.00)",
+                "完成"
+            )
+        )
+        val outcome2 = parser.parse(inlinePaySuccess, aliases, accounts, categories)
+        assertEquals(ScreenPageKind.PAY_SUCCESS, outcome2.pageKind)
+        val draft2 = outcome2.draft
+        assertNotNull(draft2)
+        assertEquals(MoneyAmount.parseToMicros("18.00"), draft2!!.origAmountMicros)
+        assertEquals("微信零钱", accounts.first { it.id == draft2.accountId }.name)
+    }
+
+    @Test
+    fun ignoresInlineDiscountAndCouponTextsOnPaySuccessPage() {
+        val paySuccessWithCoupon = ScreenSnapshot(
+            packageName = "com.eg.android.AlipayGphone",
+            className = "com.alipay.android.msp.ui.views.MspContainerActivity",
+            texts = listOf(
+                "支付成功",
+                "星巴克",
+                "¥26.00 (已优惠¥4.00)",
+                "已优惠¥4.00/5元立减金",
+                "使用5元立减金",
+                "付款方式", "支付宝",
+                "完成"
+            )
+        )
+        val outcome = parser.parse(paySuccessWithCoupon, aliases, accounts, categories)
+        assertEquals(ScreenPageKind.PAY_SUCCESS, outcome.pageKind)
+        val draft = outcome.draft
+        assertNotNull(draft)
+        assertEquals(TransactionType.EXPENSE, draft!!.type)
+        assertEquals(MoneyAmount.parseToMicros("26.00"), draft.origAmountMicros)
+        assertEquals("CNY", draft.origCurrency)
+        assertEquals("星巴克", draft.merchant)
+        assertEquals("餐饮美食", draft.categoryName)
+        assertEquals("支付宝", accounts.first { it.id == draft.accountId }.name)
+    }
+
+    @Test
+    fun resolvesForeignCurrencyWithCnySettlementWhenDiscountAmountAlsoPresent() {
+        val foreignWithDiscount = ScreenSnapshot(
+            packageName = "com.eg.android.AlipayGphone",
+            className = "com.alipay.mobile.bill.detail.ui.BillDetailActivity",
+            texts = listOf(
+                "账单详情",
+                "OpenAI",
+                "-$15.00",
+                "实付 ¥102.00",
+                "官方立减", "-¥7.20",
+                "当前状态", "交易成功",
+                "付款方式", "招商银行信用卡(6688)",
+                "创建时间", "2026-11-22 10:00:00",
+                "订单号", "202611229988776655"
+            )
+        )
+        val outcome1 = parser.parse(foreignWithDiscount, aliases, accounts, categories)
+        assertEquals(ScreenPageKind.BILL_DETAIL, outcome1.pageKind)
+        val draft1 = outcome1.draft
+        assertNotNull(draft1)
+        assertEquals("USD", draft1!!.origCurrency)
+        assertEquals(MoneyAmount.parseToMicros("15.00"), draft1.origAmountMicros)
+        assertEquals(MoneyAmount.parseToMicros("102.00"), draft1.manualAccountAmountMicros)
+        assertEquals("招商信用卡6688", accounts.first { it.id == draft1.accountId }.name)
+
+        // 含外币消费金额 + CNY 英雄实付 + 多行立减金时，CNY 结算额仍取 102.00 而非 7.20
+        val wechatForeignWithMultilineDiscount = ScreenSnapshot(
+            packageName = "com.tencent.mm",
+            className = "com.tencent.mm.plugin.webview.ui.tools.MMWebViewUI",
+            texts = listOf(
+                "账单详情",
+                "OpenAI",
+                "-102.00",
+                "消费金额 USD 15.00",
+                "优惠说明",
+                "微信立减金",
+                "-¥7.20",
+                "当前状态", "支付成功",
+                "支付方式", "招商银行信用卡(6688)",
+                "交易单号", "420000123498765432"
+            )
+        )
+        val outcome2 = parser.parse(wechatForeignWithMultilineDiscount, aliases, accounts, categories)
+        assertEquals(ScreenPageKind.BILL_DETAIL, outcome2.pageKind)
+        val draft2 = outcome2.draft
+        assertNotNull(draft2)
+        assertEquals("USD", draft2!!.origCurrency)
+        assertEquals(MoneyAmount.parseToMicros("15.00"), draft2.origAmountMicros)
+        assertEquals(MoneyAmount.parseToMicros("102.00"), draft2.manualAccountAmountMicros)
+    }
+
+    @Test
+    fun doesNotFalseTriggerIgnoredAmountOnCoffeeMerchantProvinceOrYuEBao() {
+        val coffeeAndYuEBao = ScreenSnapshot(
+            packageName = "com.eg.android.AlipayGphone",
+            className = "BillDetailActivity",
+            texts = listOf(
+                "账单详情",
+                "Starbucks Coffee",
+                "-35.00",
+                "当前状态", "交易成功",
+                "付款方式", "余额宝",
+                "创建时间", "2026-11-22 15:00:00",
+                "订单号", "202611220000111122"
+            )
+        )
+        val outcome1 = parser.parse(coffeeAndYuEBao, aliases, accounts, categories)
+        assertEquals(ScreenPageKind.BILL_DETAIL, outcome1.pageKind)
+        assertNotNull(outcome1.draft)
+        assertEquals(MoneyAmount.parseToMicros("35.00"), outcome1.draft!!.origAmountMicros)
+        assertEquals("Starbucks Coffee", outcome1.draft!!.merchant)
+
+        val provinceMerchant = ScreenSnapshot(
+            packageName = "com.tencent.mm",
+            className = "com.tencent.mm.plugin.wallet_core.ui.WalletPaidSuccessUI",
+            texts = listOf(
+                "支付成功",
+                "浙江省杭州市星巴克门店 ¥42.00",
+                "完成"
+            )
+        )
+        val outcome2 = parser.parse(provinceMerchant, aliases, accounts, categories)
+        assertEquals(ScreenPageKind.PAY_SUCCESS, outcome2.pageKind)
+        assertNotNull(outcome2.draft)
+        assertEquals(MoneyAmount.parseToMicros("42.00"), outcome2.draft!!.origAmountMicros)
+    }
 }

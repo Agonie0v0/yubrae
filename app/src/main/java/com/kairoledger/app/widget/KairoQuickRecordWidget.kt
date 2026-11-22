@@ -52,7 +52,7 @@ private enum class QuickWidgetIconKind {
 }
 
 /**
- * 棱账 4x1 一木风快捷工具条桌面小组件：
+ * 棱账 4x1 快捷工具条桌面小组件：
  * 提供「记一笔」「语音/AI记」「资产账户」「收支统计」4 个一键直达入口。
  */
 class KairoQuickRecordWidget : GlanceAppWidget() {

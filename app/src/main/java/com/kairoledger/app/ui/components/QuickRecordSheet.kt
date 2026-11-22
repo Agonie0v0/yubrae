@@ -796,9 +796,15 @@ fun QuickRecordSheet(
         }
     }
 
-    val selectedAccount = accounts.firstOrNull { it.id == selectedAccountId }
-    val selectedToAccount = accounts.firstOrNull { it.id == toAccountId }
-    val parsedOrigMicros = QuickExprEval.evaluateToMicros(amountExpr) ?: 0L
+    val selectedAccount = remember(accounts, selectedAccountId) {
+        accounts.firstOrNull { it.id == selectedAccountId }
+    }
+    val selectedToAccount = remember(accounts, toAccountId) {
+        accounts.firstOrNull { it.id == toAccountId }
+    }
+    val parsedOrigMicros = remember(amountExpr) {
+        QuickExprEval.evaluateToMicros(amountExpr) ?: 0L
+    }
 
     val needsSourceConversion = selectedAccount != null &&
         !origCurrency.equals(selectedAccount.currencyCode, ignoreCase = true)
@@ -1478,13 +1484,16 @@ fun QuickRecordSheet(
                     }
                 }
 
-                // 一木清爽 5 列网格分类选择器（一级网格 + 二级胶囊展开）
+                // 清爽 5 列网格分类选择器（一级网格 + 二级胶囊展开）
                 if (txType == TransactionType.EXPENSE || txType == TransactionType.INCOME) {
                     val typeCats = remember(categories, txType) {
                         categories.filter { it.type == txType }.sortedWith(compareBy({ it.sortOrder }, { it.id }))
                     }
                     val parents = remember(typeCats) { typeCats.filter { it.parentId == null } }
-                    val selectedCatObj = typeCats.firstOrNull { it.id == selectedCategoryId }
+                    val parentRows = remember(parents) { parents.chunked(5) }
+                    val selectedCatObj = remember(typeCats, selectedCategoryId) {
+                        typeCats.firstOrNull { it.id == selectedCategoryId }
+                    }
                     val activeParentId = selectedCatObj?.parentId ?: selectedCatObj?.id
                     val subCategories = remember(typeCats, activeParentId) {
                         if (activeParentId != null) typeCats.filter { it.parentId == activeParentId } else emptyList()
@@ -1537,7 +1546,7 @@ fun QuickRecordSheet(
 
                         // 5 列规整分类网格
                         Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                            parents.chunked(5).forEach { rowCats ->
+                            parentRows.forEach { rowCats ->
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.spacedBy(4.dp)
@@ -1705,7 +1714,7 @@ fun QuickRecordSheet(
                                                         viewModel.showMessage("AI 已识别小票并填入表单")
                                                     } else {
                                                         viewModel.showMessage(
-                                                            if (llmEnabled) "未能从小票中提取出有效账单" else "请先在「自动化 -> AI 设置」中开启并配置大模型"
+                                                            if (llmEnabled) "未能从小票中提取出有效账单" else "请先在「我的 -> AI 大模型配置」中开启并配置大模型"
                                                         )
                                                     }
                                                 }.onFailure { err ->

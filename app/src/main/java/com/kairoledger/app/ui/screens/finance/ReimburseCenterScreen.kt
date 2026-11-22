@@ -465,7 +465,7 @@ private fun ReimburseSummaryHeroCard(
                     }
                 }
 
-                // 一木风格 Segmented Tab: 待报销 | 已报销
+                // 分段标签栏 Segmented Tab: 待报销 | 已报销
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()

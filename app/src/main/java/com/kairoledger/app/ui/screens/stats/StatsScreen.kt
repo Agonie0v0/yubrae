@@ -21,10 +21,14 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -33,6 +37,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.rounded.MenuBook
 import androidx.compose.material.icons.automirrored.rounded.TrendingUp
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.ArrowDropDown
@@ -40,6 +45,8 @@ import androidx.compose.material.icons.rounded.CalendarMonth
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.PieChart
+import androidx.compose.material.icons.rounded.Visibility
+import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.DatePicker
@@ -151,35 +158,44 @@ private data class TrendBarItem(
 fun StatsScreen(
     viewModel: KairoMainViewModel,
     contentPadding: PaddingValues = PaddingValues(0.dp),
-    granularity: String = StatsGranularity.MONTHLY,
-    onSelectGranularity: (String) -> Unit = {},
-    anchorDateMillis: Long = System.currentTimeMillis(),
+    granularity: String = "",
+    onSelectGranularity: (String) -> Unit = { target -> viewModel.setStatsGranularity(target) },
+    anchorDateMillis: Long = -1L,
     customStartMillis: Long? = null,
     customEndMillis: Long? = null,
-    onShiftPeriod: (Int) -> Unit = { delta -> viewModel.shiftStatsMonth(delta.toLong()) },
-    onCustomDateRangeChange: (Long, Long) -> Unit = { _, _ -> },
+    onShiftPeriod: (Int) -> Unit = { delta -> viewModel.shiftStatsPeriod(delta) },
+    onCustomDateRangeChange: (Long, Long) -> Unit = { s, e -> viewModel.setStatsCustomRange(s, e) },
     trendBuckets: List<TrendBucketPoint> = emptyList(),
     netWorthHistory: List<NetWorthPoint> = emptyList(),
     allTransactions: List<TransactionEntity> = emptyList(),
     accounts: List<AccountEntity> = emptyList(),
     ledgers: List<LedgerEntity> = emptyList(),
-    activeLedgerId: Long = 1L,
-    onEditTransaction: (TransactionEntity) -> Unit = {}
+    activeLedgerId: Long = -1L,
+    onEditTransaction: (TransactionEntity) -> Unit = {},
+    listState: LazyListState = rememberLazyListState(),
+    onOpenLedgerManager: () -> Unit = {},
+    onTogglePrivacy: () -> Unit = {
+        viewModel.updateSettings { it.copy(privacyMaskEnabled = !it.privacyMaskEnabled) }
+    }
 ) {
     val uiState by viewModel.statsUiState.collectAsStateWithLifecycle()
-    val categories by viewModel.categories.collectAsStateWithLifecycle()
+    val vmLedgers by viewModel.ledgers.collectAsStateWithLifecycle()
     val settings by viewModel.settings.collectAsStateWithLifecycle()
     val rates by viewModel.exchangeRates.collectAsStateWithLifecycle()
-    val vmTransactions by viewModel.allTransactions.collectAsStateWithLifecycle()
-    val vmAccounts by viewModel.allAccounts.collectAsStateWithLifecycle()
-
-    val resolvedTransactions = allTransactions.ifEmpty { vmTransactions }
-    val resolvedAccounts = accounts.ifEmpty { vmAccounts }
     val privacyMasked = LocalPrivacyMasked.current
 
-    var localGranularity by remember(granularity) { mutableStateOf(granularity) }
-    var localCustomStart by remember(customStartMillis) { mutableStateOf(customStartMillis) }
-    var localCustomEnd by remember(customEndMillis) { mutableStateOf(customEndMillis) }
+    val resolvedLedgers = ledgers.ifEmpty { vmLedgers }
+    val resolvedLedgerId = if (activeLedgerId >= 0L) activeLedgerId else settings.activeLedgerId
+    val resolvedGranularity = granularity.ifBlank { uiState.granularity }
+    val resolvedAnchorMillis = if (anchorDateMillis > 0L) anchorDateMillis else uiState.anchorDateMillis
+    val resolvedCustomStart = customStartMillis ?: uiState.customStartMillis
+    val resolvedCustomEnd = customEndMillis ?: uiState.customEndMillis
+    val resolvedTrendBuckets = trendBuckets.ifEmpty { uiState.trendBuckets }
+    val resolvedNetWorthHistory = netWorthHistory.ifEmpty { uiState.netWorthHistory }
+
+    var localGranularity by remember(resolvedGranularity) { mutableStateOf(resolvedGranularity) }
+    var localCustomStart by remember(resolvedCustomStart) { mutableStateOf(resolvedCustomStart) }
+    var localCustomEnd by remember(resolvedCustomEnd) { mutableStateOf(resolvedCustomEnd) }
     var customPickTarget by remember { mutableStateOf<CustomDatePickTarget?>(null) }
 
     var showCurrencyMenu by remember { mutableStateOf(false) }
@@ -191,8 +207,8 @@ fun StatsScreen(
     var drillDownCategory by remember { mutableStateOf<CategoryStat?>(null) }
 
     val zone = ZoneId.systemDefault()
-    val anchorDate = remember(anchorDateMillis) {
-        Instant.ofEpochMilli(anchorDateMillis).atZone(zone).toLocalDate()
+    val anchorDate = remember(resolvedAnchorMillis) {
+        Instant.ofEpochMilli(resolvedAnchorMillis).atZone(zone).toLocalDate()
     }
     val timeWindow = remember(
         localGranularity,
@@ -200,7 +216,7 @@ fun StatsScreen(
         anchorDate,
         localCustomStart,
         localCustomEnd,
-        trendBuckets
+        resolvedTrendBuckets
     ) {
         resolveStatsTimeWindow(
             granularity = localGranularity,
@@ -208,7 +224,7 @@ fun StatsScreen(
             anchorDate = anchorDate,
             customStartMillis = localCustomStart,
             customEndMillis = localCustomEnd,
-            trendBuckets = trendBuckets,
+            trendBuckets = resolvedTrendBuckets,
             zone = zone
         )
     }
@@ -231,29 +247,57 @@ fun StatsScreen(
         }
     }
 
-    val accountMap = remember(resolvedAccounts) { resolvedAccounts.associateBy { it.id } }
-    val ledgerMap = remember(ledgers) { ledgers.associateBy { it.id } }
-    val filteredBudgets = remember(uiState.budgetProgressList, activeLedgerId) {
-        if (activeLedgerId > 0L) {
-            uiState.budgetProgressList.filter { it.budget.ledgerId == activeLedgerId }
+    val ledgerMap = remember(resolvedLedgers) { resolvedLedgers.associateBy { it.id } }
+    val activeLedgerName = remember(resolvedLedgerId, ledgerMap) {
+        when {
+            resolvedLedgerId == 0L -> "全部账本"
+            else -> ledgerMap[resolvedLedgerId]?.name ?: "日常账本"
+        }
+    }
+    val filteredBudgets = remember(uiState.budgetProgressList, resolvedLedgerId) {
+        if (resolvedLedgerId > 0L) {
+            uiState.budgetProgressList.filter { it.budget.ledgerId == resolvedLedgerId }
         } else {
             uiState.budgetProgressList
         }
     }
 
     LazyColumn(
+        state = listState,
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(
-            top = contentPadding.calculateTopPadding() + 8.dp,
-            bottom = contentPadding.calculateBottomPadding() + 88.dp,
-            start = 16.dp,
-            end = 16.dp
+            bottom = contentPadding.calculateBottomPadding() + 88.dp
         ),
-        verticalArrangement = Arrangement.spacedBy(14.dp)
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        // 顶部控制栏：周/月/年/自定义分段胶囊 + 周期标题 + 币种 + 收支切换
-        item(key = "stats_header") {
-            YimuCard(containerColor = MaterialTheme.colorScheme.surfaceContainerLowest) {
+        // 顶部全宽衔接状态栏的紧凑渐变头（左 "统计" + 账本切换胶囊，右 隐私眼睛 + 显示币种胶囊）
+        item(key = "stats_top_header", contentType = "stats_top_header") {
+            StatsTopHeaderCard(
+                activeLedgerName = activeLedgerName,
+                displayCurrency = uiState.displayCurrency,
+                pinnedCurrencies = settings.pinnedCurrencies,
+                privacyMasked = privacyMasked,
+                showCurrencyMenu = showCurrencyMenu,
+                onOpenLedgerManager = onOpenLedgerManager,
+                onTogglePrivacy = onTogglePrivacy,
+                onToggleCurrencyMenu = { showCurrencyMenu = it },
+                onSelectCurrency = { code ->
+                    viewModel.setStatsDisplayCurrency(code)
+                    showCurrencyMenu = false
+                },
+                onOpenMoreCurrencies = {
+                    showCurrencyMenu = false
+                    showMoreCurrencies = true
+                }
+            )
+        }
+
+        // 周期与收支维度控制卡
+        item(key = "stats_header", contentType = "stats_controls") {
+            YimuCard(
+                modifier = Modifier.padding(horizontal = 16.dp),
+                containerColor = MaterialTheme.colorScheme.surfaceContainerLowest
+            ) {
                 Column(
                     modifier = Modifier.padding(14.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
@@ -340,50 +384,23 @@ fun StatsScreen(
                             }
                         }
 
-                        Box {
-                            val info = CurrencyCatalog.find(uiState.displayCurrency)
-                            Surface(
-                                shape = CircleShape,
-                                color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                                modifier = Modifier.clickable { showCurrencyMenu = true }
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                                ) {
-                                    Text(info.flag, style = MaterialTheme.typography.labelMedium)
-                                    Text(
-                                        text = info.code,
-                                        style = MaterialTheme.typography.labelLarge,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                    Icon(Icons.Rounded.ArrowDropDown, null, modifier = Modifier.size(16.dp))
-                                }
-                            }
-                            DropdownMenu(
-                                expanded = showCurrencyMenu,
-                                onDismissRequest = { showCurrencyMenu = false }
-                            ) {
-                                settings.pinnedCurrencies.forEach { code ->
-                                    val itemInfo = CurrencyCatalog.find(code)
-                                    DropdownMenuItem(
-                                        text = { Text("${itemInfo.flag} ${itemInfo.code} · ${itemInfo.nameZh}") },
-                                        onClick = {
-                                            viewModel.setStatsDisplayCurrency(itemInfo.code)
-                                            showCurrencyMenu = false
-                                        }
-                                    )
-                                }
-                                HorizontalDivider()
-                                DropdownMenuItem(
-                                    text = { Text("更多币种...") },
-                                    onClick = {
-                                        showCurrencyMenu = false
-                                        showMoreCurrencies = true
-                                    }
-                                )
-                            }
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            FilterChip(
+                                selected = uiState.selectedType == TransactionType.EXPENSE,
+                                onClick = {
+                                    highlightedCategoryId = null
+                                    viewModel.setStatsType(TransactionType.EXPENSE)
+                                },
+                                label = { Text("支出分析") }
+                            )
+                            FilterChip(
+                                selected = uiState.selectedType == TransactionType.INCOME,
+                                onClick = {
+                                    highlightedCategoryId = null
+                                    viewModel.setStatsType(TransactionType.INCOME)
+                                },
+                                label = { Text("收入分析") }
+                            )
                         }
                     }
 
@@ -423,71 +440,27 @@ fun StatsScreen(
                             )
                         }
                     }
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            FilterChip(
-                                selected = uiState.selectedType == TransactionType.EXPENSE,
-                                onClick = {
-                                    highlightedCategoryId = null
-                                    viewModel.setStatsType(TransactionType.EXPENSE)
-                                },
-                                label = { Text("支出分析") }
-                            )
-                            FilterChip(
-                                selected = uiState.selectedType == TransactionType.INCOME,
-                                onClick = {
-                                    highlightedCategoryId = null
-                                    viewModel.setStatsType(TransactionType.INCOME)
-                                },
-                                label = { Text("收入分析") }
-                            )
-                        }
-
-                        if (ledgers.isNotEmpty()) {
-                            val ledgerName = if (activeLedgerId <= 0L) {
-                                "全部账本"
-                            } else {
-                                ledgerMap[activeLedgerId]?.name ?: "默认账本"
-                            }
-                            Surface(
-                                shape = CircleShape,
-                                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f)
-                            ) {
-                                Text(
-                                    text = ledgerName,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onPrimaryContainer,
-                                    fontWeight = FontWeight.Medium,
-                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
-                                )
-                            }
-                        }
-                    }
                 }
             }
         }
 
-        // 多粒度收支对比柱状图卡片（优先渲染 trendBuckets，空时回退 monthlyTrend）
-        item(key = "trend_bar_chart") {
+        // 多粒度收支对比柱状图卡片（优先渲染 resolvedTrendBuckets，空时回退 monthlyTrend）
+        item(key = "trend_bar_chart", contentType = "trend_chart") {
             TrendBarChartCard(
                 granularity = localGranularity,
-                trendBuckets = trendBuckets,
+                trendBuckets = resolvedTrendBuckets,
                 monthlyTrend = uiState.monthlyTrend,
                 displayCurrency = uiState.displayCurrency,
                 privacyMasked = privacyMasked,
                 onSelectMonth = { year, month ->
                     viewModel.setStatsMonth(YearMonth.of(year, month))
-                }
+                },
+                modifier = Modifier.padding(horizontal = 16.dp)
             )
         }
 
         // 分类占比环形图 + 排行榜点击下钻明细
-        item(key = "category_donut_card") {
+        item(key = "category_donut_card", contentType = "category_donut") {
             CategoryBreakdownCard(
                 stats = uiState.categoryStats,
                 totalMicros = uiState.totalCategoryAmountMicros,
@@ -498,44 +471,58 @@ fun StatsScreen(
                 onSelectCategory = { stat ->
                     highlightedCategoryId = stat.categoryId
                     drillDownCategory = stat
-                }
+                },
+                modifier = Modifier.padding(horizontal = 16.dp)
             )
         }
 
         // 净资产历史走势 Canvas 折线图卡片
-        item(key = "net_worth_history_card") {
+        item(key = "net_worth_history_card", contentType = "net_worth_chart") {
             NetWorthHistoryCard(
-                points = netWorthHistory,
+                points = resolvedNetWorthHistory,
                 displayCurrency = uiState.displayCurrency,
-                privacyMasked = privacyMasked
+                privacyMasked = privacyMasked,
+                modifier = Modifier.padding(horizontal = 16.dp)
             )
         }
 
         // 预算管理卡片（总进度 + 上月结转 + 剩余日均可用）
-        item(key = "budget_management") {
+        item(key = "budget_management", contentType = "budget_card") {
             BudgetManagementCard(
                 budgets = filteredBudgets,
                 displayCurrency = uiState.displayCurrency,
                 rates = rates,
                 ledgerMap = ledgerMap,
-                showLedgerBadge = ledgers.size > 1,
+                showLedgerBadge = resolvedLedgers.size > 1,
                 privacyMasked = privacyMasked,
                 onAddBudget = { showCreateBudget = true },
                 onEditBudget = { editingBudget = it },
-                onDeleteBudget = { deleteBudgetCandidate = it }
+                onDeleteBudget = { deleteBudgetCandidate = it },
+                modifier = Modifier.padding(horizontal = 16.dp)
             )
         }
     }
 
-    // 分类明细下钻 ModalBottomSheet
+    // 分类明细下钻 ModalBottomSheet（仅在打开时才按需收集交易与账户明细流）
     drillDownCategory?.let { targetStat ->
+        val resolvedTransactions = if (allTransactions.isNotEmpty()) {
+            allTransactions
+        } else {
+            viewModel.allTransactions.collectAsStateWithLifecycle().value
+        }
+        val resolvedAccounts = if (accounts.isNotEmpty()) {
+            accounts
+        } else {
+            viewModel.allAccounts.collectAsStateWithLifecycle().value
+        }
+        val accountMap = remember(resolvedAccounts) { resolvedAccounts.associateBy { it.id } }
         val txById = remember(resolvedTransactions) { resolvedTransactions.associateBy { it.id } }
         val drillDownTxs = remember(
             resolvedTransactions,
             targetStat,
             timeWindow,
             uiState.selectedType,
-            activeLedgerId
+            resolvedLedgerId
         ) {
             filterCategoryDrillDownTransactions(
                 transactions = resolvedTransactions,
@@ -544,7 +531,7 @@ fun StatsScreen(
                 selectedType = uiState.selectedType,
                 startMillis = timeWindow.first,
                 endMillis = timeWindow.second,
-                activeLedgerId = activeLedgerId
+                activeLedgerId = resolvedLedgerId
             )
         }
 
@@ -615,11 +602,12 @@ fun StatsScreen(
     }
 
     if (showCreateBudget || editingBudget != null) {
+        val categories by viewModel.categories.collectAsStateWithLifecycle()
         BudgetEditorDialog(
             existing = editingBudget,
             expenseCategories = categories.filter { it.type == TransactionType.EXPENSE },
-            ledgers = ledgers,
-            activeLedgerId = activeLedgerId,
+            ledgers = resolvedLedgers,
+            activeLedgerId = resolvedLedgerId,
             pinnedCurrencies = settings.pinnedCurrencies,
             defaultCurrency = settings.baseCurrency,
             onSave = { budget ->
@@ -656,6 +644,157 @@ fun StatsScreen(
             onSelect = { viewModel.setStatsDisplayCurrency(it) },
             onDismiss = { showMoreCurrencies = false }
         )
+    }
+}
+
+@Composable
+private fun StatsTopHeaderCard(
+    activeLedgerName: String,
+    displayCurrency: String,
+    pinnedCurrencies: List<String>,
+    privacyMasked: Boolean,
+    showCurrencyMenu: Boolean,
+    onOpenLedgerManager: () -> Unit,
+    onTogglePrivacy: () -> Unit,
+    onToggleCurrencyMenu: (Boolean) -> Unit,
+    onSelectCurrency: (String) -> Unit,
+    onOpenMoreCurrencies: () -> Unit
+) {
+    val semantic = KairoTheme.semantic
+    val info = CurrencyCatalog.find(displayCurrency)
+    val gradientColors = if (semantic.isDark) {
+        listOf(Color(0xFF143E2D), Color(0xFF1D4F3B), Color(0xFF15382A))
+    } else {
+        listOf(Color(0xFFE3F7EE), Color(0xFFD2EFE1), Color(0xFFEDF9F3))
+    }
+    val titleColor = if (semantic.isDark) Color(0xFFCFF7E3) else Color(0xFF0A3D28)
+    val pillBgColor = if (semantic.isDark) {
+        Color(0xFF0F251C).copy(alpha = 0.72f)
+    } else {
+        Color.White.copy(alpha = 0.86f)
+    }
+
+    Surface(
+        shape = RoundedCornerShape(bottomStart = 24.dp, bottomEnd = 24.dp),
+        color = Color.Transparent,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(Brush.linearGradient(colors = gradientColors))
+                .statusBarsPadding()
+                .padding(start = 18.dp, end = 14.dp, top = 10.dp, bottom = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.weight(1f, fill = false)
+            ) {
+                Text(
+                    text = "统计",
+                    style = MaterialTheme.typography.titleLarge,
+                    color = titleColor,
+                    fontWeight = FontWeight.Bold
+                )
+                Surface(
+                    shape = CircleShape,
+                    color = pillBgColor,
+                    modifier = Modifier
+                        .clip(CircleShape)
+                        .clickable(onClick = onOpenLedgerManager)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Rounded.MenuBook,
+                            contentDescription = null,
+                            tint = titleColor,
+                            modifier = Modifier.size(15.dp)
+                        )
+                        Text(
+                            text = activeLedgerName,
+                            style = MaterialTheme.typography.labelLarge,
+                            color = titleColor,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.widthIn(max = 120.dp)
+                        )
+                        Icon(
+                            imageVector = Icons.Rounded.ArrowDropDown,
+                            contentDescription = "切换账本",
+                            tint = titleColor,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                }
+            }
+
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                IconButton(onClick = onTogglePrivacy) {
+                    Icon(
+                        imageVector = if (privacyMasked) Icons.Rounded.VisibilityOff else Icons.Rounded.Visibility,
+                        contentDescription = if (privacyMasked) "关闭隐私遮罩" else "开启隐私遮罩",
+                        tint = titleColor
+                    )
+                }
+                Box {
+                    Surface(
+                        shape = CircleShape,
+                        color = pillBgColor,
+                        modifier = Modifier
+                            .clip(CircleShape)
+                            .clickable { onToggleCurrencyMenu(true) }
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Text(info.flag, style = MaterialTheme.typography.labelMedium)
+                            Text(
+                                text = info.code,
+                                style = MaterialTheme.typography.labelLarge,
+                                fontWeight = FontWeight.Bold,
+                                color = titleColor
+                            )
+                            Icon(
+                                imageVector = Icons.Rounded.ArrowDropDown,
+                                contentDescription = "切换展示币种",
+                                tint = titleColor,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
+                    DropdownMenu(
+                        expanded = showCurrencyMenu,
+                        onDismissRequest = { onToggleCurrencyMenu(false) }
+                    ) {
+                        pinnedCurrencies.forEach { code ->
+                            val itemInfo = CurrencyCatalog.find(code)
+                            DropdownMenuItem(
+                                text = { Text("${itemInfo.flag} ${itemInfo.code} · ${itemInfo.nameZh}") },
+                                onClick = { onSelectCurrency(itemInfo.code) }
+                            )
+                        }
+                        HorizontalDivider()
+                        DropdownMenuItem(
+                            text = { Text("更多币种...") },
+                            onClick = onOpenMoreCurrencies
+                        )
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -723,7 +862,8 @@ private fun TrendBarChartCard(
     monthlyTrend: List<MonthlyPoint>,
     displayCurrency: String,
     privacyMasked: Boolean,
-    onSelectMonth: (Int, Int) -> Unit
+    onSelectMonth: (Int, Int) -> Unit,
+    modifier: Modifier = Modifier
 ) {
     val semantic = KairoTheme.semantic
     val zone = ZoneId.systemDefault()
@@ -770,7 +910,7 @@ private fun TrendBarChartCard(
         else -> "近 6 个月收支趋势 ($displayCurrency)"
     }
 
-    YimuCard {
+    YimuCard(modifier = modifier) {
         Column(
             modifier = Modifier.padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
@@ -989,12 +1129,13 @@ private fun CategoryBreakdownCard(
     displayCurrency: String,
     privacyMasked: Boolean,
     highlightedCategoryId: Long?,
-    onSelectCategory: (CategoryStat) -> Unit
+    onSelectCategory: (CategoryStat) -> Unit,
+    modifier: Modifier = Modifier
 ) {
     val titleText = if (type == TransactionType.EXPENSE) "支出分类占比" else "收入分类占比"
     val trackBgColor = MaterialTheme.colorScheme.surfaceContainerHighest
 
-    YimuCard {
+    YimuCard(modifier = modifier) {
         Column(
             modifier = Modifier.padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
@@ -1425,7 +1566,8 @@ private fun CategoryDrillDownBottomSheet(
 private fun NetWorthHistoryCard(
     points: List<NetWorthPoint>,
     displayCurrency: String,
-    privacyMasked: Boolean
+    privacyMasked: Boolean,
+    modifier: Modifier = Modifier
 ) {
     val semantic = KairoTheme.semantic
     val mintColor = if (semantic.isDark) Color(0xFF5BD2A0) else Color(0xFF2AA876)
@@ -1442,7 +1584,7 @@ private fun NetWorthHistoryCard(
         color = mintColor
     )
 
-    YimuCard {
+    YimuCard(modifier = modifier) {
         Column(
             modifier = Modifier.padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
@@ -1774,12 +1916,13 @@ private fun BudgetManagementCard(
     privacyMasked: Boolean,
     onAddBudget: () -> Unit,
     onEditBudget: (BudgetEntity) -> Unit,
-    onDeleteBudget: (BudgetEntity) -> Unit
+    onDeleteBudget: (BudgetEntity) -> Unit,
+    modifier: Modifier = Modifier
 ) {
     val semantic = KairoTheme.semantic
     val mintColor = MaterialTheme.colorScheme.primary
 
-    YimuCard {
+    YimuCard(modifier = modifier) {
         Column(
             modifier = Modifier.padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
@@ -1809,22 +1952,25 @@ private fun BudgetManagementCard(
                 )
             } else {
                 // 卡片顶部总预算进度汇总（优先取全局总预算，若无则汇总全部分类预算）
-                val summaryTargets = budgets.filter { it.budget.categoryId == null }.ifEmpty { budgets }
-                val totalSpentDisplay = summaryTargets.sumOf { bp ->
-                    convertBetweenCurrencies(
-                        bp.spentInBudgetCurrencyMicros,
-                        bp.budget.currencyCode,
-                        displayCurrency,
-                        rates
-                    )
-                }
-                val totalLimitDisplay = summaryTargets.sumOf { bp ->
-                    convertBetweenCurrencies(
-                        bp.limitInBudgetCurrencyMicros,
-                        bp.budget.currencyCode,
-                        displayCurrency,
-                        rates
-                    )
+                val (totalSpentDisplay, totalLimitDisplay) = remember(budgets, displayCurrency, rates) {
+                    val summaryTargets = budgets.filter { it.budget.categoryId == null }.ifEmpty { budgets }
+                    val spent = summaryTargets.sumOf { bp ->
+                        convertBetweenCurrencies(
+                            bp.spentInBudgetCurrencyMicros,
+                            bp.budget.currencyCode,
+                            displayCurrency,
+                            rates
+                        )
+                    }
+                    val limit = summaryTargets.sumOf { bp ->
+                        convertBetweenCurrencies(
+                            bp.limitInBudgetCurrencyMicros,
+                            bp.budget.currencyCode,
+                            displayCurrency,
+                            rates
+                        )
+                    }
+                    spent to limit
                 }
                 val totalRatio = if (totalLimitDisplay > 0L) {
                     (totalSpentDisplay.toDouble() / totalLimitDisplay.toDouble()).toFloat()

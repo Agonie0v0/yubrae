@@ -4,6 +4,6 @@
     <string name="notification_listener_label">棱账自动记账监听</string>
     <string name="widget_description">棱账本月收支概览与实时汇率看板</string>
     <string name="quick_widget_label">棱账快捷记账条</string>
-    <string name="quick_widget_description">一木风 4x1 快捷工具条：一键记一笔、语音/AI记、资产账户与收支统计</string>
+    <string name="quick_widget_description">棱账 4x1 快捷工具条：一键记一笔、语音/AI记、资产账户与收支统计</string>
     <string name="accessibility_service_description">仅在打开微信、支付宝、云闪付及银行账单或支付完成页面时提取金额、币种、付款方式与单号，自动唤起记账确认卡片；不读取聊天记录，数据仅在本地处理。</string>
 </resources>

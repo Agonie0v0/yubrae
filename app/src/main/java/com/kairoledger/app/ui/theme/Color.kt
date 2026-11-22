@@ -95,7 +95,7 @@ val WarningContainerLight = Color(0xFFFEF3C7)
 val WarningDark = Color(0xFFFBBF24)
 val WarningContainerDark = Color(0xFF4B3008)
 
-// 一木清新薄荷绿卡片风（YIMU_FRESH）
+// 薄荷清风卡片色板（YIMU_FRESH）
 val YimuPrimaryLight = Color(0xFF2AA876)
 val YimuOnPrimaryLight = Color(0xFFFFFFFF)
 val YimuPrimaryContainerLight = Color(0xFFE4F6EE)

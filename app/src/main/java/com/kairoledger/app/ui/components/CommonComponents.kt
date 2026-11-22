@@ -642,7 +642,7 @@ fun formatPrivacyAmount(masked: Boolean, raw: String): String =
     if (masked) "****" else raw
 
 /**
- * 一木记账风格统一大圆角柔和卡片容器。
+ * 棱账风格统一大圆角柔和卡片容器。
  */
 @Composable
 fun YimuCard(
@@ -678,7 +678,7 @@ fun YimuCard(
 }
 
 /**
- * 一木风格圆形彩色图标徽章（柔和浅底 + 高对比主题色图标）。
+ * 圆形彩色图标徽章（柔和浅底 + 高对比主题色图标）。
  */
 @Composable
 fun CategoryIconBadge(

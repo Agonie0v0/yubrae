@@ -1,5 +1,6 @@
 package com.kairoledger.app.ui.screens.transactions
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -21,10 +22,15 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -37,6 +43,7 @@ import androidx.compose.material.icons.automirrored.rounded.MenuBook
 import androidx.compose.material.icons.automirrored.rounded.ViewList
 import androidx.compose.material.icons.rounded.AccountBalanceWallet
 import androidx.compose.material.icons.rounded.ArrowDropDown
+import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.CalendarMonth
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.CheckBox
@@ -54,6 +61,8 @@ import androidx.compose.material.icons.rounded.Replay
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.SelectAll
 import androidx.compose.material.icons.rounded.Tune
+import androidx.compose.material.icons.rounded.Visibility
+import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -69,24 +78,22 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
-import androidx.compose.material3.SwipeToDismissBox
-import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
-import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
@@ -94,6 +101,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.kairoledger.app.core.model.CurrencyCatalog
 import com.kairoledger.app.core.model.MoneyAmount
 import com.kairoledger.app.data.db.AccountEntity
 import com.kairoledger.app.data.db.AliasMatchType
@@ -140,7 +148,7 @@ fun TransactionsScreen(
     onEditTransaction: (TransactionEntity) -> Unit,
     onOpenQuickRecord: () -> Unit,
     contentPadding: PaddingValues = PaddingValues(0.dp),
-    activeLedgerId: Long = 1L,
+    activeLedgerId: Long = -1L,
     ledgers: List<LedgerEntity> = emptyList(),
     selectedCategoryIdFilter: Long? = null,
     onSelectCategoryFilter: (Long?) -> Unit = {},
@@ -151,39 +159,57 @@ fun TransactionsScreen(
     onAmountRangeFilterChange: (String, String) -> Unit = { _, _ -> },
     onRefundTransaction: (TransactionEntity) -> Unit = {},
     onBatchUpdateCategory: (List<Long>, Long?) -> Unit = { _, _ -> },
-    onBatchDeleteTransactions: (List<Long>) -> Unit = {}
+    onBatchDeleteTransactions: (List<Long>) -> Unit = {},
+    listState: LazyListState = rememberLazyListState(),
+    onOpenLedgerManager: () -> Unit = {},
+    onTogglePrivacy: () -> Unit = {
+        viewModel.updateSettings { it.copy(privacyMaskEnabled = !it.privacyMaskEnabled) }
+    },
+    onOpenSmartInput: () -> Unit = {}
 ) {
     val uiState by viewModel.transactionsUiState.collectAsStateWithLifecycle()
     val accounts by viewModel.allAccounts.collectAsStateWithLifecycle()
     val activeAccounts by viewModel.activeAccounts.collectAsStateWithLifecycle()
     val categories by viewModel.categories.collectAsStateWithLifecycle()
     val rates by viewModel.exchangeRates.collectAsStateWithLifecycle()
+    val vmLedgers by viewModel.ledgers.collectAsStateWithLifecycle()
+    val settings by viewModel.settings.collectAsStateWithLifecycle()
     val privacyMasked = LocalPrivacyMasked.current
+
+    val resolvedLedgers = ledgers.ifEmpty { vmLedgers }
+    val resolvedLedgerId = if (activeLedgerId >= 0L) activeLedgerId else settings.activeLedgerId
 
     val accountMap = remember(accounts) { accounts.associateBy { it.id } }
     val categoryMap = remember(categories) { categories.associateBy { it.id } }
-    val ledgerMap = remember(ledgers) { ledgers.associateBy { it.id } }
-    val childrenByParent = remember(categories) {
-        categories.filter { it.parentId != null }
-            .groupBy { it.parentId!! }
-            .mapValues { (_, list) -> list.map { it.id }.toHashSet() }
-    }
+    val ledgerMap = remember(resolvedLedgers) { resolvedLedgers.associateBy { it.id } }
 
     // 视图模式与日历选中日
-    var viewMode by remember { mutableStateOf(TxViewMode.LIST) }
+    var viewMode by rememberSaveable { mutableStateOf(TxViewMode.LIST) }
     var selectedCalendarDate by remember(uiState.filters.yearMonth) { mutableStateOf<LocalDate?>(null) }
 
-    // 本地同步高级筛选状态（既支持外部 ViewModel 控制，也可独立即刻生效）
-    var showAdvancedFilters by remember { mutableStateOf(false) }
-    var localCategoryIdFilter by remember(selectedCategoryIdFilter) { mutableStateOf(selectedCategoryIdFilter) }
-    var localReimburseFilter by remember(selectedReimburseFilter) { mutableStateOf(selectedReimburseFilter) }
-    var localMinAmountText by remember(minAmountFilterText) { mutableStateOf(minAmountFilterText) }
-    var localMaxAmountText by remember(maxAmountFilterText) { mutableStateOf(maxAmountFilterText) }
+    // 搜索与筛选区默认折叠，把首屏完整留给账单列表
+    var searchBarExpanded by rememberSaveable { mutableStateOf(false) }
+    var showAdvancedFilters by rememberSaveable { mutableStateOf(false) }
 
-    // 批量多选模式与行内左滑快捷操作状态
+    val filters = uiState.filters
+    var localMinAmountText by rememberSaveable {
+        mutableStateOf(
+            filters.minAmountMicros?.let {
+                MoneyAmount.formatPlain(it, CurrencyCatalog.find(uiState.baseCurrency).minorDigits, false)
+            } ?: minAmountFilterText
+        )
+    }
+    var localMaxAmountText by rememberSaveable {
+        mutableStateOf(
+            filters.maxAmountMicros?.let {
+                MoneyAmount.formatPlain(it, CurrencyCatalog.find(uiState.baseCurrency).minorDigits, false)
+            } ?: maxAmountFilterText
+        )
+    }
+
+    // 批量多选模式状态
     var isMultiSelectMode by remember { mutableStateOf(false) }
     var selectedTxIds by remember { mutableStateOf(emptySet<Long>()) }
-    var expandedQuickActionTxId by remember { mutableStateOf<Long?>(null) }
     var showBatchCategoryDialog by remember { mutableStateOf(false) }
     var showBatchDeleteConfirm by remember { mutableStateOf(false) }
 
@@ -192,131 +218,56 @@ fun TransactionsScreen(
     var showAccountFilterMenu by remember { mutableStateOf(false) }
     var showChannelFilterMenu by remember { mutableStateOf(false) }
 
-    val minAmountMicros = remember(localMinAmountText) {
-        localMinAmountText.takeIf { it.isNotBlank() }?.let { MoneyAmount.parseToMicros(it) }?.takeIf { it >= 0L }
-    }
-    val maxAmountMicros = remember(localMaxAmountText) {
-        localMaxAmountText.takeIf { it.isNotBlank() }?.let { MoneyAmount.parseToMicros(it) }?.takeIf { it >= 0L }
+    BackHandler(enabled = isMultiSelectMode) {
+        isMultiSelectMode = false
+        selectedTxIds = emptySet()
     }
 
-    // 基于 uiState.groupedDays 进行账本 / 分类 / 报销 / 金额区间二次过滤并重算天内小计
-    val filteredMonthDays = remember(
-        uiState.groupedDays,
-        uiState.baseCurrency,
-        rates,
-        activeLedgerId,
-        localCategoryIdFilter,
-        localReimburseFilter,
-        minAmountMicros,
-        maxAmountMicros,
-        childrenByParent
-    ) {
-        val targetCatIds = localCategoryIdFilter?.let { filterId ->
-            setOf(filterId) + (childrenByParent[filterId] ?: emptySet())
-        }
-        uiState.groupedDays.mapNotNull { group ->
-            val matchedTxs = group.transactions.filter { tx ->
-                val matchLedger = activeLedgerId <= 0L || tx.ledgerId == activeLedgerId
-                val matchCat = targetCatIds == null || tx.categoryId in targetCatIds
-                val matchReimburse = localReimburseFilter == "ALL" || tx.reimburseStatus == localReimburseFilter
-                val matchAmount = if (minAmountMicros != null || maxAmountMicros != null) {
-                    val baseAmt = abs(viewModel.convertTxToDisplayBase(tx, uiState.baseCurrency, rates))
-                    (minAmountMicros == null || baseAmt >= minAmountMicros) &&
-                        (maxAmountMicros == null || baseAmt <= maxAmountMicros)
-                } else {
-                    true
-                }
-                matchLedger && matchCat && matchReimburse && matchAmount
-            }
-            if (matchedTxs.isEmpty()) {
-                null
-            } else {
-                var dayExp = 0L
-                var dayInc = 0L
-                matchedTxs.forEach { tx ->
-                    if (tx.status == TransactionStatus.CONFIRMED && !tx.excludeFromStats) {
-                        val amt = viewModel.convertTxToDisplayBase(tx, uiState.baseCurrency, rates)
-                        when (tx.type) {
-                            TransactionType.EXPENSE -> dayExp += amt
-                            TransactionType.INCOME -> if (tx.refundOfTxId == null) {
-                                dayInc += amt
-                            }
-                        }
-                    }
-                }
-                DayTransactionGroup(
-                    date = group.date,
-                    transactions = matchedTxs,
-                    dayExpenseBaseMicros = dayExp,
-                    dayIncomeBaseMicros = dayInc
-                )
-            }
-        }
-    }
-
-    // 日历视图单日下钻过滤
-    val visibleDays = remember(filteredMonthDays, viewMode, selectedCalendarDate) {
+    // 直接渲染后台预处理好的 uiState.groupedDays（仅日历选日时按单日下钻）
+    val visibleDays = remember(uiState.groupedDays, viewMode, selectedCalendarDate) {
         if (viewMode == TxViewMode.CALENDAR && selectedCalendarDate != null) {
-            filteredMonthDays.filter { it.date == selectedCalendarDate }
+            uiState.groupedDays.filter { it.date == selectedCalendarDate }
         } else {
-            filteredMonthDays
+            uiState.groupedDays
         }
     }
 
-    val hasAnySubFilter = uiState.filters.query.isNotBlank() ||
-        uiState.filters.currencyFilter != "ALL" ||
-        uiState.filters.accountIdFilter != null ||
-        uiState.filters.channelFilter != "ALL" ||
-        localCategoryIdFilter != null ||
-        localReimburseFilter != "ALL" ||
-        minAmountMicros != null ||
-        maxAmountMicros != null
+    val hasAnySubFilter = filters.query.isNotBlank() ||
+        filters.currencyFilter != "ALL" ||
+        filters.accountIdFilter != null ||
+        filters.channelFilter != "ALL" ||
+        filters.categoryIdFilter != null ||
+        filters.reimburseFilter != "ALL" ||
+        filters.minAmountMicros != null ||
+        filters.maxAmountMicros != null
 
-    val advancedFilterCount = listOfNotNull(
-        localCategoryIdFilter,
-        localReimburseFilter.takeIf { it != "ALL" },
-        minAmountMicros ?: maxAmountMicros
-    ).size
+    val showSearchAndFilterSection = searchBarExpanded || hasAnySubFilter
 
-    // 月度汇总（若筛选条件为空且存在当前账本过滤/退款冲减，则精确重算当月有效收支）
-    val (displayMonthExpense, displayMonthIncome) = remember(
-        filteredMonthDays,
-        uiState.monthExpenseBaseMicros,
-        uiState.monthIncomeBaseMicros,
-        uiState.baseCurrency,
-        rates,
-        hasAnySubFilter,
-        activeLedgerId
+    val advancedFilterCount = remember(
+        filters.categoryIdFilter,
+        filters.reimburseFilter,
+        filters.minAmountMicros,
+        filters.maxAmountMicros
     ) {
-        if (!hasAnySubFilter) {
-            var exp = 0L
-            var inc = 0L
-            filteredMonthDays.forEach { day ->
-                day.transactions.forEach { tx ->
-                    if (tx.status == TransactionStatus.CONFIRMED && !tx.excludeFromStats) {
-                        val amt = viewModel.convertTxToDisplayBase(tx, uiState.baseCurrency, rates)
-                        when {
-                            tx.type == TransactionType.EXPENSE -> exp += amt
-                            tx.type == TransactionType.INCOME && tx.refundOfTxId != null -> exp -= amt
-                            tx.type == TransactionType.INCOME -> inc += amt
-                        }
-                    }
-                }
-            }
-            exp.coerceAtLeast(0L) to inc
+        listOfNotNull(
+            filters.categoryIdFilter,
+            filters.reimburseFilter.takeIf { it != "ALL" },
+            filters.minAmountMicros ?: filters.maxAmountMicros
+        ).size
+    }
+
+    val allVisibleTxIds = remember(visibleDays, isMultiSelectMode) {
+        if (isMultiSelectMode) {
+            visibleDays.flatMap { day -> day.transactions.map { it.id } }
         } else {
-            uiState.monthExpenseBaseMicros to uiState.monthIncomeBaseMicros
+            emptyList()
         }
     }
 
-    val allVisibleTxIds = remember(visibleDays) {
-        visibleDays.flatMap { day -> day.transactions.map { it.id } }
-    }
-
-    val activeLedgerLabel = remember(activeLedgerId, ledgerMap) {
+    val activeLedgerLabel = remember(resolvedLedgerId, ledgerMap) {
         when {
-            activeLedgerId == 0L -> "全部账本"
-            else -> ledgerMap[activeLedgerId]?.name
+            resolvedLedgerId == 0L -> "全部账本"
+            else -> ledgerMap[resolvedLedgerId]?.name
         }
     }
 
@@ -344,47 +295,42 @@ fun TransactionsScreen(
                     isMultiSelectMode = false
                     selectedTxIds = emptySet()
                 },
-                modifier = Modifier.padding(
-                    top = contentPadding.calculateTopPadding() + 4.dp,
-                    start = 16.dp,
-                    end = 16.dp,
-                    bottom = 4.dp
-                )
+                modifier = Modifier
+                    .statusBarsPadding()
+                    .padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 4.dp)
             )
         }
 
         LazyColumn(
+            state = listState,
             modifier = Modifier
                 .weight(1f)
                 .fillMaxWidth(),
             contentPadding = PaddingValues(
-                top = if (isMultiSelectMode) 4.dp else contentPadding.calculateTopPadding() + 8.dp,
-                bottom = contentPadding.calculateBottomPadding() + 88.dp,
-                start = 16.dp,
-                end = 16.dp
-            ),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+                bottom = contentPadding.calculateBottomPadding() + 88.dp
+            )
         ) {
-            // 顶部月份切换器
-            item(key = "month_switcher") {
-                MonthSwitcherBar(
-                    yearMonth = uiState.filters.yearMonth,
-                    activeLedgerName = activeLedgerLabel,
-                    onPrev = { viewModel.shiftTxMonth(-1) },
-                    onNext = { viewModel.shiftTxMonth(1) },
-                    onResetCurrent = { viewModel.setTxMonth(YearMonth.now()) }
-                )
-            }
-
-            // 一木清新绿月度汇总卡（含列表/日历一键切换按钮）
-            item(key = "monthly_overview") {
-                MonthlyOverviewCard(
+            // 贴合状态栏的柔和薄荷绿渐变顶区（含账本切换、搜索/隐私/智能记账、月份切换、列表/日历切换与本月收支总览）
+            item(key = "top_header", contentType = "top_header") {
+                TransactionsTopHeaderCard(
+                    activeLedgerLabel = activeLedgerLabel ?: "日常账本",
+                    yearMonth = filters.yearMonth,
                     baseCurrency = uiState.baseCurrency,
-                    expenseMicros = displayMonthExpense,
-                    incomeMicros = displayMonthIncome,
-                    balanceMicros = displayMonthIncome - displayMonthExpense,
+                    expenseMicros = uiState.monthExpenseBaseMicros,
+                    incomeMicros = uiState.monthIncomeBaseMicros,
+                    balanceMicros = uiState.monthBalanceBaseMicros,
                     privacyMasked = privacyMasked,
                     viewMode = viewMode,
+                    searchExpanded = showSearchAndFilterSection,
+                    hasActiveFilter = hasAnySubFilter,
+                    applyStatusBarPadding = !isMultiSelectMode,
+                    onOpenLedgerManager = onOpenLedgerManager,
+                    onToggleSearch = { searchBarExpanded = !searchBarExpanded },
+                    onTogglePrivacy = onTogglePrivacy,
+                    onOpenSmartInput = onOpenSmartInput,
+                    onPrevMonth = { viewModel.shiftTxMonth(-1) },
+                    onNextMonth = { viewModel.shiftTxMonth(1) },
+                    onResetCurrentMonth = { viewModel.setTxMonth(YearMonth.now()) },
                     onToggleViewMode = {
                         viewMode = if (viewMode == TxViewMode.LIST) TxViewMode.CALENDAR else TxViewMode.LIST
                         if (viewMode == TxViewMode.LIST) {
@@ -394,13 +340,232 @@ fun TransactionsScreen(
                 )
             }
 
+            // 折叠式搜索与基础/高级筛选栏
+            if (showSearchAndFilterSection) {
+                item(key = "search_filter", contentType = "search_filter") {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = 16.dp, end = 16.dp, top = 10.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedTextField(
+                            value = filters.query,
+                            onValueChange = { viewModel.setTxQuery(it) },
+                            placeholder = { Text("搜索商户、备注或标签...") },
+                            leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
+                            trailingIcon = {
+                                if (filters.query.isNotEmpty()) {
+                                    IconButton(onClick = { viewModel.setTxQuery("") }) {
+                                        Icon(Icons.Rounded.Close, contentDescription = "清除搜索")
+                                    }
+                                }
+                            },
+                            singleLine = true,
+                            shape = RoundedCornerShape(16.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        )
+
+                        LazyRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            item(key = "advanced_filter_toggle") {
+                                FilterChip(
+                                    selected = showAdvancedFilters || advancedFilterCount > 0,
+                                    onClick = { showAdvancedFilters = !showAdvancedFilters },
+                                    leadingIcon = {
+                                        Icon(Icons.Rounded.FilterList, null, modifier = Modifier.size(16.dp))
+                                    },
+                                    trailingIcon = {
+                                        Icon(
+                                            imageVector = if (showAdvancedFilters) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    },
+                                    label = {
+                                        Text(if (advancedFilterCount > 0) "高级筛选 ($advancedFilterCount)" else "高级筛选")
+                                    }
+                                )
+                            }
+
+                            if (hasAnySubFilter) {
+                                item(key = "reset_all_filters") {
+                                    FilterChip(
+                                        selected = false,
+                                        onClick = {
+                                            viewModel.setTxQuery("")
+                                            viewModel.setTxCurrencyFilter("ALL")
+                                            viewModel.setTxAccountFilter(null)
+                                            viewModel.setTxChannelFilter("ALL")
+                                            viewModel.clearTxAdvancedFilters()
+                                            localMinAmountText = ""
+                                            localMaxAmountText = ""
+                                            onSelectCategoryFilter(null)
+                                            onSelectReimburseFilter("ALL")
+                                            onAmountRangeFilterChange("", "")
+                                            searchBarExpanded = false
+                                        },
+                                        leadingIcon = {
+                                            Icon(Icons.Rounded.Close, null, modifier = Modifier.size(15.dp))
+                                        },
+                                        label = { Text("清空") }
+                                    )
+                                }
+                            }
+
+                            val currencyOptions = listOf("ALL" to "全部币种", "CNY" to "CNY", "USD" to "USD", "EUR" to "EUR", "GBP" to "GBP")
+                            items(currencyOptions, key = { it.first }) { (code, label) ->
+                                FilterChip(
+                                    selected = filters.currencyFilter == code,
+                                    onClick = { viewModel.setTxCurrencyFilter(code) },
+                                    label = { Text(label) }
+                                )
+                            }
+
+                            item(key = "account_filter") {
+                                Box {
+                                    val selectedAcctName = accountMap[filters.accountIdFilter]?.name ?: "全部账户"
+                                    FilterChip(
+                                        selected = filters.accountIdFilter != null,
+                                        onClick = { showAccountFilterMenu = true },
+                                        leadingIcon = {
+                                            Icon(Icons.Rounded.AccountBalanceWallet, null, modifier = Modifier.size(16.dp))
+                                        },
+                                        trailingIcon = {
+                                            Icon(Icons.Rounded.ArrowDropDown, null, modifier = Modifier.size(18.dp))
+                                        },
+                                        label = { Text(selectedAcctName, maxLines = 1, overflow = TextOverflow.Ellipsis) }
+                                    )
+                                    DropdownMenu(
+                                        expanded = showAccountFilterMenu,
+                                        onDismissRequest = { showAccountFilterMenu = false }
+                                    ) {
+                                        DropdownMenuItem(
+                                            text = { Text("全部账户") },
+                                            onClick = {
+                                                viewModel.setTxAccountFilter(null)
+                                                showAccountFilterMenu = false
+                                            }
+                                        )
+                                        accounts.forEach { acc ->
+                                            DropdownMenuItem(
+                                                text = { Text("${acc.name} (${acc.currencyCode})") },
+                                                onClick = {
+                                                    viewModel.setTxAccountFilter(acc.id)
+                                                    showAccountFilterMenu = false
+                                                }
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+
+                            item(key = "channel_filter") {
+                                Box {
+                                    val channelLabel = if (filters.channelFilter == "ALL") {
+                                        "全部来源"
+                                    } else {
+                                        KairoFormats.channelLabel(filters.channelFilter)
+                                    }
+                                    FilterChip(
+                                        selected = filters.channelFilter != "ALL",
+                                        onClick = { showChannelFilterMenu = true },
+                                        leadingIcon = {
+                                            Icon(Icons.Rounded.Tune, null, modifier = Modifier.size(16.dp))
+                                        },
+                                        trailingIcon = {
+                                            Icon(Icons.Rounded.ArrowDropDown, null, modifier = Modifier.size(18.dp))
+                                        },
+                                        label = { Text(channelLabel) }
+                                    )
+                                    DropdownMenu(
+                                        expanded = showChannelFilterMenu,
+                                        onDismissRequest = { showChannelFilterMenu = false }
+                                    ) {
+                                        DropdownMenuItem(
+                                            text = { Text("全部来源") },
+                                            onClick = {
+                                                viewModel.setTxChannelFilter("ALL")
+                                                showChannelFilterMenu = false
+                                            }
+                                        )
+                                        listOf(
+                                            CaptureChannel.MANUAL,
+                                            CaptureChannel.NOTIFICATION,
+                                            CaptureChannel.SMS,
+                                            CaptureChannel.SCREEN,
+                                            CaptureChannel.AUTO_ACCOUNTING,
+                                            CaptureChannel.AI,
+                                            CaptureChannel.IMPORT,
+                                            CaptureChannel.RECURRING,
+                                            CaptureChannel.SHARE
+                                        ).forEach { ch ->
+                                            DropdownMenuItem(
+                                                text = { Text(KairoFormats.channelLabel(ch)) },
+                                                onClick = {
+                                                    viewModel.setTxChannelFilter(ch)
+                                                    showChannelFilterMenu = false
+                                                }
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // 高级筛选折叠区：分类 / 报销状态 / 金额区间
+                        AnimatedVisibility(visible = showAdvancedFilters) {
+                            AdvancedFilterPanel(
+                                categories = categories,
+                                selectedCategoryId = filters.categoryIdFilter,
+                                onSelectCategory = { catId ->
+                                    viewModel.setTxCategoryFilter(catId)
+                                    onSelectCategoryFilter(catId)
+                                },
+                                selectedReimburseStatus = filters.reimburseFilter,
+                                onSelectReimburseStatus = { status ->
+                                    viewModel.setTxReimburseFilter(status)
+                                    onSelectReimburseFilter(status)
+                                },
+                                minAmountText = localMinAmountText,
+                                maxAmountText = localMaxAmountText,
+                                baseCurrency = uiState.baseCurrency,
+                                onAmountRangeChange = { minStr, maxStr ->
+                                    localMinAmountText = minStr
+                                    localMaxAmountText = maxStr
+                                    val minMicros = minStr.takeIf { it.isNotBlank() }
+                                        ?.let { MoneyAmount.parseToMicros(it) }
+                                        ?.takeIf { it >= 0L }
+                                    val maxMicros = maxStr.takeIf { it.isNotBlank() }
+                                        ?.let { MoneyAmount.parseToMicros(it) }
+                                        ?.takeIf { it >= 0L }
+                                    viewModel.setTxAmountRangeFilter(minMicros, maxMicros)
+                                    onAmountRangeFilterChange(minStr, maxStr)
+                                },
+                                onClearAdvanced = {
+                                    localMinAmountText = ""
+                                    localMaxAmountText = ""
+                                    viewModel.clearTxAdvancedFilters()
+                                    onSelectCategoryFilter(null)
+                                    onSelectReimburseFilter("ALL")
+                                    onAmountRangeFilterChange("", "")
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+
             // 待确认收件箱横幅
             if (uiState.pendingCount > 0) {
-                item(key = "pending_inbox") {
+                item(key = "pending_inbox", contentType = "pending_inbox") {
                     PendingInboxBanner(
                         pendingCount = uiState.pendingCount,
-                        expanded = uiState.filters.pendingExpanded,
+                        expanded = filters.pendingExpanded,
                         pendingTransactions = uiState.pendingTransactions,
+                        baseAmountByTxId = uiState.baseAmountByTxId,
                         accountMap = accountMap,
                         categoryMap = categoryMap,
                         baseCurrency = uiState.baseCurrency,
@@ -411,210 +576,34 @@ fun TransactionsScreen(
                         onConfirmAll = { viewModel.confirmAllPending() },
                         onConfirmOne = { viewModel.confirmTransaction(it.id) },
                         onEditOne = onEditTransaction,
-                        onDeleteOne = { deleteCandidate = it }
+                        onDeleteOne = { deleteCandidate = it },
+                        modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 10.dp)
                     )
-                }
-            }
-
-            // 搜索与基础/高级筛选栏
-            item(key = "search_filter") {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(
-                        value = uiState.filters.query,
-                        onValueChange = { viewModel.setTxQuery(it) },
-                        placeholder = { Text("搜索商户、备注或标签...") },
-                        leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
-                        trailingIcon = {
-                            if (uiState.filters.query.isNotEmpty()) {
-                                IconButton(onClick = { viewModel.setTxQuery("") }) {
-                                    Icon(Icons.Rounded.Close, contentDescription = "清除搜索")
-                                }
-                            }
-                        },
-                        singleLine = true,
-                        shape = RoundedCornerShape(16.dp),
-                        modifier = Modifier.fillMaxWidth()
-                    )
-
-                    LazyRow(
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        item(key = "advanced_filter_toggle") {
-                            FilterChip(
-                                selected = showAdvancedFilters || advancedFilterCount > 0,
-                                onClick = { showAdvancedFilters = !showAdvancedFilters },
-                                leadingIcon = {
-                                    Icon(Icons.Rounded.FilterList, null, modifier = Modifier.size(16.dp))
-                                },
-                                trailingIcon = {
-                                    Icon(
-                                        imageVector = if (showAdvancedFilters) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                },
-                                label = {
-                                    Text(if (advancedFilterCount > 0) "高级筛选 ($advancedFilterCount)" else "高级筛选")
-                                }
-                            )
-                        }
-
-                        val currencyOptions = listOf("ALL" to "全部币种", "CNY" to "CNY", "USD" to "USD", "EUR" to "EUR", "GBP" to "GBP")
-                        items(currencyOptions, key = { it.first }) { (code, label) ->
-                            FilterChip(
-                                selected = uiState.filters.currencyFilter == code,
-                                onClick = { viewModel.setTxCurrencyFilter(code) },
-                                label = { Text(label) }
-                            )
-                        }
-
-                        item(key = "account_filter") {
-                            Box {
-                                val selectedAcctName = accountMap[uiState.filters.accountIdFilter]?.name ?: "全部账户"
-                                FilterChip(
-                                    selected = uiState.filters.accountIdFilter != null,
-                                    onClick = { showAccountFilterMenu = true },
-                                    leadingIcon = {
-                                        Icon(Icons.Rounded.AccountBalanceWallet, null, modifier = Modifier.size(16.dp))
-                                    },
-                                    trailingIcon = {
-                                        Icon(Icons.Rounded.ArrowDropDown, null, modifier = Modifier.size(18.dp))
-                                    },
-                                    label = { Text(selectedAcctName, maxLines = 1, overflow = TextOverflow.Ellipsis) }
-                                )
-                                DropdownMenu(
-                                    expanded = showAccountFilterMenu,
-                                    onDismissRequest = { showAccountFilterMenu = false }
-                                ) {
-                                    DropdownMenuItem(
-                                        text = { Text("全部账户") },
-                                        onClick = {
-                                            viewModel.setTxAccountFilter(null)
-                                            showAccountFilterMenu = false
-                                        }
-                                    )
-                                    accounts.forEach { acc ->
-                                        DropdownMenuItem(
-                                            text = { Text("${acc.name} (${acc.currencyCode})") },
-                                            onClick = {
-                                                viewModel.setTxAccountFilter(acc.id)
-                                                showAccountFilterMenu = false
-                                            }
-                                        )
-                                    }
-                                }
-                            }
-                        }
-
-                        item(key = "channel_filter") {
-                            Box {
-                                val channelLabel = if (uiState.filters.channelFilter == "ALL") {
-                                    "全部来源"
-                                } else {
-                                    KairoFormats.channelLabel(uiState.filters.channelFilter)
-                                }
-                                FilterChip(
-                                    selected = uiState.filters.channelFilter != "ALL",
-                                    onClick = { showChannelFilterMenu = true },
-                                    leadingIcon = {
-                                        Icon(Icons.Rounded.Tune, null, modifier = Modifier.size(16.dp))
-                                    },
-                                    trailingIcon = {
-                                        Icon(Icons.Rounded.ArrowDropDown, null, modifier = Modifier.size(18.dp))
-                                    },
-                                    label = { Text(channelLabel) }
-                                )
-                                DropdownMenu(
-                                    expanded = showChannelFilterMenu,
-                                    onDismissRequest = { showChannelFilterMenu = false }
-                                ) {
-                                    DropdownMenuItem(
-                                        text = { Text("全部来源") },
-                                        onClick = {
-                                            viewModel.setTxChannelFilter("ALL")
-                                            showChannelFilterMenu = false
-                                        }
-                                    )
-                                    listOf(
-                                        CaptureChannel.MANUAL,
-                                        CaptureChannel.NOTIFICATION,
-                                        CaptureChannel.SMS,
-                                        CaptureChannel.SCREEN,
-                                        CaptureChannel.AUTO_ACCOUNTING,
-                                        CaptureChannel.AI,
-                                        CaptureChannel.IMPORT,
-                                        CaptureChannel.RECURRING,
-                                        CaptureChannel.SHARE
-                                    ).forEach { ch ->
-                                        DropdownMenuItem(
-                                            text = { Text(KairoFormats.channelLabel(ch)) },
-                                            onClick = {
-                                                viewModel.setTxChannelFilter(ch)
-                                                showChannelFilterMenu = false
-                                            }
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // 高级筛选折叠区：分类 / 报销状态 / 金额区间
-                    AnimatedVisibility(visible = showAdvancedFilters) {
-                        AdvancedFilterPanel(
-                            categories = categories,
-                            selectedCategoryId = localCategoryIdFilter,
-                            onSelectCategory = { catId ->
-                                localCategoryIdFilter = catId
-                                onSelectCategoryFilter(catId)
-                            },
-                            selectedReimburseStatus = localReimburseFilter,
-                            onSelectReimburseStatus = { status ->
-                                localReimburseFilter = status
-                                onSelectReimburseFilter(status)
-                            },
-                            minAmountText = localMinAmountText,
-                            maxAmountText = localMaxAmountText,
-                            baseCurrency = uiState.baseCurrency,
-                            onAmountRangeChange = { minStr, maxStr ->
-                                localMinAmountText = minStr
-                                localMaxAmountText = maxStr
-                                onAmountRangeFilterChange(minStr, maxStr)
-                            },
-                            onClearAdvanced = {
-                                localCategoryIdFilter = null
-                                localReimburseFilter = "ALL"
-                                localMinAmountText = ""
-                                localMaxAmountText = ""
-                                onSelectCategoryFilter(null)
-                                onSelectReimburseFilter("ALL")
-                                onAmountRangeFilterChange("", "")
-                            }
-                        )
-                    }
                 }
             }
 
             // 月度日历视图卡片
             if (viewMode == TxViewMode.CALENDAR) {
-                item(key = "calendar_grid") {
+                item(key = "calendar_grid", contentType = "calendar_grid") {
                     MonthlyCalendarCard(
-                        yearMonth = uiState.filters.yearMonth,
-                        monthDays = filteredMonthDays,
+                        yearMonth = filters.yearMonth,
+                        monthDays = uiState.groupedDays,
                         selectedDate = selectedCalendarDate,
                         privacyMasked = privacyMasked,
                         onSelectDate = { tappedDate ->
                             selectedCalendarDate = if (selectedCalendarDate == tappedDate) null else tappedDate
-                        }
+                        },
+                        modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 10.dp)
                     )
                 }
 
                 if (selectedCalendarDate != null) {
-                    item(key = "calendar_day_filter_banner") {
+                    item(key = "calendar_day_filter_banner", contentType = "calendar_banner") {
                         val picked = selectedCalendarDate!!
                         Row(
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(start = 16.dp, end = 16.dp, top = 8.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
@@ -632,9 +621,9 @@ fun TransactionsScreen(
                 }
             }
 
-            // 流水列表或空状态
+            // 彻底扁平化的按天流水列表或空状态
             if (visibleDays.isEmpty()) {
-                item(key = "empty_tx") {
+                item(key = "empty_tx", contentType = "empty_state") {
                     EmptyStateCard(
                         icon = Icons.Rounded.ReceiptLong,
                         title = if (selectedCalendarDate != null) {
@@ -645,57 +634,69 @@ fun TransactionsScreen(
                         subtitle = if (selectedCalendarDate != null) {
                             "点击「查看全月」查看其他日期，或记一笔新账单。"
                         } else {
-                            "点击右下角「记一笔」，或前往「自动化」开启通知/短信自动记账与账单导入。"
+                            "点击右下角「记一笔」，或前往「我的 -> 自动记账与权限中心」开启通知/短信自动记账与账单导入。"
                         },
                         actionLabel = "立即记一笔",
-                        onAction = onOpenQuickRecord
+                        onAction = onOpenQuickRecord,
+                        modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp)
                     )
                 }
             } else {
-                items(visibleDays, key = { it.date.toString() }) { group ->
-                    DayTransactionCard(
-                        group = group,
-                        baseCurrency = uiState.baseCurrency,
-                        accountMap = accountMap,
-                        categoryMap = categoryMap,
-                        rates = rates,
-                        privacyMasked = privacyMasked,
-                        viewModel = viewModel,
-                        isMultiSelectMode = isMultiSelectMode,
-                        selectedTxIds = selectedTxIds,
-                        expandedQuickActionTxId = expandedQuickActionTxId,
-                        onToggleSelectTx = { txId ->
-                            selectedTxIds = if (txId in selectedTxIds) {
-                                selectedTxIds - txId
-                            } else {
-                                selectedTxIds + txId
+                visibleDays.forEach { group ->
+                    item(key = "day_hdr_${group.date}", contentType = "day_header") {
+                        DayHeaderCardRow(
+                            group = group,
+                            baseCurrency = uiState.baseCurrency,
+                            privacyMasked = privacyMasked,
+                            modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 10.dp)
+                        )
+                    }
+
+                    itemsIndexed(
+                        items = group.transactions,
+                        key = { _, tx -> tx.id },
+                        contentType = { _, _ -> "tx_row" }
+                    ) { idx, tx ->
+                        val isLastInDay = idx == group.transactions.lastIndex
+                        val isSelected = tx.id in selectedTxIds
+                        val resolvedBaseMicros = uiState.baseAmountByTxId[tx.id]
+                            ?: viewModel.convertTxToDisplayBase(tx, uiState.baseCurrency, rates)
+                        FlattenedTransactionRow(
+                            tx = tx,
+                            baseCurrency = uiState.baseCurrency,
+                            convertedBaseMicros = resolvedBaseMicros,
+                            account = accountMap[tx.accountId],
+                            toAccount = tx.toAccountId?.let { accountMap[it] },
+                            category = tx.categoryId?.let { categoryMap[it] },
+                            privacyMasked = privacyMasked,
+                            isMultiSelectMode = isMultiSelectMode,
+                            isSelected = isSelected,
+                            isLastInDay = isLastInDay,
+                            onClick = {
+                                if (isMultiSelectMode) {
+                                    selectedTxIds = if (tx.id in selectedTxIds) {
+                                        selectedTxIds - tx.id
+                                    } else {
+                                        selectedTxIds + tx.id
+                                    }
+                                } else {
+                                    detailTransaction = tx
+                                }
+                            },
+                            onLongClick = {
+                                if (!isMultiSelectMode) {
+                                    isMultiSelectMode = true
+                                    selectedTxIds = selectedTxIds + tx.id
+                                } else {
+                                    selectedTxIds = if (tx.id in selectedTxIds) {
+                                        selectedTxIds - tx.id
+                                    } else {
+                                        selectedTxIds + tx.id
+                                    }
+                                }
                             }
-                        },
-                        onEnterMultiSelect = { txId ->
-                            expandedQuickActionTxId = null
-                            isMultiSelectMode = true
-                            selectedTxIds = selectedTxIds + txId
-                        },
-                        onToggleQuickAction = { txId ->
-                            expandedQuickActionTxId = if (expandedQuickActionTxId == txId) null else txId
-                        },
-                        onEditTx = { tx ->
-                            expandedQuickActionTxId = null
-                            onEditTransaction(tx)
-                        },
-                        onRefundTx = { tx ->
-                            expandedQuickActionTxId = null
-                            onRefundTransaction(tx)
-                        },
-                        onDeleteTx = { tx ->
-                            expandedQuickActionTxId = null
-                            deleteCandidate = tx
-                        },
-                        onClickTransaction = { tx ->
-                            expandedQuickActionTxId = null
-                            detailTransaction = tx
-                        }
-                    )
+                        )
+                    }
                 }
             }
         }
@@ -874,133 +875,210 @@ private fun BatchSelectionToolbar(
 }
 
 @Composable
-private fun MonthSwitcherBar(
+private fun TransactionsTopHeaderCard(
+    activeLedgerLabel: String,
     yearMonth: YearMonth,
-    activeLedgerName: String?,
-    onPrev: () -> Unit,
-    onNext: () -> Unit,
-    onResetCurrent: () -> Unit
-) {
-    val label = yearMonth.format(DateTimeFormatter.ofPattern("yyyy年M月"))
-    val isCurrent = yearMonth == YearMonth.now()
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween
-    ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
-            IconButton(onClick = onPrev) {
-                Icon(Icons.AutoMirrored.Rounded.KeyboardArrowLeft, contentDescription = "上个月")
-            }
-            Text(
-                text = label,
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold
-            )
-            IconButton(onClick = onNext) {
-                Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, contentDescription = "下个月")
-            }
-            if (!activeLedgerName.isNullOrBlank()) {
-                Surface(
-                    shape = CircleShape,
-                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f)
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(3.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Rounded.MenuBook,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(12.dp)
-                        )
-                        Text(
-                            text = activeLedgerName,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                }
-            }
-        }
-        if (!isCurrent) {
-            TextButton(onClick = onResetCurrent) {
-                Text("回到本月")
-            }
-        }
-    }
-}
-
-@Composable
-private fun MonthlyOverviewCard(
     baseCurrency: String,
     expenseMicros: Long,
     incomeMicros: Long,
     balanceMicros: Long,
     privacyMasked: Boolean,
     viewMode: TxViewMode,
+    searchExpanded: Boolean,
+    hasActiveFilter: Boolean,
+    applyStatusBarPadding: Boolean,
+    onOpenLedgerManager: () -> Unit,
+    onToggleSearch: () -> Unit,
+    onTogglePrivacy: () -> Unit,
+    onOpenSmartInput: () -> Unit,
+    onPrevMonth: () -> Unit,
+    onNextMonth: () -> Unit,
+    onResetCurrentMonth: () -> Unit,
     onToggleViewMode: () -> Unit
 ) {
     val semantic = KairoTheme.semantic
+    val gradientColors = if (semantic.isDark) {
+        listOf(Color(0xFF143E2D), Color(0xFF1D4F3B), Color(0xFF15382A))
+    } else {
+        listOf(Color(0xFFE3F7EE), Color(0xFFD2EFE1), Color(0xFFEDF9F3))
+    }
+    val titleColor = if (semantic.isDark) Color(0xFFCFF7E3) else Color(0xFF0A3D28)
+    val subtitleColor = titleColor.copy(alpha = 0.76f)
+    val pillBgColor = if (semantic.isDark) {
+        Color(0xFF0F251C).copy(alpha = 0.72f)
+    } else {
+        Color.White.copy(alpha = 0.86f)
+    }
+    val monthLabel = yearMonth.format(DateTimeFormatter.ofPattern("yyyy年M月"))
+    val isCurrentMonth = yearMonth == YearMonth.now()
+
     Surface(
-        shape = RoundedCornerShape(22.dp),
-        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.58f),
-        border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.22f)),
+        shape = RoundedCornerShape(bottomStart = 24.dp, bottomEnd = 24.dp),
+        color = Color.Transparent,
         modifier = Modifier.fillMaxWidth()
     ) {
         Box(
             modifier = Modifier
-                .background(
-                    Brush.linearGradient(
-                        colors = listOf(
-                            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.78f),
-                            MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.48f)
-                        )
-                    )
-                )
-                .padding(16.dp)
+                .fillMaxWidth()
+                .background(Brush.linearGradient(colors = gradientColors))
+                .then(if (applyStatusBarPadding) Modifier.statusBarsPadding() else Modifier)
+                .padding(start = 16.dp, end = 12.dp, top = 8.dp, bottom = 14.dp)
         ) {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                // 第一行：左「账本切换胶囊」，右「搜索」「隐私眼睛」「智能记账」
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    Surface(
+                        shape = CircleShape,
+                        color = pillBgColor,
+                        modifier = Modifier
+                            .clip(CircleShape)
+                            .clickable(onClick = onOpenLedgerManager)
                     ) {
-                        Text(
-                            text = "本月收支总览",
-                            style = MaterialTheme.typography.titleMedium,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer,
-                            fontWeight = FontWeight.Bold
-                        )
-                        Surface(
-                            shape = CircleShape,
-                            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.65f)
+                        Row(
+                            modifier = Modifier.padding(horizontal = 11.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(5.dp)
                         ) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Rounded.MenuBook,
+                                contentDescription = null,
+                                tint = titleColor,
+                                modifier = Modifier.size(16.dp)
+                            )
                             Text(
-                                text = "$baseCurrency 折算",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
+                                text = activeLedgerLabel,
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Bold,
+                                color = titleColor,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.widthIn(max = 140.dp)
+                            )
+                            Icon(
+                                imageVector = Icons.Rounded.ArrowDropDown,
+                                contentDescription = "切换账本",
+                                tint = titleColor,
+                                modifier = Modifier.size(18.dp)
                             )
                         }
                     }
 
-                    // 列表视图 / 日历视图 一键切换按钮
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(2.dp)
+                    ) {
+                        IconButton(
+                            onClick = onToggleSearch,
+                            modifier = Modifier.size(38.dp)
+                        ) {
+                            Box(
+                                contentAlignment = Alignment.Center,
+                                modifier = if (searchExpanded || hasActiveFilter) {
+                                    Modifier
+                                        .size(32.dp)
+                                        .clip(CircleShape)
+                                        .background(pillBgColor)
+                                } else {
+                                    Modifier.size(32.dp)
+                                }
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Search,
+                                    contentDescription = if (searchExpanded) "收起搜索筛选" else "展开搜索筛选",
+                                    tint = if (hasActiveFilter) MaterialTheme.colorScheme.primary else titleColor,
+                                    modifier = Modifier.size(21.dp)
+                                )
+                            }
+                        }
+                        IconButton(
+                            onClick = onTogglePrivacy,
+                            modifier = Modifier.size(38.dp)
+                        ) {
+                            Icon(
+                                imageVector = if (privacyMasked) Icons.Rounded.VisibilityOff else Icons.Rounded.Visibility,
+                                contentDescription = if (privacyMasked) "关闭隐私遮罩" else "开启隐私遮罩",
+                                tint = titleColor,
+                                modifier = Modifier.size(21.dp)
+                            )
+                        }
+                        IconButton(
+                            onClick = onOpenSmartInput,
+                            modifier = Modifier.size(38.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.AutoAwesome,
+                                contentDescription = "AI/语音智能记账",
+                                tint = titleColor,
+                                modifier = Modifier.size(21.dp)
+                            )
+                        }
+                    }
+                }
+
+                // 第二行：月份切换 (< yyyy年M月 > + 回本月) + 列表/日历切换胶囊
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(end = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(2.dp)
+                    ) {
+                        IconButton(
+                            onClick = onPrevMonth,
+                            modifier = Modifier.size(32.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowLeft,
+                                contentDescription = "上个月",
+                                tint = titleColor
+                            )
+                        }
+                        Text(
+                            text = monthLabel,
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = titleColor
+                        )
+                        IconButton(
+                            onClick = onNextMonth,
+                            modifier = Modifier.size(32.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowRight,
+                                contentDescription = "下个月",
+                                tint = titleColor
+                            )
+                        }
+                        if (!isCurrentMonth) {
+                            Surface(
+                                shape = CircleShape,
+                                color = pillBgColor,
+                                modifier = Modifier
+                                    .clip(CircleShape)
+                                    .clickable(onClick = onResetCurrentMonth)
+                            ) {
+                                Text(
+                                    text = "回本月",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    fontWeight = FontWeight.SemiBold,
+                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                )
+                            }
+                        }
+                    }
+
                     Surface(
                         shape = CircleShape,
-                        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.88f),
-                        border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.28f)),
+                        color = pillBgColor,
                         modifier = Modifier
                             .clip(CircleShape)
                             .clickable(onClick = onToggleViewMode)
@@ -1021,72 +1099,104 @@ private fun MonthlyOverviewCard(
                                 modifier = Modifier.size(15.dp)
                             )
                             Text(
-                                text = if (viewMode == TxViewMode.LIST) "日历视图" else "列表视图",
+                                text = if (viewMode == TxViewMode.LIST) "日历" else "列表",
                                 style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.primary,
+                                color = titleColor,
                                 fontWeight = FontWeight.SemiBold
                             )
                         }
                     }
                 }
 
-                Column {
-                    Text(
-                        text = "月度结余",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.78f)
-                    )
-                    Text(
-                        text = formatPrivacyAmount(
-                            privacyMasked,
-                            MoneyAmount.format(balanceMicros, baseCurrency, showSign = true)
-                        ),
-                        style = MaterialTheme.typography.headlineMedium.tabular(),
-                        color = MaterialTheme.colorScheme.onPrimaryContainer
-                    )
+                // 第三行：月度结余 + 支出/收入总览
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(end = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.Bottom
+                ) {
+                    Column {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Text(
+                                text = "本月结余",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = subtitleColor
+                            )
+                            Surface(
+                                shape = CircleShape,
+                                color = pillBgColor
+                            ) {
+                                Text(
+                                    text = baseCurrency,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = subtitleColor,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp)
+                                )
+                            }
+                        }
+                        Text(
+                            text = formatPrivacyAmount(
+                                privacyMasked,
+                                MoneyAmount.format(balanceMicros, baseCurrency, showSign = true)
+                            ),
+                            style = MaterialTheme.typography.headlineSmall.tabular(),
+                            fontWeight = FontWeight.Bold,
+                            color = titleColor
+                        )
+                    }
                 }
 
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(end = 4.dp),
                     horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     Surface(
                         shape = RoundedCornerShape(14.dp),
-                        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.82f),
+                        color = pillBgColor,
                         modifier = Modifier.weight(1f)
                     ) {
-                        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
+                        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
                             Text(
-                                text = "月支出",
+                                text = "本月支出",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
-                            Spacer(modifier = Modifier.height(2.dp))
+                            Spacer(modifier = Modifier.height(1.dp))
                             Text(
                                 text = formatPrivacyAmount(privacyMasked, MoneyAmount.format(expenseMicros, baseCurrency)),
                                 style = MaterialTheme.typography.titleMedium.tabular(),
                                 color = semantic.expense,
-                                fontWeight = FontWeight.Bold
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                         }
                     }
                     Surface(
                         shape = RoundedCornerShape(14.dp),
-                        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.82f),
+                        color = pillBgColor,
                         modifier = Modifier.weight(1f)
                     ) {
-                        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
+                        Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
                             Text(
-                                text = "月收入",
+                                text = "本月收入",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
-                            Spacer(modifier = Modifier.height(2.dp))
+                            Spacer(modifier = Modifier.height(1.dp))
                             Text(
                                 text = formatPrivacyAmount(privacyMasked, MoneyAmount.format(incomeMicros, baseCurrency)),
                                 style = MaterialTheme.typography.titleMedium.tabular(),
                                 color = semantic.income,
-                                fontWeight = FontWeight.Bold
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                         }
                     }
@@ -1102,7 +1212,8 @@ private fun MonthlyCalendarCard(
     monthDays: List<DayTransactionGroup>,
     selectedDate: LocalDate?,
     privacyMasked: Boolean,
-    onSelectDate: (LocalDate) -> Unit
+    onSelectDate: (LocalDate) -> Unit,
+    modifier: Modifier = Modifier
 ) {
     val semantic = KairoTheme.semantic
     val today = remember { LocalDate.now() }
@@ -1116,7 +1227,7 @@ private fun MonthlyCalendarCard(
     val totalSlots = leadingBlanks + daysInMonth
     val rows = (totalSlots + 6) / 7
 
-    YimuCard(cornerRadius = 18.dp) {
+    YimuCard(cornerRadius = 18.dp, modifier = modifier) {
         Column(
             modifier = Modifier.padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp)
@@ -1424,6 +1535,7 @@ private fun PendingInboxBanner(
     pendingCount: Int,
     expanded: Boolean,
     pendingTransactions: List<TransactionEntity>,
+    baseAmountByTxId: Map<Long, Long>,
     accountMap: Map<Long, AccountEntity>,
     categoryMap: Map<Long, CategoryEntity>,
     baseCurrency: String,
@@ -1434,14 +1546,15 @@ private fun PendingInboxBanner(
     onConfirmAll: () -> Unit,
     onConfirmOne: (TransactionEntity) -> Unit,
     onEditOne: (TransactionEntity) -> Unit,
-    onDeleteOne: (TransactionEntity) -> Unit
+    onDeleteOne: (TransactionEntity) -> Unit,
+    modifier: Modifier = Modifier
 ) {
     val semantic = KairoTheme.semantic
     Surface(
         shape = RoundedCornerShape(18.dp),
         color = semantic.warningContainer.copy(alpha = 0.7f),
         border = BorderStroke(1.dp, semantic.warning.copy(alpha = 0.45f)),
-        modifier = Modifier.fillMaxWidth()
+        modifier = modifier.fillMaxWidth()
     ) {
         Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(
@@ -1536,7 +1649,8 @@ private fun PendingInboxBanner(
                                             fontWeight = FontWeight.Bold
                                         )
                                         if (!tx.origCurrency.equals(baseCurrency, true)) {
-                                            val baseAmt = viewModel.convertTxToDisplayBase(tx, baseCurrency, rates)
+                                            val baseAmt = baseAmountByTxId[tx.id]
+                                                ?: viewModel.convertTxToDisplayBase(tx, baseCurrency, rates)
                                             Text(
                                                 text = formatPrivacyAmount(privacyMasked, "≈ ${MoneyAmount.format(baseAmt, baseCurrency)}"),
                                                 style = MaterialTheme.typography.labelSmall.tabular(),
@@ -1582,217 +1696,136 @@ private fun PendingInboxBanner(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun DayTransactionCard(
+private fun DayHeaderCardRow(
     group: DayTransactionGroup,
     baseCurrency: String,
-    accountMap: Map<Long, AccountEntity>,
-    categoryMap: Map<Long, CategoryEntity>,
-    rates: List<ExchangeRateEntity>,
     privacyMasked: Boolean,
-    viewModel: KairoMainViewModel,
-    isMultiSelectMode: Boolean,
-    selectedTxIds: Set<Long>,
-    expandedQuickActionTxId: Long?,
-    onToggleSelectTx: (Long) -> Unit,
-    onEnterMultiSelect: (Long) -> Unit,
-    onToggleQuickAction: (Long) -> Unit,
-    onEditTx: (TransactionEntity) -> Unit,
-    onRefundTx: (TransactionEntity) -> Unit,
-    onDeleteTx: (TransactionEntity) -> Unit,
-    onClickTransaction: (TransactionEntity) -> Unit
+    modifier: Modifier = Modifier
 ) {
     val semantic = KairoTheme.semantic
-    YimuCard(cornerRadius = 18.dp) {
-        Column(modifier = Modifier.padding(vertical = 10.dp)) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 14.dp, vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Text(
-                    text = KairoFormats.formatDayHeader(group.date),
-                    style = MaterialTheme.typography.titleSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    fontWeight = FontWeight.SemiBold
-                )
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    if (group.dayIncomeBaseMicros > 0L) {
-                        Text(
-                            text = formatPrivacyAmount(
-                                privacyMasked,
-                                "收 ${MoneyAmount.format(group.dayIncomeBaseMicros, baseCurrency)}"
-                            ),
-                            style = MaterialTheme.typography.labelMedium.tabular(),
-                            color = semantic.income
-                        )
-                    }
-                    if (group.dayExpenseBaseMicros > 0L) {
-                        Text(
-                            text = formatPrivacyAmount(
-                                privacyMasked,
-                                "支 ${MoneyAmount.format(group.dayExpenseBaseMicros, baseCurrency)}"
-                            ),
-                            style = MaterialTheme.typography.labelMedium.tabular(),
-                            color = semantic.expense
-                        )
-                    }
-                }
-            }
-
-            group.transactions.forEachIndexed { idx, tx ->
-                key(tx.id) {
-                    if (idx > 0) {
-                        HorizontalDivider(
-                            modifier = Modifier.padding(horizontal = 14.dp),
-                            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)
-                        )
-                    }
-
-                    val isSelected = tx.id in selectedTxIds
-                    val quickExpanded = expandedQuickActionTxId == tx.id && !isMultiSelectMode
-                    val dismissState = rememberSwipeToDismissBoxState(
-                        confirmValueChange = { value ->
-                            if (value == SwipeToDismissBoxValue.EndToStart) {
-                                onToggleQuickAction(tx.id)
-                            }
-                            // 永远不直接移除条目，而是通过快捷栏执行编辑/退款/删除，防止误滑误删
-                            false
-                        },
-                        positionalThreshold = { totalDistance -> totalDistance * 0.30f }
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainerLowest)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(
+                text = KairoFormats.formatDayHeader(group.date),
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontWeight = FontWeight.SemiBold
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                if (group.dayIncomeBaseMicros > 0L) {
+                    Text(
+                        text = formatPrivacyAmount(
+                            privacyMasked,
+                            "收 ${MoneyAmount.format(group.dayIncomeBaseMicros, baseCurrency)}"
+                        ),
+                        style = MaterialTheme.typography.labelMedium.tabular(),
+                        color = semantic.income
                     )
-
-                    SwipeToDismissBox(
-                        state = dismissState,
-                        enableDismissFromStartToEnd = false,
-                        enableDismissFromEndToStart = !isMultiSelectMode,
-                        gesturesEnabled = !isMultiSelectMode,
-                        backgroundContent = {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f))
-                                    .padding(horizontal = 18.dp),
-                                contentAlignment = Alignment.CenterEnd
-                            ) {
-                                Text(
-                                    text = "编辑 / 退款 / 删除",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = MaterialTheme.colorScheme.primary,
-                                    fontWeight = FontWeight.SemiBold
-                                )
-                            }
-                        }
-                    ) {
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .background(
-                                    if (isSelected) {
-                                        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.25f)
-                                    } else {
-                                        MaterialTheme.colorScheme.surfaceContainerLowest
-                                    }
-                                )
-                        ) {
-                            TransactionRowItem(
-                                tx = tx,
-                                baseCurrency = baseCurrency,
-                                account = accountMap[tx.accountId],
-                                toAccount = tx.toAccountId?.let { accountMap[it] },
-                                category = tx.categoryId?.let { categoryMap[it] },
-                                rates = rates,
-                                privacyMasked = privacyMasked,
-                                viewModel = viewModel,
-                                isMultiSelectMode = isMultiSelectMode,
-                                isSelected = isSelected,
-                                onClick = {
-                                    if (isMultiSelectMode) {
-                                        onToggleSelectTx(tx.id)
-                                    } else {
-                                        onClickTransaction(tx)
-                                    }
-                                },
-                                onLongClick = {
-                                    if (!isMultiSelectMode) {
-                                        onEnterMultiSelect(tx.id)
-                                    } else {
-                                        onToggleSelectTx(tx.id)
-                                    }
-                                }
-                            )
-
-                            // 左滑触发展开的行内快捷操作栏
-                            AnimatedVisibility(visible = quickExpanded) {
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .background(MaterialTheme.colorScheme.surfaceContainerLow)
-                                        .padding(horizontal = 14.dp, vertical = 6.dp),
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    OutlinedButton(
-                                        onClick = { onEditTx(tx) },
-                                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 2.dp),
-                                        modifier = Modifier.height(32.dp)
-                                    ) {
-                                        Icon(Icons.Rounded.Edit, null, modifier = Modifier.size(14.dp))
-                                        Spacer(modifier = Modifier.width(4.dp))
-                                        Text("编辑", style = MaterialTheme.typography.labelMedium)
-                                    }
-                                    if (tx.type == TransactionType.EXPENSE) {
-                                        OutlinedButton(
-                                            onClick = { onRefundTx(tx) },
-                                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 2.dp),
-                                            modifier = Modifier.height(32.dp)
-                                        ) {
-                                            Icon(Icons.Rounded.Replay, null, modifier = Modifier.size(14.dp))
-                                            Spacer(modifier = Modifier.width(4.dp))
-                                            Text("退款", style = MaterialTheme.typography.labelMedium)
-                                        }
-                                    }
-                                    Button(
-                                        onClick = { onDeleteTx(tx) },
-                                        colors = ButtonDefaults.buttonColors(
-                                            containerColor = MaterialTheme.colorScheme.error,
-                                            contentColor = MaterialTheme.colorScheme.onError
-                                        ),
-                                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 2.dp),
-                                        modifier = Modifier.height(32.dp)
-                                    ) {
-                                        Icon(Icons.Rounded.Delete, null, modifier = Modifier.size(14.dp))
-                                        Spacer(modifier = Modifier.width(4.dp))
-                                        Text("删除", style = MaterialTheme.typography.labelMedium)
-                                    }
-                                }
-                            }
-                        }
-                    }
+                }
+                if (group.dayExpenseBaseMicros > 0L) {
+                    Text(
+                        text = formatPrivacyAmount(
+                            privacyMasked,
+                            "支 ${MoneyAmount.format(group.dayExpenseBaseMicros, baseCurrency)}"
+                        ),
+                        style = MaterialTheme.typography.labelMedium.tabular(),
+                        color = semantic.expense
+                    )
                 }
             }
         }
+        HorizontalDivider(
+            modifier = Modifier.padding(horizontal = 14.dp),
+            thickness = 0.5.dp,
+            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)
+        )
     }
 }
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun TransactionRowItem(
+private fun FlattenedTransactionRow(
     tx: TransactionEntity,
     baseCurrency: String,
+    convertedBaseMicros: Long,
     account: AccountEntity?,
     toAccount: AccountEntity?,
     category: CategoryEntity?,
-    rates: List<ExchangeRateEntity>,
     privacyMasked: Boolean,
-    viewModel: KairoMainViewModel,
     isMultiSelectMode: Boolean,
     isSelected: Boolean,
+    isLastInDay: Boolean,
     onClick: () -> Unit,
     onLongClick: () -> Unit
+) {
+    val rowShape = if (isLastInDay) {
+        RoundedCornerShape(bottomStart = 18.dp, bottomEnd = 18.dp)
+    } else {
+        RectangleShape
+    }
+    val rowBg = if (isSelected) {
+        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.25f)
+    } else {
+        MaterialTheme.colorScheme.surfaceContainerLowest
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp)
+            .clip(rowShape)
+            .background(rowBg)
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = onLongClick
+            )
+    ) {
+        TransactionRowItem(
+            tx = tx,
+            baseCurrency = baseCurrency,
+            convertedBaseMicros = convertedBaseMicros,
+            account = account,
+            toAccount = toAccount,
+            category = category,
+            privacyMasked = privacyMasked,
+            isMultiSelectMode = isMultiSelectMode,
+            isSelected = isSelected,
+            isLastInDay = isLastInDay
+        )
+        if (!isLastInDay) {
+            HorizontalDivider(
+                modifier = Modifier.padding(horizontal = 14.dp),
+                thickness = 0.5.dp,
+                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)
+            )
+        }
+    }
+}
+
+@Composable
+private fun TransactionRowItem(
+    tx: TransactionEntity,
+    baseCurrency: String,
+    convertedBaseMicros: Long,
+    account: AccountEntity?,
+    toAccount: AccountEntity?,
+    category: CategoryEntity?,
+    privacyMasked: Boolean,
+    isMultiSelectMode: Boolean,
+    isSelected: Boolean,
+    isLastInDay: Boolean
 ) {
     val semantic = KairoTheme.semantic
     val iconKey = when (tx.type) {
@@ -1814,23 +1847,22 @@ private fun TransactionRowItem(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .combinedClickable(
-                onClick = onClick,
-                onLongClick = onLongClick
-            )
-            .padding(horizontal = 14.dp, vertical = 11.dp),
+            .padding(
+                start = 14.dp,
+                end = 14.dp,
+                top = 11.dp,
+                bottom = if (isLastInDay) 13.dp else 11.dp
+            ),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        AnimatedVisibility(visible = isMultiSelectMode) {
-            Row {
-                Icon(
-                    imageVector = if (isSelected) Icons.Rounded.CheckBox else Icons.Rounded.CheckBoxOutlineBlank,
-                    contentDescription = if (isSelected) "已选中" else "未选中",
-                    tint = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(22.dp)
-                )
-                Spacer(modifier = Modifier.width(10.dp))
-            }
+        if (isMultiSelectMode) {
+            Icon(
+                imageVector = if (isSelected) Icons.Rounded.CheckBox else Icons.Rounded.CheckBoxOutlineBlank,
+                contentDescription = if (isSelected) "已选中" else "未选中",
+                tint = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(22.dp)
+            )
+            Spacer(modifier = Modifier.width(10.dp))
         }
 
         CategoryIconBadge(
@@ -1936,7 +1968,7 @@ private fun TransactionRowItem(
 
         Spacer(modifier = Modifier.width(10.dp))
 
-        // 双行金额展示：外币主行显示原币种，副行显示主币种冻结折算（均尊重隐私打码）
+        // 双行金额展示：外币主行显示原币种，副行显示主币种预折算（均尊重隐私打码）
         Column(horizontalAlignment = Alignment.End) {
             val signedMicros = when (tx.type) {
                 TransactionType.EXPENSE -> -abs(tx.origAmountMicros)
@@ -1962,9 +1994,8 @@ private fun TransactionRowItem(
             )
 
             if (isForeign) {
-                val baseMicros = viewModel.convertTxToDisplayBase(tx, baseCurrency, rates)
                 Text(
-                    text = formatPrivacyAmount(privacyMasked, "≈ ${MoneyAmount.format(baseMicros, baseCurrency)}"),
+                    text = formatPrivacyAmount(privacyMasked, "≈ ${MoneyAmount.format(convertedBaseMicros, baseCurrency)}"),
                     style = MaterialTheme.typography.bodySmall.tabular(),
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

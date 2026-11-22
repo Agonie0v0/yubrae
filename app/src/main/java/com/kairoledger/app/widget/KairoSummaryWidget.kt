@@ -75,7 +75,7 @@ data class WidgetSummaryState(
 )
 
 /**
- * 棱账一木清新风 Jetpack Glance 桌面小组件：
+ * 棱账薄荷清风 Jetpack Glance 桌面小组件：
  * 展示本月按主币种折算的总支出 / 总收入 / 结余，
  * 主账本生效月度总预算使用率进度条，
  * 下方显示 USD / EUR / GBP -> 主币种最新参考汇率，
@@ -336,7 +336,7 @@ private fun WidgetContent(
             .padding(horizontal = 12.dp, vertical = 10.dp)
             .clickable(actionStartActivity(openAppIntent))
     ) {
-        // 顶部栏：月份标题 + 一木绿「+ 记一笔」胶囊
+        // 顶部栏：月份标题 + 薄荷绿「+ 记一笔」胶囊
         Row(
             modifier = GlanceModifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically
@@ -410,7 +410,7 @@ private fun WidgetContent(
 
         Spacer(modifier = GlanceModifier.height(7.dp))
 
-        // 一木浅灰绿底条：主账本预算使用率进度条 + 实时汇率
+        // 浅灰绿底条：主账本预算使用率进度条 + 实时汇率
         Column(
             modifier = GlanceModifier
                 .fillMaxWidth()

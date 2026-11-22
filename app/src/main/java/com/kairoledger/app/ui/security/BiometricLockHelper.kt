@@ -130,7 +130,7 @@ fun authenticate(
 )
 
 /**
- * 一木清新风隐私锁屏全屏遮罩：进入时自动发起一次身份认证。
+ * 棱账薄荷清风隐私锁屏全屏遮罩：进入时自动发起一次身份认证。
  */
 @Composable
 fun AppLockOverlay(

@@ -18,8 +18,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
@@ -28,7 +26,6 @@ import androidx.compose.material.icons.rounded.CloudDone
 import androidx.compose.material.icons.rounded.CloudDownload
 import androidx.compose.material.icons.rounded.CloudUpload
 import androidx.compose.material.icons.rounded.Download
-import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.UploadFile
 import androidx.compose.material.icons.rounded.Visibility
@@ -65,10 +62,7 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.kairoledger.app.core.contract.RemoteBackupFile
-import com.kairoledger.app.data.prefs.ThemeMode
 import com.kairoledger.app.ui.components.ConfirmActionDialog
-import com.kairoledger.app.ui.components.CurrencyBadge
-import com.kairoledger.app.ui.components.CurrencyPickerDialog
 import com.kairoledger.app.ui.components.KairoFormats
 import com.kairoledger.app.ui.theme.KairoTheme
 import com.kairoledger.app.ui.viewmodel.KairoMainViewModel
@@ -105,7 +99,6 @@ fun ImportAndBackupScreen(
     var pendingLocalRestoreBytes by remember { mutableStateOf<ByteArray?>(null) }
     var restoreRemoteCandidate by remember { mutableStateOf<RemoteBackupFile?>(null) }
     var showExportPassphrasePrompt by remember { mutableStateOf(false) }
-    var showBaseCurrencyPicker by remember { mutableStateOf(false) }
 
     // 1. SAF 选择 CSV 文件导入
     val csvOpenLauncher = rememberLauncherForActivityResult(
@@ -166,7 +159,7 @@ fun ImportAndBackupScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("导入、同步与外观设置") },
+                title = { Text("数据导入与加密备份") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "返回")
@@ -205,7 +198,7 @@ fun ImportAndBackupScreen(
                             Text("账单 CSV 导入", style = MaterialTheme.typography.titleMedium)
                         }
                         Text(
-                            text = "自动识别并导入一木记账、微信支付账单、支付宝账单 CSV（兼容 UTF-8 与 GB18030/GBK 编码，导入前先预览去重统计）。",
+                            text = "自动识别并导入通用记账表格、微信支付账单、支付宝账单 CSV（兼容 UTF-8 与 GB18030/GBK 编码，导入前先预览去重统计）。",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -497,92 +490,6 @@ fun ImportAndBackupScreen(
                     }
                 }
             }
-
-            // 板块 4：主题外观与全局主币种
-            item(key = "appearance_section") {
-                Surface(
-                    shape = RoundedCornerShape(22.dp),
-                    color = MaterialTheme.colorScheme.surfaceContainerLow,
-                    tonalElevation = 1.dp,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(
-                        modifier = Modifier.padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            Icon(Icons.Rounded.Palette, null, tint = MaterialTheme.colorScheme.primary)
-                            Text("外观与主币种", style = MaterialTheme.typography.titleMedium)
-                        }
-
-                        Text("主题模式", style = MaterialTheme.typography.labelMedium)
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            listOf(
-                                ThemeMode.SYSTEM to "跟随系统",
-                                ThemeMode.LIGHT to "浅色模式",
-                                ThemeMode.DARK to "深色模式"
-                            ).forEach { (mode, label) ->
-                                FilterChip(
-                                    selected = settings.themeMode == mode,
-                                    onClick = { viewModel.updateSettings { it.copy(themeMode = mode) } },
-                                    label = { Text(label) }
-                                )
-                            }
-                        }
-
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text("Material You 动态取色", style = MaterialTheme.typography.titleSmall)
-                                Text(
-                                    text = "Android 12+ 自动提取壁纸色板，关闭则使用棱镜青蓝金融色板",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                            Switch(
-                                checked = settings.dynamicColor,
-                                onCheckedChange = { enabled ->
-                                    viewModel.updateSettings { it.copy(dynamicColor = enabled) }
-                                }
-                            )
-                        }
-
-                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f))
-
-                        Text("默认主币种（记账折算基准）", style = MaterialTheme.typography.labelMedium)
-                        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            val quick = if (settings.pinnedCurrencies.contains(settings.baseCurrency)) {
-                                settings.pinnedCurrencies
-                            } else {
-                                settings.pinnedCurrencies + settings.baseCurrency
-                            }
-                            items(quick, key = { it }) { code ->
-                                CurrencyBadge(
-                                    currencyCode = code,
-                                    selected = code.equals(settings.baseCurrency, true),
-                                    onClick = {
-                                        viewModel.updateSettings { it.copy(baseCurrency = code) }
-                                    }
-                                )
-                            }
-                            item(key = "more_base") {
-                                FilterChip(
-                                    selected = false,
-                                    onClick = { showBaseCurrencyPicker = true },
-                                    label = { Text("更多币种") }
-                                )
-                            }
-                        }
-                    }
-                }
-            }
         }
     }
 
@@ -734,15 +641,6 @@ fun ImportAndBackupScreen(
             dismissButton = {
                 TextButton(onClick = { pendingLocalRestoreBytes = null }) { Text("取消") }
             }
-        )
-    }
-
-    if (showBaseCurrencyPicker) {
-        CurrencyPickerDialog(
-            selectedCode = settings.baseCurrency,
-            pinnedCodes = settings.pinnedCurrencies,
-            onSelect = { code -> viewModel.updateSettings { it.copy(baseCurrency = code) } },
-            onDismiss = { showBaseCurrencyPicker = false }
         )
     }
 }

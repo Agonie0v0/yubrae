@@ -81,7 +81,7 @@ class YimuCsvImporterTest {
             csvContent.toByteArray(Charsets.UTF_8)
 
         val preview = env.importer.previewCsv(ByteArrayInputStream(utf8BomBytes)).getOrThrow()
-        assertEquals("一木记账 CSV", preview.formatName)
+        assertEquals("通用记账 CSV", preview.formatName)
         assertEquals(3, preview.totalRows)
         assertEquals(3, preview.validRows)
         assertEquals(0, preview.skippedDuplicateRows)

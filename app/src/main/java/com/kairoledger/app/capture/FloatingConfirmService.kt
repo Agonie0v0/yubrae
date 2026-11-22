@@ -67,7 +67,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * 悬浮窗自动记账确认卡片服务（一木清新风可交互面板）：
+ * 悬浮窗自动记账确认卡片服务（薄荷清新风可交互面板）：
  * - 支持精简确认态与完整交互编辑态（自由切换），无需退出微信/支付宝即可修改收支类型、币种、账本、分类、账户、商户/备注、报销与不计收支；
  * - 任意用户点击/滚动/输入交互立即取消自动确认倒计时；
  * - 默认携带 FLAG_NOT_FOCUSABLE 不抢微信/支付宝焦点，点击商户/备注框时动态更新 WindowManager 布局弹出软键盘，完成或失焦自动恢复；
@@ -588,7 +588,7 @@ class FloatingConfirmService : Service() {
             return { setWindowFocusable(false) }
         }
 
-        // === 完整一木清新交互编辑态 ===
+        // === 完整薄荷清新交互编辑态 ===
         // 2. 顶部 支出 | 收入 | 转账 分段切换
         val segmentTrack = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL

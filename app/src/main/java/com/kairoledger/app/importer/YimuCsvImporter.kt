@@ -33,7 +33,7 @@ import java.util.Locale
 import kotlin.math.abs
 
 /**
- * 兼容一木记账 / 微信账单 / 支付宝账单的 CSV 导入器。
+ * 兼容通用记账表格 / 微信账单 / 支付宝账单的 CSV 导入器。
  *
  * 支持 UTF-8 BOM / UTF-8 / GB18030(GBK) 自动探测、RFC 4180 完整解析、
  * 表头智能定位、缺失账户与一二级分类自动创建、历史日期汇率换算，
@@ -393,7 +393,7 @@ class YimuCsvImporter(
 
         val settings = settingsProvider()
         val mapping = detectHeaderAndColumns(rows)
-            ?: throw IllegalArgumentException("未能识别 CSV 表头，请确认文件来自一木记账、微信账单或支付宝账单")
+            ?: throw IllegalArgumentException("未能识别 CSV 表头，请确认文件来自通用记账表格、微信账单或支付宝账单")
 
         val existingAccounts = accountDao.getAll().associateBy { normalizeNameKey(it.name) }
         val existingCategories = categoryDao.getAll()
@@ -717,7 +717,7 @@ class YimuCsvImporter(
             "收支类型" in headerSet ||
                 "一级分类" in headerSet ||
                 "二级分类" in headerSet ||
-                "转入账户" in headerSet -> "一木记账 CSV"
+                "转入账户" in headerSet -> "通用记账 CSV"
             else -> "通用账单 CSV"
         }
     }

@@ -2,46 +2,34 @@ package com.kairoledger.app.ui.navigation
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.Crossfade
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ReceiptLong
 import androidx.compose.material.icons.rounded.AccountBalanceWallet
 import androidx.compose.material.icons.rounded.Add
-import androidx.compose.material.icons.rounded.ArrowDropDown
-import androidx.compose.material.icons.rounded.AutoAwesome
-import androidx.compose.material.icons.rounded.CurrencyExchange
-import androidx.compose.material.icons.rounded.MenuBook
+import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.PieChart
-import androidx.compose.material.icons.rounded.ReceiptLong
-import androidx.compose.material.icons.rounded.Visibility
-import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
@@ -54,14 +42,13 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.Lifecycle
@@ -72,6 +59,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.kairoledger.app.AppContainer
 import com.kairoledger.app.data.db.TransactionEntity
 import com.kairoledger.app.data.db.TransactionType
+import com.kairoledger.app.data.prefs.AppSettings
 import com.kairoledger.app.ui.components.LedgerManageSheet
 import com.kairoledger.app.ui.components.LocalPrivacyMasked
 import com.kairoledger.app.ui.components.QuickRecordSheet
@@ -81,11 +69,13 @@ import com.kairoledger.app.ui.screens.assets.AssetsScreen
 import com.kairoledger.app.ui.screens.categories.CategoryManageScreen
 import com.kairoledger.app.ui.screens.finance.DebtCenterScreen
 import com.kairoledger.app.ui.screens.finance.ReimburseCenterScreen
-import com.kairoledger.app.ui.screens.settings.AutomationHubScreen
+import com.kairoledger.app.ui.screens.settings.AppearanceSecurityScreen
+import com.kairoledger.app.ui.screens.settings.AutoCaptureSettingsScreen
 import com.kairoledger.app.ui.screens.settings.CaptureLogsScreen
 import com.kairoledger.app.ui.screens.settings.ExchangeRatesScreen
 import com.kairoledger.app.ui.screens.settings.ImportAndBackupScreen
 import com.kairoledger.app.ui.screens.settings.LlmSettingsScreen
+import com.kairoledger.app.ui.screens.settings.MineHubScreen
 import com.kairoledger.app.ui.screens.settings.RecurringRulesScreen
 import com.kairoledger.app.ui.screens.settings.RulesAndAliasesScreen
 import com.kairoledger.app.ui.screens.settings.SettingsRoutes
@@ -105,10 +95,10 @@ private data class BottomTabItem(
 )
 
 private val bottomTabs = listOf(
-    BottomTabItem(0, "明细", Icons.Rounded.ReceiptLong),
+    BottomTabItem(0, "明细", Icons.AutoMirrored.Rounded.ReceiptLong),
     BottomTabItem(1, "资产", Icons.Rounded.AccountBalanceWallet),
     BottomTabItem(2, "统计", Icons.Rounded.PieChart),
-    BottomTabItem(3, "自动化", Icons.Rounded.AutoAwesome)
+    BottomTabItem(3, "我的", Icons.Rounded.Person)
 )
 
 private object OverlayRouteKinds {
@@ -119,7 +109,6 @@ private object OverlayRouteKinds {
     const val CATEGORIES = "CATEGORIES"
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun KairoAppRoot(
     container: AppContainer,
@@ -137,28 +126,26 @@ fun KairoAppRoot(
     val lifecycleOwner = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
+    val saveableStateHolder = rememberSaveableStateHolder()
 
+    // 根组件仅订阅轻量全局元数据与角标计数，重数据流下沉到各子页面按需收集
     val settings by viewModel.settings.collectAsStateWithLifecycle()
-    val activeAccounts by viewModel.activeAccounts.collectAsStateWithLifecycle()
-    val allAccounts by viewModel.allAccounts.collectAsStateWithLifecycle()
-    val categories by viewModel.categories.collectAsStateWithLifecycle()
-    val allTransactions by viewModel.allTransactions.collectAsStateWithLifecycle()
-    val exchangeRates by viewModel.exchangeRates.collectAsStateWithLifecycle()
-    val ledgers by viewModel.ledgers.collectAsStateWithLifecycle()
-    val debts by viewModel.debts.collectAsStateWithLifecycle()
-    val installments by viewModel.installments.collectAsStateWithLifecycle()
     val pendingCount by viewModel.pendingCount.collectAsStateWithLifecycle()
     val pendingReimburseCount by viewModel.pendingReimburseCount.collectAsStateWithLifecycle()
     val openDebtCount by viewModel.openDebtCount.collectAsStateWithLifecycle()
-    val assetsUiState by viewModel.assetsUiState.collectAsStateWithLifecycle()
-    val statsUiState by viewModel.statsUiState.collectAsStateWithLifecycle()
+
+    // 为 4 个主 Tab 保留持久滚动位置
+    val txListState = rememberLazyListState()
+    val assetsListState = rememberLazyListState()
+    val statsListState = rememberLazyListState()
+    val mineListState = rememberLazyListState()
 
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
     var settingsSubRoute by rememberSaveable { mutableStateOf(SettingsRoutes.HUB) }
     var overlayKind by rememberSaveable { mutableStateOf(OverlayRouteKinds.NONE) }
     var overlayAccountId by rememberSaveable { mutableLongStateOf(0L) }
 
-    // 记账弹窗 / 账本切换 / 智能记账弹窗状态
+    // 记账弹窗 / 账本管理弹窗 / 智能记账弹窗状态
     var showQuickRecord by remember { mutableStateOf(false) }
     var editingTransaction by remember { mutableStateOf<TransactionEntity?>(null) }
     var refundOriginTransaction by remember { mutableStateOf<TransactionEntity?>(null) }
@@ -167,12 +154,6 @@ fun KairoAppRoot(
     var showLedgerSheet by remember { mutableStateOf(false) }
     var showSmartInput by remember { mutableStateOf(false) }
     var smartInputImagePath by remember { mutableStateOf<String?>(null) }
-
-    // 明细页高级筛选持久态
-    var selectedCategoryIdFilter by rememberSaveable { mutableStateOf<Long?>(null) }
-    var selectedReimburseFilter by rememberSaveable { mutableStateOf("ALL") }
-    var minAmountFilterText by rememberSaveable { mutableStateOf("") }
-    var maxAmountFilterText by rememberSaveable { mutableStateOf("") }
 
     // 应用锁（冷启动与前后台切换触发；设置页初次开启时不会立即锁死当前操作）
     var initialLockEvaluated by rememberSaveable { mutableStateOf(false) }
@@ -221,7 +202,7 @@ fun KairoAppRoot(
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    // 监听 ViewModel 的全局 SnackBar 提示
+    // 监听 ViewModel 全局 SnackBar 提示
     LaunchedEffect(viewModel) {
         viewModel.snackbarEvents.collect { msg ->
             snackbarHostState.showSnackbar(msg)
@@ -277,7 +258,7 @@ fun KairoAppRoot(
     val hasOverlayScreen = overlayKind != OverlayRouteKinds.NONE
     val isInsideSettingsSubScreen = !hasOverlayScreen && selectedTab == 3 && settingsSubRoute != SettingsRoutes.HUB
 
-    // 系统返回键：优先退出全屏二级中心，其次退出设置二级页
+    // 系统返回键：优先退出全屏二级中心，其次退出二级设置页
     BackHandler(enabled = hasOverlayScreen) {
         overlayKind = OverlayRouteKinds.NONE
     }
@@ -285,13 +266,10 @@ fun KairoAppRoot(
         settingsSubRoute = SettingsRoutes.HUB
     }
 
-    val activeLedger = remember(ledgers, settings.activeLedgerId) {
-        ledgers.firstOrNull { it.id == settings.activeLedgerId }
-    }
-    val activeLedgerTitle = when {
-        settings.activeLedgerId == 0L -> "全部账本"
-        activeLedger != null -> activeLedger.name
-        else -> "日常账本"
+    val onTogglePrivacy = remember(viewModel) {
+        {
+            viewModel.updateSettings { it.copy(privacyMaskEnabled = !it.privacyMaskEnabled) }
+        }
     }
 
     KairoLedgerTheme(
@@ -304,106 +282,64 @@ fun KairoAppRoot(
                 when {
                     hasOverlayScreen -> {
                         when (overlayKind) {
-                            OverlayRouteKinds.ACCOUNT_DETAIL -> {
-                                val targetAccount = allAccounts.firstOrNull { it.id == overlayAccountId }
-                                if (targetAccount == null) {
-                                    LaunchedEffect(overlayAccountId) {
-                                        overlayKind = OverlayRouteKinds.NONE
-                                    }
-                                } else {
-                                    AccountDetailScreen(
-                                        account = targetAccount,
-                                        transactions = allTransactions,
-                                        categories = categories,
-                                        installments = installments,
-                                        displayCurrency = assetsUiState.displayCurrency,
-                                        convertedBalanceMicros = assetsUiState.netWorth.accountConvertedBalances[targetAccount.id],
-                                        onBack = { overlayKind = OverlayRouteKinds.NONE },
-                                        onQuickRecord = {
-                                            editingTransaction = null
-                                            refundOriginTransaction = null
-                                            quickRecordInitialType = TransactionType.EXPENSE
-                                            quickRecordInitialAccountId = targetAccount.id
-                                            showQuickRecord = true
-                                        },
-                                        onQuickTransfer = {
-                                            editingTransaction = null
-                                            refundOriginTransaction = null
-                                            quickRecordInitialType = TransactionType.TRANSFER
-                                            quickRecordInitialAccountId = targetAccount.id
-                                            showQuickRecord = true
-                                        },
-                                        onCalibrateBalance = { targetBalance, note ->
-                                            viewModel.calibrateAccountBalance(targetAccount.id, targetBalance, note)
-                                        },
-                                        onEditAccount = { updated -> viewModel.saveAccount(updated) },
-                                        onToggleArchive = { archived ->
-                                            viewModel.archiveAccount(targetAccount.id, archived)
-                                        },
-                                        onEditTransaction = { tx ->
-                                            editingTransaction = tx
-                                            refundOriginTransaction = null
-                                            showQuickRecord = true
-                                        },
-                                        onSaveInstallment = { plan -> viewModel.saveInstallment(plan) },
-                                        onRecordInstallmentPeriod = { planId ->
-                                            viewModel.recordInstallmentPeriod(planId)
-                                        },
-                                        onDeleteInstallment = { planId -> viewModel.deleteInstallment(planId) },
-                                        pinnedCurrencies = settings.pinnedCurrencies
-                                    )
+                            OverlayRouteKinds.ACCOUNT_DETAIL -> AccountDetailHost(
+                                viewModel = viewModel,
+                                accountId = overlayAccountId,
+                                settings = settings,
+                                onBack = { overlayKind = OverlayRouteKinds.NONE },
+                                onQuickRecord = { accountId ->
+                                    editingTransaction = null
+                                    refundOriginTransaction = null
+                                    quickRecordInitialType = TransactionType.EXPENSE
+                                    quickRecordInitialAccountId = accountId
+                                    showQuickRecord = true
+                                },
+                                onQuickTransfer = { accountId ->
+                                    editingTransaction = null
+                                    refundOriginTransaction = null
+                                    quickRecordInitialType = TransactionType.TRANSFER
+                                    quickRecordInitialAccountId = accountId
+                                    showQuickRecord = true
+                                },
+                                onEditTransaction = { tx ->
+                                    editingTransaction = tx
+                                    refundOriginTransaction = null
+                                    showQuickRecord = true
                                 }
-                            }
-                            OverlayRouteKinds.REIMBURSE -> {
-                                ReimburseCenterScreen(
-                                    transactions = allTransactions,
-                                    accounts = activeAccounts,
-                                    categories = categories,
-                                    baseCurrency = settings.baseCurrency,
-                                    rates = exchangeRates,
-                                    convertToBase = { tx ->
-                                        viewModel.convertTxToDisplayBase(tx, settings.baseCurrency, exchangeRates)
-                                    },
-                                    onBack = { overlayKind = OverlayRouteKinds.NONE },
-                                    onSettleReimbursements = { txIds, targetAccId, note ->
-                                        viewModel.settleReimbursements(txIds, targetAccId, note)
-                                    },
-                                    onMarkStatusNone = { txId -> viewModel.clearTransactionReimburseFlag(txId) },
-                                    onClickTransaction = { tx ->
-                                        editingTransaction = tx
-                                        refundOriginTransaction = null
-                                        showQuickRecord = true
-                                    }
-                                )
-                            }
-                            OverlayRouteKinds.DEBTS -> {
-                                DebtCenterScreen(
-                                    debts = debts,
-                                    accounts = activeAccounts,
-                                    baseCurrency = settings.baseCurrency,
-                                    pinnedCurrencies = settings.pinnedCurrencies,
-                                    onBack = { overlayKind = OverlayRouteKinds.NONE },
-                                    onSaveDebt = { debt, sync -> viewModel.saveDebt(debt, sync) },
-                                    onSettleDebt = { debtId, settleAmt, accId, note ->
-                                        viewModel.settleDebt(debtId, settleAmt, accId, note)
-                                    },
-                                    onDeleteDebt = { debtId -> viewModel.deleteDebt(debtId) }
-                                )
-                            }
-                            OverlayRouteKinds.CATEGORIES -> {
-                                CategoryManageScreen(
-                                    categories = categories,
-                                    onSaveCategory = { cat -> viewModel.saveCategory(cat) },
-                                    onDeleteCategory = { catId -> viewModel.deleteCategory(catId) },
-                                    onBack = { overlayKind = OverlayRouteKinds.NONE }
-                                )
-                            }
+                            )
+                            OverlayRouteKinds.REIMBURSE -> ReimburseCenterHost(
+                                viewModel = viewModel,
+                                settings = settings,
+                                onBack = { overlayKind = OverlayRouteKinds.NONE },
+                                onClickTransaction = { tx ->
+                                    editingTransaction = tx
+                                    refundOriginTransaction = null
+                                    showQuickRecord = true
+                                }
+                            )
+                            OverlayRouteKinds.DEBTS -> DebtCenterHost(
+                                viewModel = viewModel,
+                                settings = settings,
+                                onBack = { overlayKind = OverlayRouteKinds.NONE }
+                            )
+                            OverlayRouteKinds.CATEGORIES -> CategoryManageHost(
+                                viewModel = viewModel,
+                                onBack = { overlayKind = OverlayRouteKinds.NONE }
+                            )
                         }
                     }
 
                     isInsideSettingsSubScreen -> {
                         Crossfade(targetState = settingsSubRoute, label = "settings_sub_route") { route ->
                             when (route) {
+                                SettingsRoutes.AUTO_CAPTURE -> AutoCaptureSettingsScreen(
+                                    viewModel = viewModel,
+                                    onBack = { settingsSubRoute = SettingsRoutes.HUB }
+                                )
+                                SettingsRoutes.APPEARANCE -> AppearanceSecurityScreen(
+                                    viewModel = viewModel,
+                                    onBack = { settingsSubRoute = SettingsRoutes.HUB }
+                                )
                                 SettingsRoutes.LOGS -> CaptureLogsScreen(
                                     viewModel = viewModel,
                                     onBack = { settingsSubRoute = SettingsRoutes.HUB },
@@ -446,103 +382,7 @@ fun KairoAppRoot(
 
                     else -> {
                         Scaffold(
-                            topBar = {
-                                TopAppBar(
-                                    title = {
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                        ) {
-                                            Surface(
-                                                shape = RoundedCornerShape(999.dp),
-                                                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.72f),
-                                                modifier = Modifier
-                                                    .clip(RoundedCornerShape(999.dp))
-                                                    .clickable { showLedgerSheet = true }
-                                            ) {
-                                                Row(
-                                                    verticalAlignment = Alignment.CenterVertically,
-                                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
-                                                ) {
-                                                    Icon(
-                                                        imageVector = Icons.Rounded.MenuBook,
-                                                        contentDescription = null,
-                                                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                                                        modifier = Modifier.size(16.dp)
-                                                    )
-                                                    Spacer(modifier = Modifier.width(5.dp))
-                                                    Text(
-                                                        text = activeLedgerTitle,
-                                                        style = MaterialTheme.typography.titleSmall,
-                                                        fontWeight = FontWeight.Bold,
-                                                        color = MaterialTheme.colorScheme.onPrimaryContainer,
-                                                        maxLines = 1,
-                                                        overflow = TextOverflow.Ellipsis,
-                                                        modifier = Modifier.widthIn(max = 128.dp)
-                                                    )
-                                                    Icon(
-                                                        imageVector = Icons.Rounded.ArrowDropDown,
-                                                        contentDescription = "切换账本",
-                                                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                                                        modifier = Modifier.size(18.dp)
-                                                    )
-                                                }
-                                            }
-                                            Surface(
-                                                shape = CircleShape,
-                                                color = MaterialTheme.colorScheme.surfaceContainerHigh
-                                            ) {
-                                                Text(
-                                                    text = settings.baseCurrency,
-                                                    style = MaterialTheme.typography.labelSmall,
-                                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
-                                                )
-                                            }
-                                        }
-                                    },
-                                    actions = {
-                                        IconButton(
-                                            onClick = {
-                                                viewModel.updateSettings {
-                                                    it.copy(privacyMaskEnabled = !it.privacyMaskEnabled)
-                                                }
-                                            }
-                                        ) {
-                                            Icon(
-                                                imageVector = if (settings.privacyMaskEnabled) {
-                                                    Icons.Rounded.VisibilityOff
-                                                } else {
-                                                    Icons.Rounded.Visibility
-                                                },
-                                                contentDescription = if (settings.privacyMaskEnabled) "关闭隐私遮罩" else "开启隐私遮罩"
-                                            )
-                                        }
-                                        IconButton(
-                                            onClick = {
-                                                smartInputImagePath = null
-                                                showSmartInput = true
-                                            }
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Rounded.AutoAwesome,
-                                                contentDescription = "语音/智能记账"
-                                            )
-                                        }
-                                        IconButton(
-                                            onClick = {
-                                                selectedTab = 3
-                                                settingsSubRoute = SettingsRoutes.RATES
-                                            }
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Rounded.CurrencyExchange,
-                                                contentDescription = "汇率中心"
-                                            )
-                                        }
-                                    }
-                                )
-                            },
+                            contentWindowInsets = WindowInsets(0, 0, 0, 0),
                             bottomBar = {
                                 NavigationBar {
                                     bottomTabs.forEach { tab ->
@@ -595,8 +435,9 @@ fun KairoAppRoot(
                                 }
                             }
                         ) { innerPadding ->
-                            Crossfade(targetState = selectedTab, label = "main_tab_crossfade") { tab ->
-                                when (tab) {
+                            // 零动画瞬时切换 + 状态持久化，消除 Crossfade 双树同帧重组开销
+                            saveableStateHolder.SaveableStateProvider(selectedTab) {
+                                when (selectedTab) {
                                     0 -> TransactionsScreen(
                                         viewModel = viewModel,
                                         onEditTransaction = { tx ->
@@ -612,18 +453,6 @@ fun KairoAppRoot(
                                             showQuickRecord = true
                                         },
                                         contentPadding = innerPadding,
-                                        activeLedgerId = settings.activeLedgerId,
-                                        ledgers = ledgers,
-                                        selectedCategoryIdFilter = selectedCategoryIdFilter,
-                                        onSelectCategoryFilter = { selectedCategoryIdFilter = it },
-                                        selectedReimburseFilter = selectedReimburseFilter,
-                                        onSelectReimburseFilter = { selectedReimburseFilter = it },
-                                        minAmountFilterText = minAmountFilterText,
-                                        maxAmountFilterText = maxAmountFilterText,
-                                        onAmountRangeFilterChange = { minT, maxT ->
-                                            minAmountFilterText = minT
-                                            maxAmountFilterText = maxT
-                                        },
                                         onRefundTransaction = { tx ->
                                             editingTransaction = null
                                             refundOriginTransaction = tx
@@ -636,6 +465,13 @@ fun KairoAppRoot(
                                         },
                                         onBatchDeleteTransactions = { ids ->
                                             viewModel.batchDeleteTransactions(ids)
+                                        },
+                                        listState = txListState,
+                                        onOpenLedgerManager = { showLedgerSheet = true },
+                                        onTogglePrivacy = onTogglePrivacy,
+                                        onOpenSmartInput = {
+                                            smartInputImagePath = null
+                                            showSmartInput = true
                                         }
                                     )
                                     1 -> AssetsScreen(
@@ -666,31 +502,27 @@ fun KairoAppRoot(
                                         },
                                         onOpenDebtCenter = {
                                             overlayKind = OverlayRouteKinds.DEBTS
+                                        },
+                                        listState = assetsListState,
+                                        onTogglePrivacy = onTogglePrivacy,
+                                        onOpenExchangeRates = {
+                                            selectedTab = 3
+                                            settingsSubRoute = SettingsRoutes.RATES
                                         }
                                     )
                                     2 -> StatsScreen(
                                         viewModel = viewModel,
                                         contentPadding = innerPadding,
-                                        granularity = statsUiState.granularity,
-                                        onSelectGranularity = { g -> viewModel.setStatsGranularity(g) },
-                                        anchorDateMillis = statsUiState.anchorDateMillis,
-                                        customStartMillis = statsUiState.customStartMillis,
-                                        customEndMillis = statsUiState.customEndMillis,
-                                        onShiftPeriod = { delta -> viewModel.shiftStatsPeriod(delta) },
-                                        onCustomDateRangeChange = { s, e -> viewModel.setStatsCustomRange(s, e) },
-                                        trendBuckets = statsUiState.trendBuckets,
-                                        netWorthHistory = statsUiState.netWorthHistory,
-                                        allTransactions = allTransactions,
-                                        accounts = allAccounts,
-                                        ledgers = ledgers,
-                                        activeLedgerId = settings.activeLedgerId,
                                         onEditTransaction = { tx ->
                                             editingTransaction = tx
                                             refundOriginTransaction = null
                                             showQuickRecord = true
-                                        }
+                                        },
+                                        listState = statsListState,
+                                        onOpenLedgerManager = { showLedgerSheet = true },
+                                        onTogglePrivacy = onTogglePrivacy
                                     )
-                                    else -> AutomationHubScreen(
+                                    else -> MineHubScreen(
                                         viewModel = viewModel,
                                         onNavigate = { route ->
                                             when (route) {
@@ -701,6 +533,10 @@ fun KairoAppRoot(
                                             }
                                         },
                                         onOpenLedgerManager = { showLedgerSheet = true },
+                                        pendingReimburseCount = pendingReimburseCount,
+                                        openDebtCount = openDebtCount,
+                                        onTogglePrivacy = onTogglePrivacy,
+                                        listState = mineListState,
                                         contentPadding = innerPadding
                                     )
                                 }
@@ -709,7 +545,7 @@ fun KairoAppRoot(
                     }
                 }
 
-                // 全局 SnackBar 宿主（同时覆盖主 Tab、设置二级页与全屏业务中心）
+                // 全局 SnackBar 宿主（覆盖主 Tab、设置二级页与全屏业务中心）
                 SnackbarHost(
                     hostState = snackbarHostState,
                     modifier = Modifier
@@ -743,6 +579,9 @@ fun KairoAppRoot(
             }
 
             if (showQuickRecord) {
+                val activeAccounts by viewModel.activeAccounts.collectAsStateWithLifecycle()
+                val categories by viewModel.categories.collectAsStateWithLifecycle()
+                val ledgers by viewModel.ledgers.collectAsStateWithLifecycle()
                 QuickRecordSheet(
                     viewModel = viewModel,
                     accounts = activeAccounts,
@@ -772,6 +611,7 @@ fun KairoAppRoot(
             }
 
             if (showLedgerSheet) {
+                val ledgers by viewModel.ledgers.collectAsStateWithLifecycle()
                 LedgerManageSheet(
                     ledgers = ledgers,
                     activeLedgerId = settings.activeLedgerId,
@@ -786,6 +626,9 @@ fun KairoAppRoot(
             }
 
             if (showSmartInput) {
+                val activeAccounts by viewModel.activeAccounts.collectAsStateWithLifecycle()
+                val categories by viewModel.categories.collectAsStateWithLifecycle()
+                val ledgers by viewModel.ledgers.collectAsStateWithLifecycle()
                 SmartInputSheet(
                     accounts = activeAccounts,
                     categories = categories,
@@ -810,4 +653,123 @@ fun KairoAppRoot(
             }
         }
     }
+}
+
+@Composable
+private fun AccountDetailHost(
+    viewModel: KairoMainViewModel,
+    accountId: Long,
+    settings: AppSettings,
+    onBack: () -> Unit,
+    onQuickRecord: (Long) -> Unit,
+    onQuickTransfer: (Long) -> Unit,
+    onEditTransaction: (TransactionEntity) -> Unit
+) {
+    val allAccounts by viewModel.allAccounts.collectAsStateWithLifecycle()
+    val allTransactions by viewModel.allTransactions.collectAsStateWithLifecycle()
+    val categories by viewModel.categories.collectAsStateWithLifecycle()
+    val installments by viewModel.installments.collectAsStateWithLifecycle()
+    val assetsUiState by viewModel.assetsUiState.collectAsStateWithLifecycle()
+
+    val targetAccount = allAccounts.firstOrNull { it.id == accountId }
+    if (targetAccount == null) {
+        LaunchedEffect(accountId, allAccounts.size) {
+            if (allAccounts.isNotEmpty()) {
+                onBack()
+            }
+        }
+        return
+    }
+
+    AccountDetailScreen(
+        account = targetAccount,
+        transactions = allTransactions,
+        categories = categories,
+        installments = installments,
+        displayCurrency = assetsUiState.displayCurrency,
+        convertedBalanceMicros = assetsUiState.netWorth.accountConvertedBalances[targetAccount.id],
+        onBack = onBack,
+        onQuickRecord = { onQuickRecord(targetAccount.id) },
+        onQuickTransfer = { onQuickTransfer(targetAccount.id) },
+        onCalibrateBalance = { targetBalance, note ->
+            viewModel.calibrateAccountBalance(targetAccount.id, targetBalance, note)
+        },
+        onEditAccount = { updated -> viewModel.saveAccount(updated) },
+        onToggleArchive = { archived ->
+            viewModel.archiveAccount(targetAccount.id, archived)
+        },
+        onEditTransaction = onEditTransaction,
+        onSaveInstallment = { plan -> viewModel.saveInstallment(plan) },
+        onRecordInstallmentPeriod = { planId -> viewModel.recordInstallmentPeriod(planId) },
+        onDeleteInstallment = { planId -> viewModel.deleteInstallment(planId) },
+        pinnedCurrencies = settings.pinnedCurrencies
+    )
+}
+
+@Composable
+private fun ReimburseCenterHost(
+    viewModel: KairoMainViewModel,
+    settings: AppSettings,
+    onBack: () -> Unit,
+    onClickTransaction: (TransactionEntity) -> Unit
+) {
+    val allTransactions by viewModel.allTransactions.collectAsStateWithLifecycle()
+    val activeAccounts by viewModel.activeAccounts.collectAsStateWithLifecycle()
+    val categories by viewModel.categories.collectAsStateWithLifecycle()
+    val exchangeRates by viewModel.exchangeRates.collectAsStateWithLifecycle()
+
+    ReimburseCenterScreen(
+        transactions = allTransactions,
+        accounts = activeAccounts,
+        categories = categories,
+        baseCurrency = settings.baseCurrency,
+        rates = exchangeRates,
+        convertToBase = { tx ->
+            viewModel.convertTxToDisplayBase(tx, settings.baseCurrency, exchangeRates)
+        },
+        onBack = onBack,
+        onSettleReimbursements = { txIds, targetAccId, note ->
+            viewModel.settleReimbursements(txIds, targetAccId, note)
+        },
+        onMarkStatusNone = { txId -> viewModel.clearTransactionReimburseFlag(txId) },
+        onClickTransaction = onClickTransaction
+    )
+}
+
+@Composable
+private fun DebtCenterHost(
+    viewModel: KairoMainViewModel,
+    settings: AppSettings,
+    onBack: () -> Unit
+) {
+    val debts by viewModel.debts.collectAsStateWithLifecycle()
+    val activeAccounts by viewModel.activeAccounts.collectAsStateWithLifecycle()
+
+    DebtCenterScreen(
+        debts = debts,
+        accounts = activeAccounts,
+        baseCurrency = settings.baseCurrency,
+        pinnedCurrencies = settings.pinnedCurrencies,
+        onBack = onBack,
+        onSaveDebt = { debt, sync -> viewModel.saveDebt(debt, sync) },
+        onSettleDebt = { debtId, settleAmt, accId, note ->
+            viewModel.settleDebt(debtId, settleAmt, accId, note)
+        },
+        onDeleteDebt = { debtId -> viewModel.deleteDebt(debtId) }
+    )
+}
+
+@Composable
+private fun CategoryManageHost(
+    viewModel: KairoMainViewModel,
+    onBack: () -> Unit
+) {
+    val categories by viewModel.categories.collectAsStateWithLifecycle()
+
+    CategoryManageScreen(
+        categories = categories,
+        onSaveCategory = { cat -> viewModel.saveCategory(cat) },
+        onDeleteCategory = { catId -> viewModel.deleteCategory(catId) },
+        onBack = onBack
+    )
 }
