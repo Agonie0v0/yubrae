@@ -428,4 +428,88 @@ class ScreenBillParserTest {
         assertFalse(ScreenBillParser.isWatchedPackage("com.kairoledger.app"))
         assertFalse(ScreenBillParser.isWatchedPackage("com.android.settings"))
     }
+
+    @Test
+    fun parsesRealCapturedWeChatWebViewBillDetailPreferringHeroStoreNameAndIgnoringBottomAllBillsButton() {
+        val realSnapshot = ScreenSnapshot(
+            packageName = "com.tencent.mm",
+            className = "com.tencent.mm.plugin.webview.ui.tools.MMWebViewUI",
+            texts = listOf(
+                "哆哆酸辣粉",
+                "-16.00",
+                "当前状态", "支付成功",
+                "支付时间", "2026年11月18日 18:41:35",
+                "商品", "嗨客多-单号：3012611181841252285688（哆哆酸辣粉）",
+                "商户全称", "商户_王禹睿",
+                "收单机构", "随行付支付有限公司",
+                "支付方式", "零钱",
+                "交易单号", "4500000576202611189062916577",
+                "商户单号", "83620261118329900796",
+                "账单服务", "发起群收款", "在此商户的交易", "申请电子凭证",
+                "本服务由财付通提供",
+                "全部账单"
+            )
+        )
+        val outcome = parser.parse(realSnapshot, aliases, accounts, categories)
+        assertEquals(ScreenPageKind.BILL_DETAIL, outcome.pageKind)
+        val draft = outcome.draft
+        assertNotNull(draft)
+        assertEquals(TransactionType.EXPENSE, draft!!.type)
+        assertEquals(MoneyAmount.parseToMicros("16.00"), draft.origAmountMicros)
+        assertEquals("CNY", draft.origCurrency)
+        assertEquals("哆哆酸辣粉", draft.merchant)
+        assertEquals("餐饮美食", draft.categoryName)
+        assertEquals("4500000576202611189062916577", draft.externalOrderNo)
+        assertEquals("微信零钱", accounts.first { it.id == draft.accountId }.name)
+    }
+
+    @Test
+    fun parsesWeChatPersonalTransferDetailWithCounterpartyReceivedAndBottomAllBills() {
+        val transferSnapshot = ScreenSnapshot(
+            packageName = "com.tencent.mm",
+            className = "com.tencent.mm.plugin.webview.ui.tools.MMWebViewUI",
+            texts = listOf(
+                "向张三转账",
+                "-200.00",
+                "当前状态", "对方已收钱",
+                "转账说明", "聚餐AA",
+                "转账时间", "2026-11-20 20:10:00",
+                "收钱时间", "2026-11-20 20:11:15",
+                "支付方式", "招商银行信用卡(6688)",
+                "转账单号", "1000050001202611200012345",
+                "账单服务", "定位到聊天位置", "查看往来记录",
+                "本服务由财付通提供",
+                "全部账单"
+            )
+        )
+        val outcome = parser.parse(transferSnapshot, aliases, accounts, categories)
+        assertEquals(ScreenPageKind.BILL_DETAIL, outcome.pageKind)
+        val draft = outcome.draft
+        assertNotNull(draft)
+        assertEquals(TransactionType.EXPENSE, draft!!.type)
+        assertEquals(MoneyAmount.parseToMicros("200.00"), draft.origAmountMicros)
+        assertEquals("招商信用卡6688", accounts.first { it.id == draft.accountId }.name)
+        assertEquals("1000050001202611200012345", draft.externalOrderNo)
+    }
+
+    @Test
+    fun parsesMinimalWeChatRedPacketOrMiniDetailWithServiceFooterAndBottomAllBills() {
+        val redPacketSnapshot = ScreenSnapshot(
+            packageName = "com.tencent.mm",
+            className = "com.tencent.mm.plugin.webview.ui.tools.MMWebViewUI",
+            texts = listOf(
+                "微信红包",
+                "66.66",
+                "当前状态", "对方已领取",
+                "本服务由财付通提供",
+                "全部账单"
+            )
+        )
+        val outcome = parser.parse(redPacketSnapshot, aliases, accounts, categories)
+        assertEquals(ScreenPageKind.BILL_DETAIL, outcome.pageKind)
+        val draft = outcome.draft
+        assertNotNull(draft)
+        assertEquals(TransactionType.EXPENSE, draft!!.type)
+        assertEquals(MoneyAmount.parseToMicros("66.66"), draft.origAmountMicros)
+    }
 }

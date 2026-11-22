@@ -37,7 +37,8 @@ class ScreenBillParser(
         FOREIGN_AMOUNT,
         AMOUNT,
         ORDER_AMOUNT,
-        IGNORED_AMOUNT
+        IGNORED_AMOUNT,
+        META
     }
 
     private data class ExtractedField(
@@ -395,12 +396,18 @@ class ScreenBillParser(
         val hasDetailHeader = lowerLines.any { line ->
             DETAIL_HEADER_KEYWORDS.any { line == it || line.startsWith("$it ") || line.startsWith("$it·") }
         }
+        val hasDetailAnchorMarker = DETAIL_ANCHOR_MARKERS.any { marker ->
+            lowerLines.any { it.contains(marker) }
+        }
 
-        val isBillListOverview = (BILL_LIST_MARKERS.any { marker -> lowerLines.any { it == marker || it.contains(marker) } } ||
-            (lowerLines.any { it == "账单" || it == "我的账单" } &&
+        // 仅当顶部 6 行内出现“全部账单/月账单/筛选”等列表页特征且不存在任何详情页锚点时，才判为账单列表页（避免微信详情页底部的“全部账单”按钮误杀）
+        val topLines = lowerLines.take(6)
+        val isBillListOverview = (BILL_LIST_MARKERS.any { marker -> topLines.any { it == marker || it.contains(marker) } } ||
+            (topLines.any { it == "账单" || it == "我的账单" } &&
                 lowerLines.any { it == "支出" || it.startsWith("支出 ") || it.startsWith("支出¥") } &&
                 lowerLines.any { it == "收入" || it.startsWith("收入 ") || it.startsWith("收入¥") })) &&
             !hasDetailHeader &&
+            !hasDetailAnchorMarker &&
             distinctDetailKeys < 2
 
         if (isBillListOverview) {
@@ -440,11 +447,13 @@ class ScreenBillParser(
             .toSet()
             .size
 
-        // 支付结果页常伴随“支付成功 + 完成 + 商户/支付方式”，但不含时间/单号/状态或独立详情标题
+        // 支付结果页常伴随“支付成功 + 完成 + 商户/支付方式”，但不含时间/单号/状态或独立详情标题/详情服务锚点
         val isPaySuccessResultLayout = hasPaySuccessPhrase && hasDoneAnchor &&
             !hasStandaloneDetailTitleWithoutDone(lowerLines) &&
+            !hasDetailAnchorMarker &&
             strongDetailOnlyCount == 0
         if (strongDetailOnlyCount >= 2 ||
+            hasDetailAnchorMarker ||
             (distinctDetailKeys >= 2 && !isPaySuccessResultLayout) ||
             (hasDetailHeader && !isPaySuccessResultLayout)
         ) {
@@ -541,7 +550,7 @@ class ScreenBillParser(
             val cleanedLine = stripNonAmountClauses(line)
             if (cleanedLine.isBlank()) continue
 
-            val isHeroZone = index <= 8 && isStandaloneAmountLine(cleanedLine)
+            val isHeroZone = index <= 10 && isStandaloneAmountLine(cleanedLine)
             val role = if (isHeroZone) AmountRole.HERO else AmountRole.GENERIC
             candidates += extractCandidatesFromText(
                 text = cleanedLine,
@@ -891,14 +900,25 @@ class ScreenBillParser(
         fields: List<ExtractedField>,
         txType: String
     ): String {
+        val heroMerchant = extractHeroMerchant(lines)
+            ?.takeIf { !isGenericChannelMerchant(it) }
         val explicitShort = fields
             .filter { it.key == FieldKey.MERCHANT }
             .mapNotNull { cleanMerchantCandidate(it.value) }
             .firstOrNull { !isGenericChannelMerchant(it) }
-        if (!explicitShort.isNullOrBlank()) return explicitShort
 
-        val heroMerchant = extractHeroMerchant(lines)
-        if (!heroMerchant.isNullOrBlank() && !isGenericChannelMerchant(heroMerchant)) {
+        if (!explicitShort.isNullOrBlank()) {
+            // 若商户全称是结算主体（如“商户_王禹睿”、“个体户xxx”、“xx有限公司”），而顶部有更直观的店名（如“哆哆酸辣粉”），优先采用顶部直观店名
+            if (!heroMerchant.isNullOrBlank() &&
+                isSettlementEntityName(explicitShort) &&
+                !isSettlementEntityName(heroMerchant)
+            ) {
+                return heroMerchant
+            }
+            return explicitShort
+        }
+
+        if (!heroMerchant.isNullOrBlank()) {
             return heroMerchant
         }
 
@@ -914,7 +934,18 @@ class ScreenBillParser(
             .firstOrNull { !isGenericChannelMerchant(it) }
         if (!goods.isNullOrBlank()) return goods
 
-        return heroMerchant.orEmpty()
+        return ""
+    }
+
+    private fun isSettlementEntityName(name: String): Boolean {
+        val trimmed = name.trim()
+        return trimmed.startsWith("商户_") ||
+            trimmed.startsWith("个体户") ||
+            trimmed.endsWith("有限公司") ||
+            trimmed.endsWith("有限责任公司") ||
+            trimmed.endsWith("经营部") ||
+            trimmed.endsWith("个体工商户") ||
+            trimmed.endsWith("分公司")
     }
 
     private fun extractHeroMerchant(lines: List<String>): String? {
@@ -1095,7 +1126,18 @@ class ScreenBillParser(
             "创建时间" to FieldKey.TIME,
             "交易创建时间" to FieldKey.TIME,
             "收款时间" to FieldKey.TIME,
+            "收钱时间" to FieldKey.TIME,
             "转账时间" to FieldKey.TIME,
+            "领取时间" to FieldKey.TIME,
+            "提现时间" to FieldKey.TIME,
+            "申请时间" to FieldKey.TIME,
+            "还款时间" to FieldKey.TIME,
+            "充值时间" to FieldKey.TIME,
+            "转入时间" to FieldKey.TIME,
+            "转出时间" to FieldKey.TIME,
+            "出账时间" to FieldKey.TIME,
+            "入账时间" to FieldKey.TIME,
+            "下单时间" to FieldKey.TIME,
             "退款时间" to FieldKey.TIME,
             "到账时间" to FieldKey.TIME,
             "完成时间" to FieldKey.TIME,
@@ -1109,8 +1151,17 @@ class ScreenBillParser(
             "收款方式" to FieldKey.PAYMENT_METHOD,
             "付款账号" to FieldKey.PAYMENT_METHOD,
             "付款卡号" to FieldKey.PAYMENT_METHOD,
+            "扣款银行卡" to FieldKey.PAYMENT_METHOD,
             "转出账户" to FieldKey.PAYMENT_METHOD,
             "扣款账户" to FieldKey.PAYMENT_METHOD,
+            "资金来源" to FieldKey.PAYMENT_METHOD,
+            "提现银行" to FieldKey.PAYMENT_METHOD,
+            "提现到" to FieldKey.PAYMENT_METHOD,
+            "到账银行卡" to FieldKey.PAYMENT_METHOD,
+            "转入至" to FieldKey.PAYMENT_METHOD,
+            "还款银行卡" to FieldKey.PAYMENT_METHOD,
+            "收款账户" to FieldKey.PAYMENT_METHOD,
+            "存入账户" to FieldKey.PAYMENT_METHOD,
             "退款去向" to FieldKey.PAYMENT_METHOD,
             "退回账户" to FieldKey.PAYMENT_METHOD,
             "退回方式" to FieldKey.PAYMENT_METHOD,
@@ -1164,9 +1215,19 @@ class ScreenBillParser(
             "转账说明" to FieldKey.GOODS,
             "交易说明" to FieldKey.GOODS,
             "备注" to FieldKey.GOODS,
-            "收款方备注" to FieldKey.GOODS,
+            "红包说明" to FieldKey.GOODS,
+            "付款方留言" to FieldKey.GOODS,
+            "转账备注" to FieldKey.GOODS,
             "description" to FieldKey.GOODS,
             "item" to FieldKey.GOODS,
+
+            "收单机构" to FieldKey.META,
+            "清算机构" to FieldKey.META,
+            "账单服务" to FieldKey.META,
+            "账单分类" to FieldKey.META,
+            "对方微信号" to FieldKey.META,
+            "对方账号" to FieldKey.META,
+            "收款方备注" to FieldKey.META,
 
             "实付金额" to FieldKey.ACTUAL_AMOUNT,
             "实付款" to FieldKey.ACTUAL_AMOUNT,
@@ -1238,11 +1299,18 @@ class ScreenBillParser(
             "支付方式" to FieldKey.PAYMENT_METHOD,
             "付款方式" to FieldKey.PAYMENT_METHOD,
             "交易单号" to FieldKey.ORDER_NO,
+            "转账单号" to FieldKey.ORDER_NO,
             "订单号" to FieldKey.ORDER_NO,
             "商户单号" to FieldKey.ORDER_NO,
             "支付时间" to FieldKey.TIME,
             "交易时间" to FieldKey.TIME,
-            "创建时间" to FieldKey.TIME
+            "创建时间" to FieldKey.TIME,
+            "收钱时间" to FieldKey.TIME,
+            "转账时间" to FieldKey.TIME,
+            "提现时间" to FieldKey.TIME,
+            "提现银行" to FieldKey.PAYMENT_METHOD,
+            "收单机构" to FieldKey.META,
+            "清算机构" to FieldKey.META
         )
 
         private val DETAIL_SIGNAL_KEYS = setOf(
@@ -1254,7 +1322,8 @@ class ScreenBillParser(
             FieldKey.MERCHANT,
             FieldKey.PAYEE,
             FieldKey.ACTUAL_AMOUNT,
-            FieldKey.FOREIGN_AMOUNT
+            FieldKey.FOREIGN_AMOUNT,
+            FieldKey.META
         )
 
         private val SKIP_AMOUNT_SCAN_KEYS = setOf(
@@ -1265,7 +1334,8 @@ class ScreenBillParser(
             FieldKey.IGNORED_AMOUNT,
             FieldKey.MERCHANT,
             FieldKey.PAYEE,
-            FieldKey.PAYER
+            FieldKey.PAYER,
+            FieldKey.META
         )
 
         private val ACTION_ONLY_WORDS = setOf(
@@ -1291,10 +1361,18 @@ class ScreenBillParser(
             "transaction details", "payment details", "transfer details"
         )
 
+        private val DETAIL_ANCHOR_MARKERS = listOf(
+            "账单服务", "发起群收款", "申请电子凭证", "本服务由财付通提供",
+            "收单机构", "清算机构", "在此商户的交易", "定位到聊天位置",
+            "查看往来记录", "联系收款方", "对订单有疑惑", "对此订单有疑问"
+        )
+
         private val PAY_SUCCESS_PHRASES = listOf(
             "支付成功", "付款成功", "交易成功", "消费成功", "转账成功",
-            "汇款成功", "收款成功", "已收款", "已存入零钱", "免密支付成功",
-            "扣款成功", "退款成功", "已退款", "退款到账", "已退回",
+            "汇款成功", "收款成功", "已收款", "已存入零钱", "已存入零钱通",
+            "免密支付成功", "扣款成功", "退款成功", "已退款", "退款到账", "已退回",
+            "对方已收钱", "对方已收款", "对方已领取", "已领取", "已提现",
+            "已转入", "已转出", "还款成功", "充值成功", "已完成", "已到账", "已入账",
             "payment successful", "transfer successful", "transaction successful", "money received"
         )
 
@@ -1326,12 +1404,12 @@ class ScreenBillParser(
         )
 
         private val COUNTERPARTY_RECEIVED_KEYWORDS = listOf(
-            "对方已收款", "对方已收钱", "等待对方收款", "待对方收款", "对方已领"
+            "对方已收款", "对方已收钱", "对方已领取", "等待对方收款", "等待对方收钱", "待对方收款", "对方已领"
         )
 
         private val INCOME_SCREEN_KEYWORDS = listOf(
             "已收款", "收款成功", "收款金额", "二维码收款", "赞赏码收款",
-            "收到转账", "已存入零钱", "到账成功", "已到账", "入账成功",
+            "收到转账", "已存入零钱", "已存入零钱通", "到账成功", "已到账", "入账成功",
             "工资", "分红", "返现", "收到红包", "红包已领取",
             "you received", "money received"
         )
@@ -1399,14 +1477,16 @@ class ScreenBillParser(
             "完成", "返回", "关闭", "确定", "确认", "取消", "返回商家", "查看账单", "查看详情",
             "查看零钱", "复制", "分享", "截屏", "投诉", "联系客服", "联系收款方", "常见问题",
             "对订单有疑惑", "对此订单有疑问", "申请退款", "申请售后", "申请开票", "在此商户的交易记录",
+            "在此商户的交易", "账单服务", "发起群收款", "申请电子凭证", "本服务由财付通提供",
+            "定位到聊天位置", "查看往来记录", "全部账单",
             "更多", "删除账单", "标签和备注", "添加备注", "分类", "计入收支", "不计入收支",
-            "微信", "微信支付", "微信收款助手", "支付宝", "云闪付", "招商银行", "工商银行", "建设银行",
+            "微信", "微信支付", "微信收款助手", "支付宝", "云闪付", "财付通", "招商银行", "工商银行", "建设银行",
             "农业银行", "中国银行", "交通银行", "平安银行", "wise", "paypal", "revolut",
             "支付", "收款", "转账", "付款", "人民币", "美元", "欧元", "英镑", "done", "ok", "close"
         )
 
         private val UI_STOP_PREFIXES = listOf(
-            "对订单有疑", "对此订单有疑", "在此商户的", "联系收款方", "申请开票", "申请退款", "申请售后", "查看"
+            "对订单有疑", "对此订单有疑", "在此商户的", "联系收款方", "申请开票", "申请退款", "申请售后", "查看", "本服务由"
         )
 
         private val GENERIC_CHANNEL_MERCHANTS = setOf(

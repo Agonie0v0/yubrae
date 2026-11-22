@@ -4,18 +4,22 @@
 .EXAMPLE
     .\scripts\dev-run.ps1
     .\scripts\dev-run.ps1 -Watch
-    .\scripts\dev-run.ps1 -Device <serial> -Watch
+    .\scripts\dev-run.ps1 -Device d05c6533 -SkipTests -EnsureAccessibility
 #>
 param(
     [switch]$Watch,
     [string]$Device = '',
-    [switch]$SkipTests
+    [switch]$SkipTests,
+    [switch]$EnsureAccessibility
 )
 
 $ErrorActionPreference = 'Stop'
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
 $PackageName = 'com.kairoledger.app.debug'
 $MainActivity = 'com.kairoledger.app.MainActivity'
+$A11yClass = 'com.kairoledger.app.capture.screen.KairoAccessibilityService'
+$A11yShortClass = '.capture.screen.KairoAccessibilityService'
+$A11yComponent = "$PackageName/$A11yClass"
 $ApkPath = Join-Path $ProjectRoot 'app\build\outputs\apk\debug\app-debug.apk'
 
 if (-not $env:JAVA_HOME -and (Test-Path 'D:\DevTools\jdk-21\bin\java.exe')) {
@@ -43,6 +47,43 @@ function Get-TargetDevice {
     return ($lines[0].Line -split '\s+')[0]
 }
 
+function Get-A11yEntries([string]$raw) {
+    if ([string]::IsNullOrWhiteSpace($raw) -or $raw.Trim() -eq 'null') { return @() }
+    return @($raw.Trim() -split ':' | ForEach-Object { $_.Trim() } | Where-Object { $_ -and $_ -ne 'null' })
+}
+
+function Test-HasKairoA11y([string[]]$entries) {
+    foreach ($e in $entries) {
+        if ($e -eq $A11yComponent -or $e -eq "$PackageName/$A11yShortClass") {
+            return $true
+        }
+    }
+    return $false
+}
+
+function Restore-KairoAccessibility([string]$serial) {
+    $currentRaw = (& $AdbExe -s $serial shell settings get secure enabled_accessibility_services 2>$null) -join ''
+    $existing = Get-A11yEntries $currentRaw
+    $merged = [System.Collections.Generic.List[string]]::new()
+    $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+    foreach ($entry in $existing) {
+        $normalized = if ($entry -eq "$PackageName/$A11yShortClass") { $A11yComponent } else { $entry }
+        if ($seen.Add($normalized)) {
+            $merged.Add($normalized)
+        }
+    }
+    if ($seen.Add($A11yComponent)) {
+        $merged.Add($A11yComponent)
+    }
+    $joined = $merged -join ':'
+    & $AdbExe -s $serial shell settings put secure enabled_accessibility_services "$joined" 2>$null | Out-Null
+    & $AdbExe -s $serial shell settings put secure accessibility_enabled 1 2>$null | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        & $AdbExe -s $serial shell "su -c 'settings put secure enabled_accessibility_services $joined && settings put secure accessibility_enabled 1'" | Out-Null
+    }
+    Write-Host "[KairoLedger] 已无损保持并启用无障碍页面监听服务。" -ForegroundColor Green
+}
+
 function Invoke-BuildAndRestart {
     Push-Location $ProjectRoot
     try {
@@ -65,6 +106,9 @@ function Invoke-BuildAndRestart {
             return $true
         }
 
+        $beforeRaw = (& $AdbExe -s $target shell settings get secure enabled_accessibility_services 2>$null) -join ''
+        $wasA11yEnabled = Test-HasKairoA11y (Get-A11yEntries $beforeRaw)
+
         Write-Host "[KairoLedger] 正在安装到设备 $target ..." -ForegroundColor Cyan
         & $AdbExe -s $target install -r -d $ApkPath
         if ($LASTEXITCODE -ne 0) { throw "adb install 失败" }
@@ -72,6 +116,11 @@ function Invoke-BuildAndRestart {
         Write-Host "[KairoLedger] 正在强停并自动重启 $PackageName ..." -ForegroundColor Cyan
         & $AdbExe -s $target shell am force-stop $PackageName | Out-Null
         & $AdbExe -s $target shell am start -n "$PackageName/$MainActivity" | Out-Null
+
+        if ($wasA11yEnabled -or $EnsureAccessibility) {
+            Restore-KairoAccessibility $target
+        }
+
         Write-Host "[KairoLedger] 已在设备上重启应用完成！" -ForegroundColor Green
         return $true
     } finally {
