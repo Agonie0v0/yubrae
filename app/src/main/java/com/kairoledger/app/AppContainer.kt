@@ -1,6 +1,7 @@
 package com.kairoledger.app
 
 import android.content.Context
+import com.kairoledger.app.capture.CaptureOrchestrator
 import com.kairoledger.app.core.contract.BillImporter
 import com.kairoledger.app.core.contract.CaptureEngine
 import com.kairoledger.app.core.contract.CloudSyncService
@@ -8,12 +9,16 @@ import com.kairoledger.app.core.contract.ExchangeRateProvider
 import com.kairoledger.app.core.contract.LedgerService
 import com.kairoledger.app.data.db.KairoDatabase
 import com.kairoledger.app.data.prefs.SettingsStore
+import com.kairoledger.app.data.repository.ExchangeRateRepositoryImpl
+import com.kairoledger.app.data.repository.LedgerRepositoryImpl
+import com.kairoledger.app.importer.YimuCsvImporter
+import com.kairoledger.app.sync.WebDavSyncManager
 import okhttp3.OkHttpClient
 import java.util.concurrent.TimeUnit
 
 /**
- * 轻量级手写依赖注入容器（KISS 原则，避免过多编译期框架复杂度）。
- * Stage 0 先声明接口持有器，Stage 2 总装时接入全部具体实现。
+ * 轻量级手写依赖注入容器（KISS 原则）。
+ * 在容器构造时同步装配全量核心服务，保证任何后台 Receiver / Service / Widget 均可安全获取。
  */
 class AppContainer(context: Context) {
     val appContext: Context = context.applicationContext
@@ -26,33 +31,42 @@ class AppContainer(context: Context) {
         .writeTimeout(30, TimeUnit.SECONDS)
         .build()
 
-    @Volatile
-    var exchangeRateProvider: ExchangeRateProvider? = null
+    val exchangeRateProvider: ExchangeRateProvider = ExchangeRateRepositoryImpl(
+        db = database,
+        okHttpClient = okHttpClient,
+        settingsStore = settingsStore
+    )
 
-    @Volatile
-    var ledgerService: LedgerService? = null
+    val ledgerService: LedgerService = LedgerRepositoryImpl(
+        db = database,
+        exchangeRateProvider = exchangeRateProvider,
+        settingsStore = settingsStore
+    )
 
-    @Volatile
-    var captureEngine: CaptureEngine? = null
+    val captureEngine: CaptureEngine = CaptureOrchestrator(
+        context = appContext,
+        db = database,
+        settingsStore = settingsStore,
+        okHttpClient = okHttpClient,
+        ledgerService = ledgerService
+    )
 
-    @Volatile
-    var billImporter: BillImporter? = null
+    val billImporter: BillImporter = YimuCsvImporter(
+        db = database,
+        exchangeRateProvider = exchangeRateProvider,
+        ledgerService = ledgerService,
+        settingsStore = settingsStore
+    )
 
-    @Volatile
-    var cloudSyncService: CloudSyncService? = null
+    val cloudSyncService: CloudSyncService = WebDavSyncManager(
+        db = database,
+        settingsStore = settingsStore,
+        okHttpClient = okHttpClient
+    )
 
-    fun requireExchangeRateProvider(): ExchangeRateProvider =
-        requireNotNull(exchangeRateProvider) { "ExchangeRateProvider not initialized" }
-
-    fun requireLedgerService(): LedgerService =
-        requireNotNull(ledgerService) { "LedgerService not initialized" }
-
-    fun requireCaptureEngine(): CaptureEngine =
-        requireNotNull(captureEngine) { "CaptureEngine not initialized" }
-
-    fun requireBillImporter(): BillImporter =
-        requireNotNull(billImporter) { "BillImporter not initialized" }
-
-    fun requireCloudSyncService(): CloudSyncService =
-        requireNotNull(cloudSyncService) { "CloudSyncService not initialized" }
+    fun requireExchangeRateProvider(): ExchangeRateProvider = exchangeRateProvider
+    fun requireLedgerService(): LedgerService = ledgerService
+    fun requireCaptureEngine(): CaptureEngine = captureEngine
+    fun requireBillImporter(): BillImporter = billImporter
+    fun requireCloudSyncService(): CloudSyncService = cloudSyncService
 }

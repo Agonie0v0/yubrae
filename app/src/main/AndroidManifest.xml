@@ -2,6 +2,10 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
+    <uses-feature
+        android:name="android.hardware.telephony"
+        android:required="false" />
+
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
@@ -35,6 +39,92 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- 1. 通知栏自动记账监听服务 -->
+        <service
+            android:name=".capture.KairoNotificationListenerService"
+            android:exported="true"
+            android:label="@string/notification_listener_label"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+
+        <!-- 2. 悬浮确认弹窗服务（兼容 Android 14/15 dataSync 前台服务类型） -->
+        <service
+            android:name=".capture.FloatingConfirmService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
+        <!-- 3. 银行/境外卡动账短信接收器 -->
+        <receiver
+            android:name=".capture.BankSmsReceiver"
+            android:exported="true"
+            android:permission="android.permission.BROADCAST_SMS">
+            <intent-filter android:priority="999">
+                <action android:name="android.provider.Telephony.SMS_RECEIVED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- 4. AutoAccounting / Tasker 外部协议广播接收器 -->
+        <receiver
+            android:name=".capture.ExternalBillReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.kairoledger.app.ACTION_ADD_RECORD" />
+            </intent-filter>
+        </receiver>
+
+        <!-- 5. 降级通知栏确认/删除动作接收器 -->
+        <receiver
+            android:name=".capture.CaptureNotificationActionReceiver"
+            android:exported="false" />
+
+        <!-- 6. URI Scheme 外部记账入口：kairoledger://addbill?... -->
+        <activity
+            android:name=".capture.AutoAccountingSchemeActivity"
+            android:excludeFromRecents="true"
+            android:exported="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:host="addbill"
+                    android:scheme="kairoledger" />
+                <data
+                    android:host="record"
+                    android:scheme="kairoledger" />
+            </intent-filter>
+        </activity>
+
+        <!-- 7. 系统文本分享直接解析记账入口 -->
+        <activity
+            android:name=".capture.ShareTextCaptureActivity"
+            android:excludeFromRecents="true"
+            android:exported="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar">
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
+        </activity>
+
+        <!-- 8. Jetpack Glance 桌面小组件 -->
+        <receiver
+            android:name="com.kairoledger.app.widget.KairoSummaryWidgetReceiver"
+            android:exported="true"
+            android:label="@string/app_name">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/kairo_widget_info" />
+        </receiver>
 
     </application>
 </manifest>

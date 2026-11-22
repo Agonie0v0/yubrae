@@ -1,0 +1,189 @@
+package com.kairoledger.app.capture
+
+import android.Manifest
+import android.annotation.SuppressLint
+import android.content.Context
+import android.content.pm.PackageManager
+import android.os.Build
+import android.os.PowerManager
+import android.provider.Settings
+import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.ContextCompat
+import com.kairoledger.app.core.contract.DevicePermissionReport
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
+import java.io.File
+import java.util.concurrent.TimeUnit
+
+/**
+ * 设备权限体检与 Root 一键授权工具（兼容小米 14 / HyperOS / Magisk / KernelSU / LSPosed）。
+ */
+object AndroidPermissionHelper {
+
+    private val SU_PATHS = listOf(
+        "/system/bin/su",
+        "/system/xbin/su",
+        "/sbin/su",
+        "/su/bin/su",
+        "/data/local/su",
+        "/data/local/bin/su",
+        "/data/local/xbin/su",
+        "/vendor/bin/su",
+        "/apex/com.android.runtime/bin/su"
+    )
+
+    private val ROOT_MANAGER_PATHS = listOf(
+        "/data/adb/magisk",
+        "/data/adb/ksu",
+        "/data/adb/apatch"
+    )
+
+    fun inspectPermissions(context: Context): DevicePermissionReport {
+        val appContext = context.applicationContext
+        val pkg = appContext.packageName
+
+        val isRooted = detectRootBinary()
+        val hasLsposed = detectLsposedHint()
+
+        val notificationListenerEnabled = runCatching {
+            NotificationManagerCompat.getEnabledListenerPackages(appContext).contains(pkg)
+        }.getOrDefault(false)
+
+        val smsGranted = ContextCompat.checkSelfPermission(
+            appContext,
+            Manifest.permission.RECEIVE_SMS
+        ) == PackageManager.PERMISSION_GRANTED &&
+            ContextCompat.checkSelfPermission(
+                appContext,
+                Manifest.permission.READ_SMS
+            ) == PackageManager.PERMISSION_GRANTED
+
+        val overlayGranted = runCatching { Settings.canDrawOverlays(appContext) }.getOrDefault(false)
+
+        val powerManager = appContext.getSystemService(Context.POWER_SERVICE) as? PowerManager
+        val ignoringBattery = runCatching {
+            powerManager?.isIgnoringBatteryOptimizations(pkg) == true
+        }.getOrDefault(false)
+
+        val postNotificationGranted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            ContextCompat.checkSelfPermission(
+                appContext,
+                Manifest.permission.POST_NOTIFICATIONS
+            ) == PackageManager.PERMISSION_GRANTED
+        } else {
+            runCatching { NotificationManagerCompat.from(appContext).areNotificationsEnabled() }.getOrDefault(true)
+        }
+
+        return DevicePermissionReport(
+            isRooted = isRooted,
+            hasLsposedHint = hasLsposed,
+            notificationListenerEnabled = notificationListenerEnabled,
+            smsPermissionGranted = smsGranted,
+            overlayPermissionGranted = overlayGranted,
+            ignoringBatteryOptimizations = ignoringBattery,
+            postNotificationGranted = postNotificationGranted,
+            manufacturer = Build.MANUFACTURER.orEmpty(),
+            osDisplay = buildOsDisplay()
+        )
+    }
+
+    suspend fun tryRootGrantPermissions(context: Context): Result<String> = withContext(Dispatchers.IO) {
+        runCatching {
+            val appContext = context.applicationContext
+            val pkg = appContext.packageName
+            val listenerComponent = "$pkg/${KairoNotificationListenerService::class.java.name}"
+
+            val script = buildString {
+                append("cmd notification allow_listener ").append(listenerComponent).append(" ; ")
+                append("dumpsys deviceidle whitelist +").append(pkg).append(" ; ")
+                append("pm grant ").append(pkg).append(" android.permission.RECEIVE_SMS 2>/dev/null ; ")
+                append("pm grant ").append(pkg).append(" android.permission.READ_SMS 2>/dev/null ; ")
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    append("pm grant ").append(pkg).append(" android.permission.POST_NOTIFICATIONS 2>/dev/null ; ")
+                }
+                append("appops set ").append(pkg).append(" SYSTEM_ALERT_WINDOW allow 2>/dev/null ; ")
+                append("echo __KAIRO_ROOT_OK__")
+            }
+
+            val process = ProcessBuilder("su", "-c", script)
+                .redirectErrorStream(true)
+                .start()
+
+            val finished = process.waitFor(8, TimeUnit.SECONDS)
+            if (!finished) {
+                process.destroyForcibly()
+                throw IllegalStateException("执行 su 命令超时，请检查 Root 授权管理器弹窗")
+            }
+
+            val output = process.inputStream.bufferedReader().use { it.readText() }.trim()
+            val exitCode = process.exitValue()
+            if (exitCode != 0 && !output.contains("__KAIRO_ROOT_OK__")) {
+                throw IllegalStateException("Root 授权被拒绝或失败 (code=$exitCode): ${output.take(160)}")
+            }
+
+            delay(250)
+            val report = inspectPermissions(appContext)
+            buildString {
+                append("Root 授权已执行：")
+                append("通知监听=").append(if (report.notificationListenerEnabled) "已开启" else "未生效")
+                append("，电池白名单=").append(if (report.ignoringBatteryOptimizations) "已放行" else "未生效")
+                append("，短信=").append(if (report.smsPermissionGranted) "已授权" else "未生效")
+                append("，悬浮窗=").append(if (report.overlayPermissionGranted) "已授权" else "未生效")
+            }
+        }
+    }
+
+    private fun detectRootBinary(): Boolean {
+        if (SU_PATHS.any { runCatching { File(it).exists() }.getOrDefault(false) }) {
+            return true
+        }
+        if (ROOT_MANAGER_PATHS.any { runCatching { File(it).exists() }.getOrDefault(false) }) {
+            return true
+        }
+        val pathEnv = System.getenv("PATH").orEmpty()
+        if (pathEnv.split(":").any { dir ->
+                dir.isNotBlank() && runCatching { File(dir, "su").exists() }.getOrDefault(false)
+            }
+        ) {
+            return true
+        }
+        return false
+    }
+
+    private fun detectLsposedHint(): Boolean {
+        if (runCatching { File("/data/adb/lspd").exists() }.getOrDefault(false)) return true
+        val hasLspdModule = runCatching {
+            File("/data/adb/modules").listFiles()?.any {
+                it.name.contains("lsposed", ignoreCase = true) ||
+                    it.name.contains("zygisk_lsposed", ignoreCase = true)
+            } == true
+        }.getOrDefault(false)
+        if (hasLspdModule) return true
+        if (runCatching { Class.forName("de.robv.android.xposed.XposedBridge") }.isSuccess) return true
+        if (getSystemProperty("ro.xposed.version").isNotBlank()) return true
+        return false
+    }
+
+    private fun buildOsDisplay(): String {
+        val hyperOsVer = getSystemProperty("ro.mi.os.version.name")
+        val miuiVer = getSystemProperty("ro.miui.ui.version.name")
+        val androidRelease = Build.VERSION.RELEASE.orEmpty()
+        val model = Build.MODEL.orEmpty()
+
+        return when {
+            hyperOsVer.isNotBlank() -> "HyperOS $hyperOsVer ($miuiVer) · Android $androidRelease"
+            miuiVer.isNotBlank() -> "MIUI $miuiVer · Android $androidRelease"
+            else -> "$model · Android $androidRelease"
+        }
+    }
+
+    @SuppressLint("PrivateApi")
+    private fun getSystemProperty(key: String): String {
+        return runCatching {
+            val clazz = Class.forName("android.os.SystemProperties")
+            val getMethod = clazz.getMethod("get", String::class.java, String::class.java)
+            (getMethod.invoke(null, key, "") as? String).orEmpty().trim()
+        }.getOrDefault("")
+    }
+}
