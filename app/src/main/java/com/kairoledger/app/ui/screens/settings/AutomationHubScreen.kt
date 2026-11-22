@@ -395,7 +395,7 @@ private fun PermissionHealthCard(
 
             if (report != null) {
                 PermissionRow("Root 环境 (su)", report.isRooted, "已获取", "未检测到", null)
-                PermissionRow("LSPosed 模块环境", report.hasLsposedHint, "已检测到", "未检测到", null)
+                PermissionRow("LSPosed 框架环境", report.hasLsposedHint, "已就绪", "未检测到", null)
                 PermissionRow("通知监听使用权", report.notificationListenerEnabled, "已授权", "未开启", onOpenNotificationListener)
                 PermissionRow("短信读取与接收权限", report.smsPermissionGranted, "已授权", "未授权", onRequestSms)
                 PermissionRow("悬浮窗显示权限", report.overlayPermissionGranted, "已授权", "未授权", onOpenOverlay)

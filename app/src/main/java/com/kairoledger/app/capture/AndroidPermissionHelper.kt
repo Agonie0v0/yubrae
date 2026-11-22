@@ -39,12 +39,21 @@ object AndroidPermissionHelper {
         "/data/adb/apatch"
     )
 
-    fun inspectPermissions(context: Context): DevicePermissionReport {
+    private const val ROOT_PROBE_SCRIPT =
+        "id; " +
+            "[ -d /data/adb/lspd ] && echo __LSPD_DIR__; " +
+            "for m in /data/adb/modules/*; do " +
+            "[ -d \"\$m\" ] && [ ! -e \"\$m/disable\" ] && echo \"__MOD__\${m##*/}\"; " +
+            "done; " +
+            "(pidof lspd >/dev/null 2>&1 || ps -ef 2>/dev/null | grep -q '[l]spd') && echo __LSPD_PROC__"
+
+    suspend fun inspectPermissions(context: Context): DevicePermissionReport = withContext(Dispatchers.IO) {
         val appContext = context.applicationContext
         val pkg = appContext.packageName
 
-        val isRooted = detectRootBinary()
-        val hasLsposed = detectLsposedHint()
+        val (rootGranted, lsposedByRoot) = probeRootAndLsposed()
+        val isRooted = rootGranted || detectRootBinary()
+        val hasLsposed = lsposedByRoot || detectLsposedNonRoot(appContext)
 
         val notificationListenerEnabled = runCatching {
             NotificationManagerCompat.getEnabledListenerPackages(appContext).contains(pkg)
@@ -75,7 +84,7 @@ object AndroidPermissionHelper {
             runCatching { NotificationManagerCompat.from(appContext).areNotificationsEnabled() }.getOrDefault(true)
         }
 
-        return DevicePermissionReport(
+        DevicePermissionReport(
             isRooted = isRooted,
             hasLsposedHint = hasLsposed,
             notificationListenerEnabled = notificationListenerEnabled,
@@ -134,6 +143,44 @@ object AndroidPermissionHelper {
         }
     }
 
+    /**
+     * 通过受权 Root shell 探测 /data/adb/lspd、已启用 LSPosed 模块与 lspd 守护进程。
+     * 避免普通应用进程因 /data/adb 为 0700 root:root 权限导致探测恒为 false。
+     */
+    private fun probeRootAndLsposed(): Pair<Boolean, Boolean> {
+        return runCatching {
+            val process = ProcessBuilder("su", "-c", ROOT_PROBE_SCRIPT)
+                .redirectErrorStream(true)
+                .start()
+            val finished = process.waitFor(2, TimeUnit.SECONDS)
+            if (!finished) {
+                process.destroyForcibly()
+                return@runCatching false to false
+            }
+            val output = process.inputStream.bufferedReader().use { it.readText() }
+            parseRootProbeOutput(output)
+        }.getOrDefault(false to false)
+    }
+
+    internal fun parseRootProbeOutput(output: String): Pair<Boolean, Boolean> {
+        if (output.isBlank()) return false to false
+        val lines = output.lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.toList()
+        val isRootGranted = lines.any { it.contains("uid=0") }
+        if (!isRootGranted) return false to false
+
+        val hasLspdDir = lines.any { it == "__LSPD_DIR__" }
+        val hasLspdProc = lines.any { it == "__LSPD_PROC__" }
+        val hasLspdModule = lines.any { line ->
+            line == "__LSPD_MOD__" || (
+                line.startsWith("__MOD__") && line.removePrefix("__MOD__").let { modName ->
+                    modName.contains("lsposed", ignoreCase = true) ||
+                        modName.contains("lspd", ignoreCase = true)
+                }
+                )
+        }
+        return true to (hasLspdDir || hasLspdProc || hasLspdModule)
+    }
+
     private fun detectRootBinary(): Boolean {
         if (SU_PATHS.any { runCatching { File(it).exists() }.getOrDefault(false) }) {
             return true
@@ -151,17 +198,21 @@ object AndroidPermissionHelper {
         return false
     }
 
-    private fun detectLsposedHint(): Boolean {
+    private fun detectLsposedNonRoot(context: Context): Boolean {
         if (runCatching { File("/data/adb/lspd").exists() }.getOrDefault(false)) return true
         val hasLspdModule = runCatching {
             File("/data/adb/modules").listFiles()?.any {
-                it.name.contains("lsposed", ignoreCase = true) ||
-                    it.name.contains("zygisk_lsposed", ignoreCase = true)
+                !File(it, "disable").exists() && (
+                    it.name.contains("lsposed", ignoreCase = true) ||
+                        it.name.contains("lspd", ignoreCase = true)
+                    )
             } == true
         }.getOrDefault(false)
         if (hasLspdModule) return true
         if (runCatching { Class.forName("de.robv.android.xposed.XposedBridge") }.isSuccess) return true
         if (getSystemProperty("ro.xposed.version").isNotBlank()) return true
+        @Suppress("DEPRECATION")
+        if (runCatching { context.packageManager.getPackageInfo("org.lsposed.manager", 0) }.isSuccess) return true
         return false
     }
 
