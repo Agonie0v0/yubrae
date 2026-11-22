@@ -37,6 +37,16 @@ android {
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"
         }
+        create("perf") {
+            initWith(getByName("release"))
+            signingConfig = signingConfigs.getByName("debug")
+            applicationIdSuffix = ".debug"
+            versionNameSuffix = "-perf"
+            isDebuggable = false
+            isMinifyEnabled = true
+            isShrinkResources = true
+            matchingFallbacks += listOf("release", "debug")
+        }
     }
 
     compileOptions {
@@ -106,13 +116,15 @@ dependencies {
 }
 
 afterEvaluate {
-    tasks.named("assembleDebug").configure {
-        doLast {
-            val builtApk = layout.buildDirectory.file("outputs/apk/debug/app-debug.apk").get().asFile
-            if (builtApk.exists()) {
-                val mirrorDir = file("${projectDir}/build/outputs/apk/debug")
-                mirrorDir.mkdirs()
-                builtApk.copyTo(file("${mirrorDir}/app-debug.apk"), overwrite = true)
+    listOf("assembleDebug" to "debug", "assemblePerf" to "perf").forEach { (taskName, variantName) ->
+        tasks.matching { it.name == taskName }.configureEach {
+            doLast {
+                val builtApk = layout.buildDirectory.file("outputs/apk/$variantName/app-$variantName.apk").get().asFile
+                if (builtApk.exists()) {
+                    val mirrorDir = file("${projectDir}/build/outputs/apk/$variantName")
+                    mirrorDir.mkdirs()
+                    builtApk.copyTo(file("${mirrorDir}/app-$variantName.apk"), overwrite = true)
+                }
             }
         }
     }

@@ -55,9 +55,12 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -67,6 +70,7 @@ import java.time.Instant
 import java.time.LocalDate
 import java.time.YearMonth
 import java.time.ZoneId
+import kotlin.math.abs
 
 data class TransactionFilters(
     val yearMonth: YearMonth = YearMonth.now(),
@@ -74,7 +78,11 @@ data class TransactionFilters(
     val currencyFilter: String = "ALL",
     val accountIdFilter: Long? = null,
     val channelFilter: String = "ALL",
-    val pendingExpanded: Boolean = false
+    val pendingExpanded: Boolean = false,
+    val categoryIdFilter: Long? = null,
+    val reimburseFilter: String = "ALL",
+    val minAmountMicros: Long? = null,
+    val maxAmountMicros: Long? = null
 )
 
 data class DayTransactionGroup(
@@ -92,7 +100,8 @@ data class TransactionsUiState(
     val monthBalanceBaseMicros: Long = 0L,
     val groupedDays: List<DayTransactionGroup> = emptyList(),
     val pendingTransactions: List<TransactionEntity> = emptyList(),
-    val pendingCount: Int = 0
+    val pendingCount: Int = 0,
+    val baseAmountByTxId: Map<Long, Long> = emptyMap()
 )
 
 data class AssetsUiState(
@@ -182,11 +191,15 @@ class KairoMainViewModel(
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     val pendingReimburseCount: StateFlow<Int> = ledgerService.observeTransactions()
-        .combine(settings) { txs, _ -> txs.count { it.reimburseStatus == ReimburseStatus.PENDING } }
+        .map { txs -> txs.count { it.reimburseStatus == ReimburseStatus.PENDING } }
+        .distinctUntilChanged()
+        .flowOn(Dispatchers.Default)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
 
     val openDebtCount: StateFlow<Int> = debts
-        .combine(settings) { list, _ -> list.count { it.status == DebtStatus.OPEN } }
+        .map { list -> list.count { it.status == DebtStatus.OPEN } }
+        .distinctUntilChanged()
+        .flowOn(Dispatchers.Default)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
 
     val activeAccounts: StateFlow<List<AccountEntity>> = ledgerService.observeActiveAccounts()
@@ -231,25 +244,43 @@ class KairoMainViewModel(
     val transactionsUiState: StateFlow<TransactionsUiState> = combine(
         allTransactions,
         pendingTransactions,
-        pendingCount,
+        categories,
         exchangeRates,
         combine(_txFilters, settings) { filters, appSettings -> filters to appSettings }
-    ) { transactions, pending, count, rates, (filters, appSettings) ->
+    ) { transactions, pending, allCategories, rates, (filters, appSettings) ->
         val base = appSettings.baseCurrency
         val zone = ZoneId.systemDefault()
         val monthStart = filters.yearMonth.atDay(1).atStartOfDay(zone).toInstant().toEpochMilli()
         val monthEnd = filters.yearMonth.plusMonths(1).atDay(1).atStartOfDay(zone).toInstant().toEpochMilli() - 1L
+        val ledgerFilterId = appSettings.activeLedgerId
 
-        val inMonth = transactions.filter { it.timestamp in monthStart..monthEnd }
+        val childrenByParent = HashMap<Long, MutableSet<Long>>()
+        for (cat in allCategories) {
+            val pid = cat.parentId ?: continue
+            childrenByParent.getOrPut(pid) { HashSet() }.add(cat.id)
+        }
+        val targetCatIds = filters.categoryIdFilter?.let { filterId ->
+            HashSet<Long>().apply {
+                add(filterId)
+                childrenByParent[filterId]?.let { addAll(it) }
+            }
+        }
+
+        val baseAmountByTxId = HashMap<Long, Long>(64)
+        for (tx in pending) {
+            baseAmountByTxId[tx.id] = convertTxToDisplayBase(tx, base, rates)
+        }
+
+        val inMonthLedger = transactions.filter { tx ->
+            tx.timestamp in monthStart..monthEnd && (ledgerFilterId <= 0L || tx.ledgerId == ledgerFilterId)
+        }
         var monthExpense = 0L
         var monthIncome = 0L
-        val ledgerFilterId = appSettings.activeLedgerId
-        inMonth.forEach { tx ->
-            if (tx.status == TransactionStatus.CONFIRMED &&
-                !tx.excludeFromStats &&
-                (ledgerFilterId <= 0L || tx.ledgerId == ledgerFilterId)
-            ) {
-                val baseMicros = convertTxToDisplayBase(tx, base, rates)
+        for (tx in inMonthLedger) {
+            val baseMicros = baseAmountByTxId.getOrPut(tx.id) {
+                convertTxToDisplayBase(tx, base, rates)
+            }
+            if (tx.status == TransactionStatus.CONFIRMED && !tx.excludeFromStats) {
                 when (tx.type) {
                     TransactionType.EXPENSE -> monthExpense += baseMicros
                     TransactionType.INCOME -> {
@@ -265,7 +296,7 @@ class KairoMainViewModel(
         monthExpense = monthExpense.coerceAtLeast(0L)
 
         val queryLower = filters.query.trim().lowercase()
-        val filtered = inMonth.filter { tx ->
+        val filtered = inMonthLedger.filter { tx ->
             val matchCurrency = filters.currencyFilter == "ALL" ||
                 tx.origCurrency.equals(filters.currencyFilter, ignoreCase = true) ||
                 tx.accountCurrency.equals(filters.currencyFilter, ignoreCase = true)
@@ -273,11 +304,20 @@ class KairoMainViewModel(
                 tx.accountId == filters.accountIdFilter ||
                 tx.toAccountId == filters.accountIdFilter
             val matchChannel = filters.channelFilter == "ALL" || tx.sourceType == filters.channelFilter
+            val matchCat = targetCatIds == null || tx.categoryId in targetCatIds
+            val matchReimburse = filters.reimburseFilter == "ALL" || tx.reimburseStatus == filters.reimburseFilter
+            val matchAmount = if (filters.minAmountMicros != null || filters.maxAmountMicros != null) {
+                val baseAmt = abs(baseAmountByTxId[tx.id] ?: convertTxToDisplayBase(tx, base, rates))
+                (filters.minAmountMicros == null || baseAmt >= filters.minAmountMicros) &&
+                    (filters.maxAmountMicros == null || baseAmt <= filters.maxAmountMicros)
+            } else {
+                true
+            }
             val matchQuery = queryLower.isEmpty() ||
                 tx.merchant.lowercase().contains(queryLower) ||
                 tx.note.lowercase().contains(queryLower) ||
                 tx.tags.lowercase().contains(queryLower)
-            matchCurrency && matchAccount && matchChannel && matchQuery
+            matchCurrency && matchAccount && matchChannel && matchCat && matchReimburse && matchAmount && matchQuery
         }
 
         val groupedDays = filtered
@@ -288,18 +328,19 @@ class KairoMainViewModel(
                 var dayExp = 0L
                 var dayInc = 0L
                 dayTxs.forEach { tx ->
-                    if (tx.status == TransactionStatus.CONFIRMED) {
-                        val amt = convertTxToDisplayBase(tx, base, rates)
-                        when (tx.type) {
-                            TransactionType.EXPENSE -> dayExp += amt
-                            TransactionType.INCOME -> dayInc += amt
+                    if (tx.status == TransactionStatus.CONFIRMED && !tx.excludeFromStats) {
+                        val amt = baseAmountByTxId[tx.id] ?: convertTxToDisplayBase(tx, base, rates)
+                        when {
+                            tx.type == TransactionType.EXPENSE -> dayExp += amt
+                            tx.type == TransactionType.INCOME && tx.refundOfTxId != null -> dayExp -= amt
+                            tx.type == TransactionType.INCOME -> dayInc += amt
                         }
                     }
                 }
                 DayTransactionGroup(
                     date = date,
                     transactions = dayTxs.sortedByDescending { it.timestamp },
-                    dayExpenseBaseMicros = dayExp,
+                    dayExpenseBaseMicros = dayExp.coerceAtLeast(0L),
                     dayIncomeBaseMicros = dayInc
                 )
             }
@@ -312,9 +353,12 @@ class KairoMainViewModel(
             monthBalanceBaseMicros = monthIncome - monthExpense,
             groupedDays = groupedDays,
             pendingTransactions = pending,
-            pendingCount = count
+            pendingCount = pending.size,
+            baseAmountByTxId = baseAmountByTxId
         )
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), TransactionsUiState())
+    }
+        .flowOn(Dispatchers.Default)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), TransactionsUiState())
 
     // Tab 2: Assets state
     private val _assetsDisplayCurrency = MutableStateFlow<String?>(null)
@@ -326,28 +370,33 @@ class KairoMainViewModel(
         settings,
         _assetsDisplayCurrency,
         _showArchivedAccounts
-    ) { accounts, _, appSettings, chosenCurrency, showArchived ->
-        Triple(accounts, chosenCurrency ?: appSettings.baseCurrency, showArchived)
-    }.flatMapLatest { (accounts, displayCurrency, showArchived) ->
-        flow {
-            val summary = runCatching {
-                withContext(Dispatchers.IO) { ledgerService.computeNetWorth(displayCurrency) }
-            }.getOrElse {
-                NetWorthSummary(displayCurrency, 0L, 0L, 0L, emptyMap())
-            }
-            val visible = if (showArchived) accounts else accounts.filter { !it.archived }
-            val grouped = visible.groupBy { it.groupType }
-            emit(
-                AssetsUiState(
-                    displayCurrency = displayCurrency,
-                    showArchived = showArchived,
-                    netWorth = summary,
-                    groupedAccounts = grouped,
-                    isLoading = false
+    ) { accounts, rates, appSettings, chosenCurrency, showArchived ->
+        Triple(accounts, chosenCurrency ?: appSettings.baseCurrency, showArchived) to rates
+    }
+        .distinctUntilChanged()
+        .flatMapLatest { (query, _) ->
+            val (accounts, displayCurrency, showArchived) = query
+            flow {
+                val summary = runCatching {
+                    withContext(Dispatchers.IO) { ledgerService.computeNetWorth(displayCurrency) }
+                }.getOrElse {
+                    NetWorthSummary(displayCurrency, 0L, 0L, 0L, emptyMap())
+                }
+                val visible = if (showArchived) accounts else accounts.filter { !it.archived }
+                val grouped = visible.groupBy { it.groupType }
+                emit(
+                    AssetsUiState(
+                        displayCurrency = displayCurrency,
+                        showArchived = showArchived,
+                        netWorth = summary,
+                        groupedAccounts = grouped,
+                        isLoading = false
+                    )
                 )
-            )
+            }
         }
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), AssetsUiState(isLoading = true))
+        .flowOn(Dispatchers.Default)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), AssetsUiState(isLoading = true))
 
     // Tab 3: Stats state
     private val _statsMonth = MutableStateFlow(YearMonth.now())
@@ -375,7 +424,7 @@ class KairoMainViewModel(
         combine(_statsMonth, _statsCurrency, _statsType, _statsTimeFlow) { m, c, t, timeArgs ->
             Triple(Triple(m, c, t), timeArgs[0] as String, Triple(timeArgs[1] as Long, timeArgs[2] as Long?, timeArgs[3] as Long?))
         }
-    ) { _, _, _, appSettings, (baseTriple, granularity, timeRange) ->
+    ) { txs, bgs, rts, appSettings, (baseTriple, granularity, timeRange) ->
         StatsQueryParams(
             month = baseTriple.first,
             displayCurrency = baseTriple.second ?: appSettings.baseCurrency,
@@ -385,8 +434,10 @@ class KairoMainViewModel(
             customStartMillis = timeRange.second,
             customEndMillis = timeRange.third,
             activeLedgerId = appSettings.activeLedgerId
-        )
-    }.flatMapLatest { params ->
+        ) to Triple(txs.size to txs.firstOrNull()?.updatedAt, bgs, rts)
+    }
+        .distinctUntilChanged()
+        .flatMapLatest { (params, _) ->
         flow {
             val zone = ZoneId.systemDefault()
             val (windowStart, windowEnd) = computeStatsWindowMillis(
@@ -464,7 +515,9 @@ class KairoMainViewModel(
                 )
             )
         }
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), StatsUiState(isLoading = true))
+    }
+        .flowOn(Dispatchers.Default)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), StatsUiState(isLoading = true))
 
     private fun computeStatsWindowMillis(
         granularity: String,
@@ -553,6 +606,29 @@ class KairoMainViewModel(
 
     fun togglePendingExpanded() {
         _txFilters.update { it.copy(pendingExpanded = !it.pendingExpanded) }
+    }
+
+    fun setTxCategoryFilter(categoryId: Long?) {
+        _txFilters.update { it.copy(categoryIdFilter = categoryId) }
+    }
+
+    fun setTxReimburseFilter(status: String) {
+        _txFilters.update { it.copy(reimburseFilter = status) }
+    }
+
+    fun setTxAmountRangeFilter(minMicros: Long?, maxMicros: Long?) {
+        _txFilters.update { it.copy(minAmountMicros = minMicros, maxAmountMicros = maxMicros) }
+    }
+
+    fun clearTxAdvancedFilters() {
+        _txFilters.update {
+            it.copy(
+                categoryIdFilter = null,
+                reimburseFilter = "ALL",
+                minAmountMicros = null,
+                maxAmountMicros = null
+            )
+        }
     }
 
     // --- Transactions CRUD & Pending ---
@@ -957,6 +1033,12 @@ class KairoMainViewModel(
     fun updateSettings(transform: (AppSettings) -> AppSettings) {
         viewModelScope.launch {
             withContext(Dispatchers.IO) { settingsStore.update(transform) }
+        }
+    }
+
+    fun ensurePermissionsLoaded() {
+        if (_permissionReport.value == null) {
+            refreshPermissions()
         }
     }
 

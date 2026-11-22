@@ -1,13 +1,15 @@
 ﻿<#
 .SYNOPSIS
-    棱账 (KairoLedger) 构建、安装并自动重启小米 14 应用的开发脚本。
+    棱账 (KairoLedger) 构建、安装并自动重启小米 14 应用的开发脚本（默认构建 R8 优化性能包）。
 .EXAMPLE
     .\scripts\dev-run.ps1
+    .\scripts\dev-run.ps1 -Debug
     .\scripts\dev-run.ps1 -Watch
     .\scripts\dev-run.ps1 -Device d05c6533 -SkipTests -EnsureAccessibility
 #>
 param(
     [switch]$Watch,
+    [switch]$Debug,
     [string]$Device = '',
     [switch]$SkipTests,
     [switch]$EnsureAccessibility
@@ -20,7 +22,9 @@ $MainActivity = 'com.kairoledger.app.MainActivity'
 $A11yClass = 'com.kairoledger.app.capture.screen.KairoAccessibilityService'
 $A11yShortClass = '.capture.screen.KairoAccessibilityService'
 $A11yComponent = "$PackageName/$A11yClass"
-$ApkPath = Join-Path $ProjectRoot 'app\build\outputs\apk\debug\app-debug.apk'
+$VariantName = if ($Debug) { 'debug' } else { 'perf' }
+$AssembleTask = if ($Debug) { 'assembleDebug' } else { 'assemblePerf' }
+$ApkPath = Join-Path $ProjectRoot "app\build\outputs\apk\$VariantName\app-$VariantName.apk"
 
 if (-not $env:JAVA_HOME -and (Test-Path 'D:\DevTools\jdk-21\bin\java.exe')) {
     $env:JAVA_HOME = 'D:\DevTools\jdk-21'
@@ -189,8 +193,8 @@ echo "__HYPEROS_KEEPALIVE_DONE__"
 function Invoke-BuildAndRestart {
     Push-Location $ProjectRoot
     try {
-        [string[]]$tasks = if ($SkipTests) { @('assembleDebug') } else { @('testDebugUnitTest', 'assembleDebug') }
-        Write-Host "[KairoLedger] 正在编译: $($tasks -join ' ') ..." -ForegroundColor Cyan
+        [string[]]$tasks = if ($SkipTests) { @($AssembleTask) } else { @('testDebugUnitTest', $AssembleTask) }
+        Write-Host "[KairoLedger] 正在编译 ($VariantName): $($tasks -join ' ') ..." -ForegroundColor Cyan
         & (Join-Path $ProjectRoot 'gradlew.bat') $tasks
         if ($LASTEXITCODE -ne 0) {
             Write-Host "[KairoLedger] 构建失败 (exit=$LASTEXITCODE)" -ForegroundColor Red
