@@ -14,6 +14,7 @@ import com.kairoledger.app.data.db.RawCaptureLogEntity
 import com.kairoledger.app.data.db.RecurringRuleEntity
 import com.kairoledger.app.data.db.ReimburseStatus
 import com.kairoledger.app.data.db.StatsGranularity
+import com.kairoledger.app.data.db.TagEntity
 import com.kairoledger.app.data.db.TransactionEntity
 import com.kairoledger.app.data.db.TransactionStatus
 import kotlinx.coroutines.flow.Flow
@@ -85,6 +86,14 @@ data class CategoryStat(
     val categoryName: String,
     val colorHex: Long,
     val icon: String,
+    val totalBaseMicros: Long,
+    val count: Int,
+    val percentage: Float
+)
+
+data class TagStat(
+    val tagName: String,
+    val colorHex: Long,
     val totalBaseMicros: Long,
     val count: Int,
     val percentage: Float
@@ -235,6 +244,11 @@ interface LedgerService {
         month: Int,
         ledgerId: Long = 0L
     ): List<BudgetProgress>
+
+    fun observeTags(): Flow<List<TagEntity>>
+    suspend fun saveTag(tag: TagEntity): Long
+    suspend fun deleteTag(tagId: Long)
+    suspend fun ensurePresetCatalogSeeded(): Pair<Int, Int>
 }
 
 data class CaptureInput(
@@ -259,7 +273,8 @@ data class ParsedBillDraft(
     val confidence: Float = 0.9f,
     val parserUsed: String = "LOCAL_RULE",
     val externalOrderNo: String = "",
-    val manualAccountAmountMicros: Long? = null
+    val manualAccountAmountMicros: Long? = null,
+    val tags: String = ""
 )
 
 data class CaptureHandleResult(

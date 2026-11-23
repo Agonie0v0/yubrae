@@ -26,6 +26,7 @@ import com.kairoledger.app.data.db.ParseRuleEntity
 import com.kairoledger.app.data.db.ParseStatus
 import com.kairoledger.app.data.db.RawCaptureLogDao
 import com.kairoledger.app.data.db.RawCaptureLogEntity
+import com.kairoledger.app.data.db.TagTextCodec
 import com.kairoledger.app.data.db.TransactionDao
 import com.kairoledger.app.data.db.TransactionEntity
 import com.kairoledger.app.data.db.TransactionStatus
@@ -387,6 +388,11 @@ class CaptureOrchestrator(
             rawCaptureLogDao.update(initialLog.copy(id = logId, parseStatus = ParseStatus.IGNORED, errorMessage = msg))
             return CaptureHandleResult(logId = logId, status = ParseStatus.IGNORED, message = msg)
         }
+        if (outcome.pageKind == ScreenPageKind.ORDER_DETAIL && !settings.accessibilityOrderDetailEnabled) {
+            val msg = "电商与外卖订单详情页识别开关已关闭"
+            rawCaptureLogDao.update(initialLog.copy(id = logId, parseStatus = ParseStatus.IGNORED, errorMessage = msg))
+            return CaptureHandleResult(logId = logId, status = ParseStatus.IGNORED, message = msg)
+        }
         if (outcome.ignoredReason.isNotBlank()) {
             rawCaptureLogDao.update(
                 initialLog.copy(
@@ -464,6 +470,7 @@ class CaptureOrchestrator(
         val sourceBadge = when (outcome.pageKind) {
             ScreenPageKind.PAY_SUCCESS -> "支付页识别"
             ScreenPageKind.BILL_DETAIL -> "账单详情识别"
+            ScreenPageKind.ORDER_DETAIL -> "订单详情识别"
             ScreenPageKind.UNKNOWN -> "页面识别"
         }
 
@@ -610,15 +617,29 @@ class CaptureOrchestrator(
                 }
             }
 
-            val windowStart = finalDraft.timestamp - CaptureDeduplicator.DEFAULT_WINDOW_MILLIS
-            val windowEnd = finalDraft.timestamp + CaptureDeduplicator.DEFAULT_WINDOW_MILLIS
-            val recentTxs = transactionDao.getBetween(windowStart, windowEnd)
-            val recentLogs = rawCaptureLogDao.getSince(windowStart - 60_000L)
+            val isOrderDetail = screenPageKind == ScreenPageKind.ORDER_DETAIL
+            val dedupWindowMillis = if (isOrderDetail) {
+                CaptureDeduplicator.ORDER_DETAIL_WINDOW_MILLIS
+            } else {
+                CaptureDeduplicator.DEFAULT_WINDOW_MILLIS
+            }
+            val primaryStart = finalDraft.timestamp - dedupWindowMillis
+            val primaryEnd = finalDraft.timestamp + dedupWindowMillis
+            val primaryTxs = transactionDao.getBetween(primaryStart, primaryEnd)
+            val (recentTxs, minWindowStart) = if (isOrderDetail && abs(capturedAtMillis - finalDraft.timestamp) > 0L) {
+                val capStart = capturedAtMillis - dedupWindowMillis
+                val capEnd = capturedAtMillis + dedupWindowMillis
+                val capTxs = transactionDao.getBetween(capStart, capEnd)
+                (primaryTxs + capTxs).distinctBy { it.id } to minOf(primaryStart, capStart)
+            } else {
+                primaryTxs to primaryStart
+            }
+            val recentLogs = rawCaptureLogDao.getSince(minWindowStart - 60_000L)
             val logsByTxId = recentLogs
                 .filter { it.linkedTransactionId != null && it.id != logId }
                 .associateBy { it.linkedTransactionId!! }
 
-            // 3. 60s 跨渠道去重与信息融合
+            // 3. 跨渠道去重与信息融合（普通渠道 60s，电商/外卖订单详情 10 分钟窗口）
             val dedupMatch = deduplicator.findMatchAndMerge(
                 incomingDraft = finalDraft,
                 incomingChannel = channel,
@@ -627,8 +648,25 @@ class CaptureOrchestrator(
                 recentTransactions = recentTxs,
                 recentLogsByTxId = logsByTxId,
                 accountsById = accountsById,
-                categoriesById = categoriesById
-            )
+                categoriesById = categoriesById,
+                customWindowMillis = dedupWindowMillis,
+                allowPlatformShellMerge = isOrderDetail
+            ) ?: if (isOrderDetail && abs(capturedAtMillis - finalDraft.timestamp) > 60_000L) {
+                deduplicator.findMatchAndMerge(
+                    incomingDraft = finalDraft.copy(timestamp = capturedAtMillis),
+                    incomingChannel = channel,
+                    incomingSourcePackage = sourcePackage,
+                    incomingRawText = rawText,
+                    recentTransactions = recentTxs,
+                    recentLogsByTxId = logsByTxId,
+                    accountsById = accountsById,
+                    categoriesById = categoriesById,
+                    customWindowMillis = dedupWindowMillis,
+                    allowPlatformShellMerge = true
+                )
+            } else {
+                null
+            }
 
             if (dedupMatch != null) {
                 val enrichedRequest = enrichMergedRequest(
@@ -735,6 +773,7 @@ class CaptureOrchestrator(
                 categoryId = finalDraft.categoryId,
                 merchant = finalDraft.merchant,
                 note = finalNote,
+                tags = finalDraft.tags,
                 sourceType = channel,
                 rawEventId = logId,
                 status = initialTxStatus
@@ -922,23 +961,39 @@ class CaptureOrchestrator(
     }
 
     private fun buildScreenLogTitle(packageName: String, pageKind: ScreenPageKind): String {
+        val pkgLower = packageName.trim().lowercase(Locale.ROOT)
         val appLabel = when {
-            packageName == "com.tencent.mm" -> "微信"
-            packageName == "com.eg.android.AlipayGphone" -> "支付宝"
-            packageName == "com.unionpay" -> "云闪付"
-            packageName.contains("cmbchina", ignoreCase = true) -> "招商银行"
-            packageName.contains("icbc", ignoreCase = true) -> "工商银行"
-            packageName.contains("chinamworld", ignoreCase = true) -> "建设银行"
-            packageName.contains("bankabc", ignoreCase = true) -> "农业银行"
-            packageName.contains("pingan", ignoreCase = true) -> "平安银行"
-            packageName.contains("wise", ignoreCase = true) -> "Wise"
-            packageName.contains("paypal", ignoreCase = true) -> "PayPal"
-            packageName.contains("revolut", ignoreCase = true) -> "Revolut"
+            pkgLower == "com.tencent.mm" -> "微信"
+            pkgLower == "com.eg.android.alipaygphone" -> "支付宝"
+            pkgLower == "com.unionpay" -> "云闪付"
+            pkgLower == "com.xunmeng.pinduoduo" -> "拼多多"
+            pkgLower == "com.taobao.taobao" -> "淘宝"
+            pkgLower == "com.tmall.wireless" -> "天猫"
+            pkgLower == "com.jingdong.app.mall" -> "京东"
+            pkgLower == "com.sankuai.meituan.takeoutnew" -> "美团外卖"
+            pkgLower == "com.sankuai.meituan" -> "美团"
+            pkgLower == "me.ele" -> "饿了么"
+            pkgLower == "com.ss.android.ugc.aweme" -> "抖音"
+            pkgLower in setOf("com.miui.tsmclient", "com.mipay.wallet", "com.xiaomi.pass") -> "小米钱包"
+            pkgLower == "com.huawei.wallet" -> "华为钱包"
+            pkgLower == "com.hihonor.wallet" -> "荣耀钱包"
+            pkgLower in setOf("com.finshell.wallet", "com.coloros.wallet") -> "OPPO钱包"
+            pkgLower == "com.vivo.wallet" -> "vivo钱包"
+            pkgLower == "com.samsung.android.spay" -> "Samsung Pay"
+            pkgLower.contains("cmbchina") -> "招商银行"
+            pkgLower.contains("icbc") -> "工商银行"
+            pkgLower.contains("chinamworld") -> "建设银行"
+            pkgLower.contains("bankabc") -> "农业银行"
+            pkgLower.contains("pingan") -> "平安银行"
+            pkgLower.contains("wise") -> "Wise"
+            pkgLower.contains("paypal") -> "PayPal"
+            pkgLower.contains("revolut") -> "Revolut"
             else -> ""
         }
         val pageLabel = when (pageKind) {
             ScreenPageKind.PAY_SUCCESS -> "支付成功页"
             ScreenPageKind.BILL_DETAIL -> "账单详情页"
+            ScreenPageKind.ORDER_DETAIL -> "订单详情页"
             ScreenPageKind.UNKNOWN -> "屏幕页面"
         }
         return if (appLabel.isNotBlank()) "$appLabel$pageLabel" else pageLabel
@@ -988,9 +1043,11 @@ class CaptureOrchestrator(
             base.manualAccountAmountMicros
         }
         val enrichedNote = appendOrderNoIfMissing(base.note, orderNo)
+        val mergedTags = TagTextCodec.merge(base.tags, incomingDraft.tags)
         return base.copy(
             manualAccountAmountMicros = enrichedManualAmount,
-            note = enrichedNote
+            note = enrichedNote,
+            tags = mergedTags
         )
     }
 
@@ -1044,10 +1101,12 @@ class CaptureOrchestrator(
         } else {
             existing.merchant
         }
+        val mergedTags = TagTextCodec.merge(existing.tags, incomingDraft.tags)
         val needsUpdate = updatedNote != existing.note ||
             newAccountId != existing.accountId ||
             newManualAccountAmount != null ||
-            betterMerchant != existing.merchant
+            betterMerchant != existing.merchant ||
+            mergedTags != existing.tags
         if (!needsUpdate) return existing.id
 
         val req = RecordTransactionRequest(
@@ -1071,7 +1130,7 @@ class CaptureOrchestrator(
             categoryId = existing.categoryId ?: incomingDraft.categoryId,
             merchant = betterMerchant,
             note = updatedNote,
-            tags = existing.tags,
+            tags = mergedTags,
             reimburseStatus = existing.reimburseStatus,
             sourceType = existing.sourceType,
             rawEventId = existing.rawEventId,
@@ -1131,6 +1190,9 @@ class CaptureOrchestrator(
         put("categoryName", draft.categoryName)
         put("merchant", draft.merchant)
         put("note", draft.note)
+        if (draft.tags.isNotBlank()) {
+            put("tags", draft.tags)
+        }
         put("timestamp", draft.timestamp)
         put("confidence", draft.confidence)
         put("parserUsed", draft.parserUsed)

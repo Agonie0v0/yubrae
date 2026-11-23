@@ -372,3 +372,33 @@ interface InstallmentPlanDao {
     @Query("DELETE FROM installment_plans")
     suspend fun clearAll()
 }
+
+@Dao
+interface TagDao {
+    @Query("SELECT * FROM tags ORDER BY sort_order ASC, id ASC")
+    fun observeAll(): Flow<List<TagEntity>>
+
+    @Query("SELECT * FROM tags ORDER BY sort_order ASC, id ASC")
+    suspend fun getAll(): List<TagEntity>
+
+    @Query("SELECT * FROM tags WHERE id = :id LIMIT 1")
+    suspend fun getById(id: Long): TagEntity?
+
+    @Query("SELECT * FROM tags WHERE name = :name LIMIT 1")
+    suspend fun findByName(name: String): TagEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insert(tag: TagEntity): Long
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertAll(tags: List<TagEntity>)
+
+    @Update
+    suspend fun update(tag: TagEntity)
+
+    @Query("DELETE FROM tags WHERE id = :id")
+    suspend fun deleteById(id: Long)
+
+    @Query("DELETE FROM tags")
+    suspend fun clearAll()
+}

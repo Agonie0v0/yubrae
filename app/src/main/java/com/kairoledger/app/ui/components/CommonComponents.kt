@@ -20,60 +20,104 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.Label
 import androidx.compose.material.icons.automirrored.rounded.MenuBook
+import androidx.compose.material.icons.automirrored.rounded.ReceiptLong
+import androidx.compose.material.icons.automirrored.rounded.TrendingDown
 import androidx.compose.material.icons.automirrored.rounded.TrendingUp
 import androidx.compose.material.icons.rounded.AccountBalance
 import androidx.compose.material.icons.rounded.AccountBalanceWallet
 import androidx.compose.material.icons.rounded.AttachMoney
 import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.BakeryDining
+import androidx.compose.material.icons.rounded.BeachAccess
+import androidx.compose.material.icons.rounded.Bed
 import androidx.compose.material.icons.rounded.Bolt
 import androidx.compose.material.icons.rounded.Book
+import androidx.compose.material.icons.rounded.Build
+import androidx.compose.material.icons.rounded.Cake
+import androidx.compose.material.icons.rounded.Calculate
+import androidx.compose.material.icons.rounded.CameraAlt
 import androidx.compose.material.icons.rounded.CardGiftcard
 import androidx.compose.material.icons.rounded.Category
+import androidx.compose.material.icons.rounded.Celebration
+import androidx.compose.material.icons.rounded.Chair
 import androidx.compose.material.icons.rounded.Chat
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Checkroom
 import androidx.compose.material.icons.rounded.ChildCare
+import androidx.compose.material.icons.rounded.CleaningServices
 import androidx.compose.material.icons.rounded.CloudDone
 import androidx.compose.material.icons.rounded.Coffee
+import androidx.compose.material.icons.rounded.ConfirmationNumber
+import androidx.compose.material.icons.rounded.ContentCut
 import androidx.compose.material.icons.rounded.CreditCard
 import androidx.compose.material.icons.rounded.CurrencyExchange
 import androidx.compose.material.icons.rounded.CurrencyPound
+import androidx.compose.material.icons.rounded.DeliveryDining
 import androidx.compose.material.icons.rounded.Devices
+import androidx.compose.material.icons.rounded.Diamond
+import androidx.compose.material.icons.rounded.DirectionsBoat
 import androidx.compose.material.icons.rounded.DirectionsBus
 import androidx.compose.material.icons.rounded.DirectionsCar
 import androidx.compose.material.icons.rounded.DocumentScanner
 import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.EditNote
+import androidx.compose.material.icons.rounded.ElectricCar
 import androidx.compose.material.icons.rounded.Euro
 import androidx.compose.material.icons.rounded.EventRepeat
+import androidx.compose.material.icons.rounded.FaceRetouchingNatural
 import androidx.compose.material.icons.rounded.Fastfood
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FitnessCenter
 import androidx.compose.material.icons.rounded.Flight
+import androidx.compose.material.icons.rounded.Forest
+import androidx.compose.material.icons.rounded.Groups
+import androidx.compose.material.icons.rounded.Handshake
+import androidx.compose.material.icons.rounded.Headphones
+import androidx.compose.material.icons.rounded.HealthAndSafety
 import androidx.compose.material.icons.rounded.Home
 import androidx.compose.material.icons.rounded.Hotel
+import androidx.compose.material.icons.rounded.Icecream
+import androidx.compose.material.icons.rounded.Kitchen
 import androidx.compose.material.icons.rounded.LaptopMac
+import androidx.compose.material.icons.rounded.Lightbulb
+import androidx.compose.material.icons.rounded.LocalBar
 import androidx.compose.material.icons.rounded.LocalCafe
 import androidx.compose.material.icons.rounded.LocalGasStation
+import androidx.compose.material.icons.rounded.LocalGroceryStore
 import androidx.compose.material.icons.rounded.LocalHospital
+import androidx.compose.material.icons.rounded.LocalLaundryService
 import androidx.compose.material.icons.rounded.LocalMall
+import androidx.compose.material.icons.rounded.LocalOffer
+import androidx.compose.material.icons.rounded.LocalParking
+import androidx.compose.material.icons.rounded.LocalPizza
 import androidx.compose.material.icons.rounded.LocalShipping
 import androidx.compose.material.icons.rounded.LocalTaxi
+import androidx.compose.material.icons.rounded.Loyalty
+import androidx.compose.material.icons.rounded.Luggage
 import androidx.compose.material.icons.rounded.LunchDining
 import androidx.compose.material.icons.rounded.MedicalServices
+import androidx.compose.material.icons.rounded.Medication
+import androidx.compose.material.icons.rounded.MonetizationOn
 import androidx.compose.material.icons.rounded.MoreHoriz
 import androidx.compose.material.icons.rounded.Movie
 import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.Notifications
+import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material.icons.rounded.Payments
+import androidx.compose.material.icons.rounded.PedalBike
+import androidx.compose.material.icons.rounded.Percent
 import androidx.compose.material.icons.rounded.Pets
 import androidx.compose.material.icons.rounded.PhoneAndroid
-import androidx.compose.material.icons.rounded.ReceiptLong
+import androidx.compose.material.icons.rounded.RamenDining
 import androidx.compose.material.icons.rounded.Redeem
 import androidx.compose.material.icons.rounded.Replay
 import androidx.compose.material.icons.rounded.Restaurant
 import androidx.compose.material.icons.rounded.Savings
 import androidx.compose.material.icons.rounded.School
+import androidx.compose.material.icons.rounded.SelfImprovement
+import androidx.compose.material.icons.rounded.Sell
 import androidx.compose.material.icons.rounded.Share
 import androidx.compose.material.icons.rounded.ShoppingBag
 import androidx.compose.material.icons.rounded.ShoppingBasket
@@ -82,15 +126,26 @@ import androidx.compose.material.icons.rounded.SmartToy
 import androidx.compose.material.icons.rounded.Sms
 import androidx.compose.material.icons.rounded.Spa
 import androidx.compose.material.icons.rounded.SportsEsports
+import androidx.compose.material.icons.rounded.SportsSoccer
 import androidx.compose.material.icons.rounded.Store
+import androidx.compose.material.icons.rounded.Storefront
+import androidx.compose.material.icons.rounded.Stroller
 import androidx.compose.material.icons.rounded.Subscriptions
 import androidx.compose.material.icons.rounded.Subway
 import androidx.compose.material.icons.rounded.SwapHoriz
+import androidx.compose.material.icons.rounded.Toys
+import androidx.compose.material.icons.rounded.Train
 import androidx.compose.material.icons.rounded.Tune
+import androidx.compose.material.icons.rounded.Tv
+import androidx.compose.material.icons.rounded.TwoWheeler
 import androidx.compose.material.icons.rounded.UploadFile
+import androidx.compose.material.icons.rounded.VolunteerActivism
+import androidx.compose.material.icons.rounded.Watch
 import androidx.compose.material.icons.rounded.WaterDrop
 import androidx.compose.material.icons.rounded.Wifi
+import androidx.compose.material.icons.rounded.WineBar
 import androidx.compose.material.icons.rounded.Work
+import androidx.compose.material.icons.rounded.Yard
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -126,66 +181,121 @@ import java.util.Locale
 object KairoIcons {
     fun iconFor(key: String): ImageVector = when (key.trim().lowercase()) {
         "restaurant" -> Icons.Rounded.Restaurant
-        "directions_car" -> Icons.Rounded.DirectionsCar
-        "shopping_bag" -> Icons.Rounded.ShoppingBag
-        "home" -> Icons.Rounded.Home
-        "subscriptions" -> Icons.Rounded.Subscriptions
-        "sports_esports" -> Icons.Rounded.SportsEsports
-        "medical_services" -> Icons.Rounded.MedicalServices
-        "flight" -> Icons.Rounded.Flight
-        "currency_exchange" -> Icons.Rounded.CurrencyExchange
-        "more_horiz" -> Icons.Rounded.MoreHoriz
         "lunch_dining" -> Icons.Rounded.LunchDining
+        "delivery_dining" -> Icons.Rounded.DeliveryDining
+        "fastfood" -> Icons.Rounded.Fastfood
         "local_cafe" -> Icons.Rounded.LocalCafe
+        "coffee" -> Icons.Rounded.Coffee
+        "bakery_dining" -> Icons.Rounded.BakeryDining
+        "icecream" -> Icons.Rounded.Icecream
+        "cake" -> Icons.Rounded.Cake
+        "ramen_dining" -> Icons.Rounded.RamenDining
+        "local_pizza" -> Icons.Rounded.LocalPizza
+        "local_grocery_store" -> Icons.Rounded.LocalGroceryStore
         "shopping_basket" -> Icons.Rounded.ShoppingBasket
-        "subway" -> Icons.Rounded.Subway
-        "local_taxi" -> Icons.Rounded.LocalTaxi
+        "kitchen" -> Icons.Rounded.Kitchen
+        "local_bar" -> Icons.Rounded.LocalBar
+        "wine_bar" -> Icons.Rounded.WineBar
+        "shopping_bag" -> Icons.Rounded.ShoppingBag
         "local_mall" -> Icons.Rounded.LocalMall
+        "shopping_cart" -> Icons.Rounded.ShoppingCart
+        "store" -> Icons.Rounded.Store
+        "storefront" -> Icons.Rounded.Storefront
+        "local_shipping" -> Icons.Rounded.LocalShipping
+        "local_offer" -> Icons.Rounded.LocalOffer
+        "loyalty" -> Icons.Rounded.Loyalty
+        "sell" -> Icons.Rounded.Sell
+        "directions_car" -> Icons.Rounded.DirectionsCar
+        "electric_car" -> Icons.Rounded.ElectricCar
+        "subway" -> Icons.Rounded.Subway
+        "directions_bus" -> Icons.Rounded.DirectionsBus
+        "local_taxi" -> Icons.Rounded.LocalTaxi
+        "pedal_bike" -> Icons.Rounded.PedalBike
+        "two_wheeler" -> Icons.Rounded.TwoWheeler
+        "train" -> Icons.Rounded.Train
+        "directions_boat" -> Icons.Rounded.DirectionsBoat
+        "local_gas_station" -> Icons.Rounded.LocalGasStation
+        "local_parking" -> Icons.Rounded.LocalParking
+        "build" -> Icons.Rounded.Build
+        "checkroom" -> Icons.Rounded.Checkroom
+        "face_retouching_natural" -> Icons.Rounded.FaceRetouchingNatural
+        "spa" -> Icons.Rounded.Spa
+        "content_cut" -> Icons.Rounded.ContentCut
+        "diamond" -> Icons.Rounded.Diamond
+        "watch" -> Icons.Rounded.Watch
         "devices" -> Icons.Rounded.Devices
+        "laptop_mac" -> Icons.Rounded.LaptopMac
+        "phone_android" -> Icons.Rounded.PhoneAndroid
+        "headphones" -> Icons.Rounded.Headphones
+        "tv" -> Icons.Rounded.Tv
+        "camera_alt" -> Icons.Rounded.CameraAlt
+        "home" -> Icons.Rounded.Home
+        "chair" -> Icons.Rounded.Chair
+        "bed" -> Icons.Rounded.Bed
         "bolt" -> Icons.Rounded.Bolt
+        "water_drop" -> Icons.Rounded.WaterDrop
+        "lightbulb" -> Icons.Rounded.Lightbulb
         "wifi" -> Icons.Rounded.Wifi
+        "cleaning_services" -> Icons.Rounded.CleaningServices
+        "local_laundry_service" -> Icons.Rounded.LocalLaundryService
+        "yard" -> Icons.Rounded.Yard
+        "subscriptions" -> Icons.Rounded.Subscriptions
         "cloud_done" -> Icons.Rounded.CloudDone
         "smart_toy" -> Icons.Rounded.SmartToy
-        "work" -> Icons.Rounded.Work
+        "music_note" -> Icons.Rounded.MusicNote
+        "sports_esports" -> Icons.Rounded.SportsEsports
+        "movie" -> Icons.Rounded.Movie
+        "celebration" -> Icons.Rounded.Celebration
+        "confirmation_number" -> Icons.Rounded.ConfirmationNumber
+        "fitness_center" -> Icons.Rounded.FitnessCenter
+        "sports_soccer" -> Icons.Rounded.SportsSoccer
+        "self_improvement" -> Icons.Rounded.SelfImprovement
+        "forest" -> Icons.Rounded.Forest
+        "beach_access" -> Icons.Rounded.BeachAccess
+        "medical_services" -> Icons.Rounded.MedicalServices
+        "local_hospital" -> Icons.Rounded.LocalHospital
+        "medication" -> Icons.Rounded.Medication
+        "health_and_safety" -> Icons.Rounded.HealthAndSafety
+        "flight" -> Icons.Rounded.Flight
+        "hotel" -> Icons.Rounded.Hotel
+        "luggage" -> Icons.Rounded.Luggage
+        "school" -> Icons.Rounded.School
+        "book" -> Icons.Rounded.Book
+        "menu_book" -> Icons.AutoMirrored.Rounded.MenuBook
+        "edit_note" -> Icons.Rounded.EditNote
+        "calculate" -> Icons.Rounded.Calculate
+        "palette" -> Icons.Rounded.Palette
+        "favorite" -> Icons.Rounded.Favorite
         "card_giftcard" -> Icons.Rounded.CardGiftcard
-        "trending_up" -> Icons.AutoMirrored.Rounded.TrendingUp
-        "replay" -> Icons.Rounded.Replay
-        "laptop_mac" -> Icons.Rounded.LaptopMac
-        "attach_money" -> Icons.Rounded.AttachMoney
-        "chat" -> Icons.Rounded.Chat
-        "account_balance_wallet", "wallet" -> Icons.Rounded.AccountBalanceWallet
+        "redeem" -> Icons.Rounded.Redeem
+        "volunteer_activism" -> Icons.Rounded.VolunteerActivism
+        "handshake" -> Icons.Rounded.Handshake
+        "groups" -> Icons.Rounded.Groups
+        "pets" -> Icons.Rounded.Pets
+        "child_care" -> Icons.Rounded.ChildCare
+        "stroller" -> Icons.Rounded.Stroller
+        "toys" -> Icons.Rounded.Toys
+        "work" -> Icons.Rounded.Work
         "payments" -> Icons.Rounded.Payments
+        "account_balance_wallet", "wallet" -> Icons.Rounded.AccountBalanceWallet
         "account_balance" -> Icons.Rounded.AccountBalance
         "credit_card" -> Icons.Rounded.CreditCard
+        "savings" -> Icons.Rounded.Savings
+        "trending_up" -> Icons.AutoMirrored.Rounded.TrendingUp
+        "trending_down" -> Icons.AutoMirrored.Rounded.TrendingDown
+        "monetization_on" -> Icons.Rounded.MonetizationOn
+        "attach_money" -> Icons.Rounded.AttachMoney
         "euro" -> Icons.Rounded.Euro
         "currency_pound" -> Icons.Rounded.CurrencyPound
-        "savings" -> Icons.Rounded.Savings
-        "store" -> Icons.Rounded.Store
-        "fastfood" -> Icons.Rounded.Fastfood
-        "movie" -> Icons.Rounded.Movie
-        "school" -> Icons.Rounded.School
-        "pets" -> Icons.Rounded.Pets
-        "fitness_center" -> Icons.Rounded.FitnessCenter
-        "local_hospital" -> Icons.Rounded.LocalHospital
-        "receipt_long" -> Icons.Rounded.ReceiptLong
+        "currency_exchange" -> Icons.Rounded.CurrencyExchange
+        "percent" -> Icons.Rounded.Percent
+        "receipt_long" -> Icons.AutoMirrored.Rounded.ReceiptLong
+        "replay" -> Icons.Rounded.Replay
+        "chat" -> Icons.Rounded.Chat
         "swap_horiz" -> Icons.Rounded.SwapHoriz
         "tune" -> Icons.Rounded.Tune
-        "menu_book" -> Icons.AutoMirrored.Rounded.MenuBook
-        "book" -> Icons.Rounded.Book
-        "coffee" -> Icons.Rounded.Coffee
-        "shopping_cart" -> Icons.Rounded.ShoppingCart
-        "directions_bus" -> Icons.Rounded.DirectionsBus
-        "local_gas_station" -> Icons.Rounded.LocalGasStation
-        "hotel" -> Icons.Rounded.Hotel
-        "music_note" -> Icons.Rounded.MusicNote
-        "checkroom" -> Icons.Rounded.Checkroom
-        "child_care" -> Icons.Rounded.ChildCare
-        "favorite" -> Icons.Rounded.Favorite
-        "spa" -> Icons.Rounded.Spa
-        "redeem" -> Icons.Rounded.Redeem
-        "phone_android" -> Icons.Rounded.PhoneAndroid
-        "local_shipping" -> Icons.Rounded.LocalShipping
-        "water_drop" -> Icons.Rounded.WaterDrop
+        "label" -> Icons.AutoMirrored.Rounded.Label
+        "more_horiz" -> Icons.Rounded.MoreHoriz
         "category" -> Icons.Rounded.Category
         else -> Icons.Rounded.Category
     }
@@ -193,46 +303,115 @@ object KairoIcons {
     val selectableCategoryIcons: List<Pair<String, String>> = listOf(
         "restaurant" to "餐饮",
         "lunch_dining" to "正餐",
+        "delivery_dining" to "外卖",
+        "fastfood" to "快餐",
         "local_cafe" to "咖啡",
+        "coffee" to "茶饮",
+        "bakery_dining" to "甜品",
+        "icecream" to "冷饮",
+        "cake" to "蛋糕",
+        "ramen_dining" to "面食",
+        "local_pizza" to "披萨",
+        "local_grocery_store" to "生鲜",
         "shopping_basket" to "买菜",
+        "kitchen" to "做饭",
+        "local_bar" to "聚餐",
+        "wine_bar" to "酒水",
         "shopping_bag" to "购物",
-        "shopping_cart" to "超市",
         "local_mall" to "百货",
-        "checkroom" to "服饰",
+        "shopping_cart" to "超市",
+        "store" to "日用",
+        "storefront" to "门店",
+        "local_shipping" to "快递",
+        "local_offer" to "补贴",
+        "loyalty" to "会员",
+        "sell" to "闲置",
         "directions_car" to "汽车",
+        "electric_car" to "电车",
         "subway" to "地铁",
         "directions_bus" to "公交",
         "local_taxi" to "打车",
+        "pedal_bike" to "单车",
+        "two_wheeler" to "骑行",
+        "train" to "高铁",
+        "directions_boat" to "轮渡",
         "local_gas_station" to "加油",
-        "flight" to "差旅",
-        "hotel" to "住宿",
+        "local_parking" to "停车",
+        "build" to "维修",
+        "checkroom" to "服饰",
+        "face_retouching_natural" to "护肤",
+        "spa" to "美容",
+        "content_cut" to "理发",
+        "diamond" to "首饰",
+        "watch" to "腕表",
+        "devices" to "数码",
+        "laptop_mac" to "电脑",
+        "phone_android" to "话费",
+        "headphones" to "配件",
+        "tv" to "家电",
+        "camera_alt" to "摄影",
         "home" to "居家",
+        "chair" to "家具",
+        "bed" to "床品",
         "bolt" to "水电",
         "water_drop" to "水费",
+        "lightbulb" to "照明",
         "wifi" to "网络",
-        "phone_android" to "话费",
-        "devices" to "数码",
+        "cleaning_services" to "家政",
+        "local_laundry_service" to "洗护",
+        "yard" to "园艺",
         "subscriptions" to "订阅",
-        "smart_toy" to "AI",
         "cloud_done" to "云服务",
+        "smart_toy" to "AI",
+        "music_note" to "音乐",
         "sports_esports" to "游戏",
         "movie" to "电影",
-        "music_note" to "音乐",
-        "medical_services" to "医疗",
+        "celebration" to "聚会",
+        "confirmation_number" to "门票",
         "fitness_center" to "健身",
-        "spa" to "美容",
+        "sports_soccer" to "运动",
+        "self_improvement" to "瑜伽",
+        "forest" to "露营",
+        "beach_access" to "度假",
+        "medical_services" to "医疗",
+        "local_hospital" to "挂号",
+        "medication" to "买药",
+        "health_and_safety" to "保险",
+        "flight" to "差旅",
+        "hotel" to "住宿",
+        "luggage" to "旅游",
         "school" to "学习",
         "book" to "书籍",
-        "pets" to "宠物",
-        "child_care" to "育儿",
+        "menu_book" to "文具",
+        "edit_note" to "考证",
+        "calculate" to "账务",
+        "palette" to "艺术",
+        "favorite" to "人情",
         "card_giftcard" to "礼金",
         "redeem" to "礼物",
-        "favorite" to "人情",
-        "local_shipping" to "快递",
+        "volunteer_activism" to "捐赠",
+        "handshake" to "往来",
+        "groups" to "社交",
+        "pets" to "宠物",
+        "child_care" to "育儿",
+        "stroller" to "童车",
+        "toys" to "玩具",
         "work" to "工资",
+        "payments" to "薪酬",
+        "account_balance_wallet" to "钱包",
+        "account_balance" to "银行",
+        "credit_card" to "刷卡",
+        "savings" to "储蓄",
         "trending_up" to "理财",
-        "replay" to "退款",
+        "trending_down" to "亏损",
+        "monetization_on" to "收益",
+        "attach_money" to "外币",
         "currency_exchange" to "汇兑",
+        "percent" to "利息",
+        "receipt_long" to "报销",
+        "replay" to "退款",
+        "label" to "标签",
+        "category" to "分类",
         "more_horiz" to "其他"
     )
 
@@ -240,6 +419,8 @@ object KairoIcons {
         "account_balance_wallet" to "钱包",
         "chat" to "微信",
         "payments" to "现金",
+        "directions_bus" to "公交卡",
+        "subway" to "地铁卡",
         "account_balance" to "银行",
         "credit_card" to "信用卡",
         "attach_money" to "美元",
@@ -253,16 +434,29 @@ object KairoIcons {
         0xFF2AA876L,
         0xFF006874L,
         0xFF07C160L,
+        0xFF16A34AL,
+        0xFF0D9488L,
+        0xFF0F766EL,
+        0xFF0284C7L,
         0xFF1677FFL,
         0xFF1D4ED8L,
+        0xFF4F46E5L,
         0xFF6D28D9L,
+        0xFF7C3AEDL,
+        0xFFDB2777L,
+        0xFFEC4899L,
+        0xFFE11D48L,
         0xFFDC2626L,
         0xFFEA580CL,
-        0xFF0D9488L,
-        0xFFDB2777L,
+        0xFFD97706L,
         0xFFE89B2DL,
         0xFF475569L
     )
+
+    fun fallbackTagColorHex(tagName: String): Long {
+        val idx = kotlin.math.abs(tagName.hashCode()) % selectableColorPalette.size
+        return selectableColorPalette[idx]
+    }
 }
 
 object KairoFormats {
@@ -320,7 +514,7 @@ object KairoFormats {
         CaptureChannel.AI -> Icons.Rounded.SmartToy
         CaptureChannel.IMPORT -> Icons.Rounded.UploadFile
         CaptureChannel.RECURRING -> Icons.Rounded.EventRepeat
-        else -> Icons.Rounded.ReceiptLong
+        else -> Icons.AutoMirrored.Rounded.ReceiptLong
     }
 
     fun parseStatusLabel(status: String): String = when (status) {
@@ -738,4 +932,75 @@ fun AmountText(
         overflow = TextOverflow.Ellipsis,
         modifier = modifier
     )
+}
+
+/**
+ * 彩色标签胶囊组件（支持展示态与多选交互态）。
+ */
+@Composable
+fun TagBadgeChip(
+    name: String,
+    colorHex: Long,
+    selected: Boolean = false,
+    compact: Boolean = false,
+    onClick: (() -> Unit)? = null,
+    modifier: Modifier = Modifier
+) {
+    val tagColor = Color(colorHex)
+    val shape = if (compact) RoundedCornerShape(7.dp) else CircleShape
+    val bgColor = when {
+        selected -> tagColor.copy(alpha = 0.18f)
+        onClick == null -> tagColor.copy(alpha = 0.11f)
+        else -> MaterialTheme.colorScheme.surfaceContainerHigh
+    }
+    val fgColor = when {
+        selected -> tagColor
+        onClick == null -> tagColor
+        else -> MaterialTheme.colorScheme.onSurface
+    }
+    val border = when {
+        selected -> BorderStroke(1.2.dp, tagColor)
+        onClick == null -> BorderStroke(0.5.dp, tagColor.copy(alpha = 0.25f))
+        else -> null
+    }
+
+    val clickModifier = if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier
+    Surface(
+        modifier = modifier.then(clickModifier),
+        shape = shape,
+        color = bgColor,
+        contentColor = fgColor,
+        border = border
+    ) {
+        Row(
+            modifier = Modifier.padding(
+                horizontal = if (compact) 6.dp else 10.dp,
+                vertical = if (compact) 2.dp else 5.dp
+            ),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(if (compact) 4.dp else 5.dp)
+        ) {
+            Surface(
+                shape = CircleShape,
+                color = tagColor,
+                modifier = Modifier.size(if (compact) 6.dp else 7.dp)
+            ) {}
+            Text(
+                text = name,
+                style = if (compact) MaterialTheme.typography.labelSmall else MaterialTheme.typography.labelMedium,
+                color = fgColor,
+                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            if (selected && onClick != null && !compact) {
+                Icon(
+                    imageVector = Icons.Rounded.Check,
+                    contentDescription = null,
+                    tint = tagColor,
+                    modifier = Modifier.size(13.dp)
+                )
+            }
+        }
+    }
 }

@@ -221,6 +221,10 @@ class KairoAccessibilityService : AccessibilityService() {
             debugLog("attempt=$attempt pkg=${snapshot.packageName} -> BILL_DETAIL disabled")
             return ScanAttemptOutcome.EXPLICITLY_IGNORED
         }
+        if (quickKind == ScreenPageKind.ORDER_DETAIL && settings != null && !settings.accessibilityOrderDetailEnabled) {
+            debugLog("attempt=$attempt pkg=${snapshot.packageName} -> ORDER_DETAIL disabled")
+            return ScanAttemptOutcome.EXPLICITLY_IGNORED
+        }
 
         val rawKey = "${snapshot.packageName}|${quickKind.name}|${snapshot.texts.joinToString("\u0001")}"
         synchronized(cacheLock) {
@@ -253,6 +257,10 @@ class KairoAccessibilityService : AccessibilityService() {
         }
         if (outcome.pageKind == ScreenPageKind.BILL_DETAIL && settings != null && !settings.accessibilityBillDetailEnabled) {
             debugLog("attempt=$attempt pkg=${snapshot.packageName} -> BILL_DETAIL disabled (post-parse)")
+            return ScanAttemptOutcome.EXPLICITLY_IGNORED
+        }
+        if (outcome.pageKind == ScreenPageKind.ORDER_DETAIL && settings != null && !settings.accessibilityOrderDetailEnabled) {
+            debugLog("attempt=$attempt pkg=${snapshot.packageName} -> ORDER_DETAIL disabled (post-parse)")
             return ScanAttemptOutcome.EXPLICITLY_IGNORED
         }
         if (outcome.ignoredReason.isNotBlank() && outcome.draft == null && !outcome.shouldFallbackToLlm) {

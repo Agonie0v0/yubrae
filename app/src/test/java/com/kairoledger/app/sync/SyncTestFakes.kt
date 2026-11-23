@@ -16,6 +16,8 @@ import com.kairoledger.app.data.db.RawCaptureLogDao
 import com.kairoledger.app.data.db.RawCaptureLogEntity
 import com.kairoledger.app.data.db.RecurringRuleDao
 import com.kairoledger.app.data.db.RecurringRuleEntity
+import com.kairoledger.app.data.db.TagDao
+import com.kairoledger.app.data.db.TagEntity
 import com.kairoledger.app.data.db.TransactionDao
 import com.kairoledger.app.data.db.TransactionEntity
 import com.kairoledger.app.data.prefs.AppSettings
@@ -33,6 +35,7 @@ internal class InMemorySyncDatabase {
     val rawCaptureLogDao = MemRawCaptureLogDao()
     val budgetDao = MemBudgetDao()
     val recurringRuleDao = MemRecurringRuleDao()
+    val tagDao = MemTagDao()
 
     var settings = AppSettings()
 
@@ -48,7 +51,8 @@ internal class InMemorySyncDatabase {
         recurringRuleDao = recurringRuleDao,
         readSettings = { settings },
         writeSettings = { settings = it },
-        runInTransaction = { block -> block() }
+        runInTransaction = { block -> block() },
+        tagDao = tagDao
     )
 
     suspend fun clearAllTables() {
@@ -61,6 +65,7 @@ internal class InMemorySyncDatabase {
         exchangeRateDao.clearAll()
         categoryDao.clearAll()
         accountDao.clearAll()
+        tagDao.clearAll()
     }
 
     class MemAccountDao : AccountDao {
@@ -443,6 +448,51 @@ internal class InMemorySyncDatabase {
 
         override suspend fun update(rule: RecurringRuleEntity) {
             items[rule.id] = rule
+            publish()
+        }
+
+        override suspend fun deleteById(id: Long) {
+            items.remove(id)
+            publish()
+        }
+
+        override suspend fun clearAll() {
+            items.clear()
+            publish()
+        }
+    }
+
+    class MemTagDao : TagDao {
+        private val items = LinkedHashMap<Long, TagEntity>()
+        private val flow = MutableStateFlow<List<TagEntity>>(emptyList())
+        private var nextId = 1L
+
+        private fun sortedValues(): List<TagEntity> =
+            items.values.sortedWith(compareBy<TagEntity> { it.sortOrder }.thenBy { it.id })
+
+        private fun publish() { flow.value = sortedValues() }
+
+        override fun observeAll(): Flow<List<TagEntity>> = flow
+        override suspend fun getAll(): List<TagEntity> = sortedValues()
+        override suspend fun getById(id: Long): TagEntity? = items[id]
+        override suspend fun findByName(name: String): TagEntity? = items.values.firstOrNull { it.name == name }
+
+        override suspend fun insert(tag: TagEntity): Long {
+            val id = if (tag.id > 0L) tag.id else nextId++
+            if (id >= nextId) nextId = id + 1
+            val duplicateNameIds = items.values.filter { it.name == tag.name && it.id != id }.map { it.id }
+            duplicateNameIds.forEach { items.remove(it) }
+            items[id] = tag.copy(id = id)
+            publish()
+            return id
+        }
+
+        override suspend fun insertAll(tags: List<TagEntity>) {
+            tags.forEach { insert(it) }
+        }
+
+        override suspend fun update(tag: TagEntity) {
+            items[tag.id] = tag
             publish()
         }
 

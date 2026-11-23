@@ -23,6 +23,27 @@ enum class ThemeMode {
 object ThemeStyle {
     const val YIMU_FRESH = "YIMU_FRESH"
     const val PRISM_TEAL = "PRISM_TEAL"
+    const val SAKURA_PINK = "SAKURA_PINK"
+    const val SKY_BLUE = "SKY_BLUE"
+    const val AMBER_WARM = "AMBER_WARM"
+    const val LAVENDER_MIST = "LAVENDER_MIST"
+    const val FOREST_MATCHA = "FOREST_MATCHA"
+    const val CORAL_SUNSET = "CORAL_SUNSET"
+    const val OBSIDIAN_MONO = "OBSIDIAN_MONO"
+    const val LATTE_MOCHA = "LATTE_MOCHA"
+
+    val all = listOf(
+        YIMU_FRESH,
+        PRISM_TEAL,
+        SAKURA_PINK,
+        SKY_BLUE,
+        AMBER_WARM,
+        LAVENDER_MIST,
+        FOREST_MATCHA,
+        CORAL_SUNSET,
+        OBSIDIAN_MONO,
+        LATTE_MOCHA
+    )
 }
 
 data class AppSettings(
@@ -55,7 +76,10 @@ data class AppSettings(
     val backupPassphrase: String = "",
     val autoBackupEnabled: Boolean = false,
     val lastRateSyncMillis: Long = 0L,
-    val lastBackupSyncMillis: Long = 0L
+    val lastBackupSyncMillis: Long = 0L,
+    val oledPureBlack: Boolean = false,
+    val greenExpenseMode: Boolean = false,
+    val accessibilityOrderDetailEnabled: Boolean = true
 )
 
 class SettingsStore(private val context: Context) {
@@ -91,6 +115,9 @@ class SettingsStore(private val context: Context) {
         val AUTO_BACKUP = booleanPreferencesKey("auto_backup")
         val LAST_RATE_SYNC = longPreferencesKey("last_rate_sync")
         val LAST_BACKUP_SYNC = longPreferencesKey("last_backup_sync")
+        val OLED_PURE_BLACK = booleanPreferencesKey("oled_pure_black")
+        val GREEN_EXPENSE_MODE = booleanPreferencesKey("green_expense_mode")
+        val ACCESSIBILITY_ORDER_DETAIL = booleanPreferencesKey("accessibility_order_detail")
     }
 
     val settingsFlow: Flow<AppSettings> = context.kairoDataStore.data.map { prefs ->
@@ -129,7 +156,10 @@ class SettingsStore(private val context: Context) {
             backupPassphrase = prefs[Keys.BACKUP_PASSPHRASE] ?: "",
             autoBackupEnabled = prefs[Keys.AUTO_BACKUP] ?: false,
             lastRateSyncMillis = prefs[Keys.LAST_RATE_SYNC] ?: 0L,
-            lastBackupSyncMillis = prefs[Keys.LAST_BACKUP_SYNC] ?: 0L
+            lastBackupSyncMillis = prefs[Keys.LAST_BACKUP_SYNC] ?: 0L,
+            oledPureBlack = prefs[Keys.OLED_PURE_BLACK] ?: false,
+            greenExpenseMode = prefs[Keys.GREEN_EXPENSE_MODE] ?: false,
+            accessibilityOrderDetailEnabled = prefs[Keys.ACCESSIBILITY_ORDER_DETAIL] ?: true
         )
     }
 
@@ -173,6 +203,9 @@ class SettingsStore(private val context: Context) {
             prefs[Keys.AUTO_BACKUP] = settings.autoBackupEnabled
             prefs[Keys.LAST_RATE_SYNC] = settings.lastRateSyncMillis
             prefs[Keys.LAST_BACKUP_SYNC] = settings.lastBackupSyncMillis
+            prefs[Keys.OLED_PURE_BLACK] = settings.oledPureBlack
+            prefs[Keys.GREEN_EXPENSE_MODE] = settings.greenExpenseMode
+            prefs[Keys.ACCESSIBILITY_ORDER_DETAIL] = settings.accessibilityOrderDetailEnabled
         }
     }
 

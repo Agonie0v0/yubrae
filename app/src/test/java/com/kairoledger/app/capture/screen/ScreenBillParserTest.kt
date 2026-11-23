@@ -9,6 +9,8 @@ import com.kairoledger.app.core.model.MoneyAmount
 import com.kairoledger.app.data.db.AccountAliasEntity
 import com.kairoledger.app.data.db.AccountEntity
 import com.kairoledger.app.data.db.CategoryEntity
+import com.kairoledger.app.data.db.DefaultSeedData
+import com.kairoledger.app.data.db.TagTextCodec
 import com.kairoledger.app.data.db.TransactionType
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -1566,5 +1568,467 @@ class ScreenBillParserTest {
         assertFalse(draft.note.contains("未设置"))
         assertFalse(draft.note.contains("暂无"))
         assertFalse(draft.note.contains("去添加"))
+    }
+
+    @Test
+    fun parsesAlipayDirectionalTakeoutDetailWithWelfareAndJianjiankaDiscounts() {
+        // 原样复现用户提供的真实支付宝「淘宝闪购」详情页捕获报文
+        val snapshot = ScreenSnapshot(
+            packageName = "com.eg.android.AlipayGphone",
+            className = "com.alipay.mobile.bill.detail.ui.BillDetailActivity",
+            texts = listOf(
+                "淘宝闪购",
+                "支出17.28元",
+                "交易成功",
+                "网商银行福利金抵扣",
+                "-0.02",
+                "支付宝减减卡",
+                "-0.20",
+                "支付时间",
+                "2026-11-22 03:03:46",
+                "付款方式",
+                "网商银行储蓄卡(6978)",
+                "商品说明",
+                "享哆味汉堡炸鸡(蔡顺路店)外卖订单",
+                "支付奖励",
+                "立即领取2积分",
+                "更多",
+                "账单管理",
+                "已解锁\"炸鸡汉堡\"贴纸，去兑换好礼",
+                "账单分类",
+                "餐饮美食",
+                "标签",
+                "为您推荐",
+                "三餐",
+                "计入收支",
+                "备注",
+                "联系商家",
+                "查看往来记录",
+                "AA收款",
+                "往来流水证明",
+                "申请电子回单"
+            )
+        )
+
+        val outcome = parser.parse(snapshot, aliases, accounts, categories)
+        assertEquals(ScreenPageKind.BILL_DETAIL, outcome.pageKind)
+        assertFalse(outcome.shouldFallbackToLlm)
+        val draft = outcome.draft
+        assertNotNull(draft)
+        assertEquals(TransactionType.EXPENSE, draft!!.type)
+        assertEquals(MoneyAmount.parseToMicros("17.28"), draft.origAmountMicros)
+        assertEquals("CNY", draft.origCurrency)
+        assertEquals("淘宝闪购", draft.merchant)
+        assertEquals("6978", draft.accountHint)
+        assertTrue("Expected note to contain 享哆味汉堡炸鸡, got: ${draft.note}", draft.note.contains("享哆味汉堡炸鸡"))
+        assertFalse(draft.note.contains("联系商家"))
+        assertFalse(draft.note.contains("AA收款"))
+    }
+
+    @Test
+    fun parsesAlipayRedPacketSendDetailWithDirectionalIntegerAmount() {
+        // 原样复现用户提供的真实支付宝「支付宝红包」支出详情页捕获报文
+        val snapshot = ScreenSnapshot(
+            packageName = "com.eg.android.AlipayGphone",
+            className = "com.alipay.mobile.bill.detail.ui.BillDetailActivity",
+            texts = listOf(
+                "支付宝红包",
+                "支出55元",
+                "交易成功",
+                "创建时间",
+                "2026-11-20 14:27:31",
+                "付款方式",
+                "网商银行储蓄卡(6978)",
+                "红包说明",
+                "发口令红包",
+                "服务详情",
+                "红包",
+                "进入小程序",
+                "更多",
+                "账单管理",
+                "我的消费图鉴",
+                "账单分类",
+                "转账红包",
+                "标签",
+                "为您推荐",
+                "发红包",
+                "计入收支",
+                "备注",
+                "AA收款"
+            )
+        )
+
+        val outcome = parser.parse(snapshot, aliases, accounts, categories)
+        assertEquals(ScreenPageKind.BILL_DETAIL, outcome.pageKind)
+        assertFalse(outcome.shouldFallbackToLlm)
+        val draft = outcome.draft
+        assertNotNull(draft)
+        assertEquals(TransactionType.EXPENSE, draft!!.type)
+        assertEquals(MoneyAmount.parseToMicros("55.00"), draft.origAmountMicros)
+        assertEquals("CNY", draft.origCurrency)
+        assertEquals("支付宝红包", draft.merchant)
+        assertEquals("6978", draft.accountHint)
+        assertTrue("Expected note to contain 发口令红包, got: ${draft.note}", draft.note.contains("发口令红包"))
+        assertFalse(draft.note.contains("AA收款"))
+    }
+
+    @Test
+    fun blocksUnknownDiscountCardBelowStatusLineFromOverridingTopHeroAmount() {
+        // 结构性防卫测试：即使出现词典未收录的新名称优惠卡，只要位于“交易成功”之后且顶部已有主金额，也绝不能反杀主金额
+        val snapshot = ScreenSnapshot(
+            packageName = "com.eg.android.AlipayGphone",
+            className = "BillDetailActivity",
+            texts = listOf(
+                "喜茶",
+                "支出28.50元",
+                "交易成功",
+                "神秘盲盒卡",
+                "-1.50",
+                "支付时间", "2026-11-23 15:00:00",
+                "付款方式", "花呗",
+                "商品说明", "多肉葡萄",
+                "账单详情"
+            )
+        )
+
+        val outcome = parser.parse(snapshot, aliases, accounts, categories)
+        assertEquals(ScreenPageKind.BILL_DETAIL, outcome.pageKind)
+        val draft = outcome.draft
+        assertNotNull(draft)
+        assertEquals(TransactionType.EXPENSE, draft!!.type)
+        assertEquals(MoneyAmount.parseToMicros("28.50"), draft.origAmountMicros)
+        assertEquals("喜茶", draft.merchant)
+    }
+
+    @Test
+    fun parsesPinduoduoTaobaoAndJdPaidOrderDetailsWithRealStoreGoodsAndTags() = runTest {
+        val fullAccDao = FakeAccountDao()
+        val fullAliasDao = FakeAccountAliasDao()
+        val fullCatDao = FakeCategoryDao()
+        DefaultSeedData.ensureAccountsAndTransitCard(fullAccDao, fullAliasDao)
+        DefaultSeedData.ensurePresetCategories(fullCatDao)
+        val fullAccounts = fullAccDao.getAll()
+        val fullAliases = fullAliasDao.getEnabled()
+        val fullCategories = fullCatDao.getAll()
+
+        val pddSnapshot = ScreenSnapshot(
+            packageName = "com.xunmeng.pinduoduo",
+            className = "com.xunmeng.pinduoduo.activity.NewPageActivity",
+            texts = listOf(
+                "订单详情",
+                "买家已付款",
+                "南极人家纺旗舰店 >",
+                "纯棉四件套全棉床上用品被套床单",
+                "2.0m床-水墨灰 x1",
+                "¥109.00",
+                "商品总价 ¥129.00",
+                "百亿补贴 -¥20.00",
+                "实付款 ¥99.00",
+                "订单编号：241123-123456789012345",
+                "付款时间：2026-11-23 14:20:10"
+            )
+        )
+        val pddOutcome = parser.parse(pddSnapshot, fullAliases, fullAccounts, fullCategories)
+        assertEquals(ScreenPageKind.ORDER_DETAIL, pddOutcome.pageKind)
+        val pddDraft = pddOutcome.draft
+        assertNotNull(pddDraft)
+        assertEquals("SCREEN_ORDER_DETAIL", pddDraft!!.parserUsed)
+        assertEquals(TransactionType.EXPENSE, pddDraft.type)
+        assertEquals(MoneyAmount.parseToMicros("99.00"), pddDraft.origAmountMicros)
+        assertEquals("南极人家纺旗舰店", pddDraft.merchant)
+        assertEquals("家居日用", pddDraft.categoryName)
+        assertTrue(pddDraft.note.contains("纯棉四件套"))
+        assertEquals("241123-123456789012345", pddDraft.externalOrderNo)
+        assertEquals(listOf("拼多多", "网购"), TagTextCodec.parse(pddDraft.tags))
+
+        val taobaoSnapshot = ScreenSnapshot(
+            packageName = "com.taobao.taobao",
+            className = "com.taobao.order.detail.OrderDetailActivity",
+            texts = listOf(
+                "订单详情",
+                "买家已付款",
+                "收货人：张三 138****1234",
+                "北京市朝阳区建国路88号",
+                "优衣库官方旗舰店 >",
+                "男装 法兰绒格子衬衫 长袖",
+                "颜色:藏青;尺码:L x1",
+                "¥149.00",
+                "店铺优惠 -¥20.00",
+                "实付款",
+                "¥129.00",
+                "订单编号",
+                "394857102938475601",
+                "成交时间",
+                "2026-11-23 15:10:00"
+            )
+        )
+        val tbOutcome = parser.parse(taobaoSnapshot, fullAliases, fullAccounts, fullCategories)
+        assertEquals(ScreenPageKind.ORDER_DETAIL, tbOutcome.pageKind)
+        val tbDraft = tbOutcome.draft!!
+        assertEquals(MoneyAmount.parseToMicros("129.00"), tbDraft.origAmountMicros)
+        assertEquals("优衣库官方旗舰店", tbDraft.merchant)
+        assertEquals("服饰鞋包", tbDraft.categoryName)
+        assertTrue(tbDraft.note.contains("法兰绒格子衬衫"))
+        assertEquals("394857102938475601", tbDraft.externalOrderNo)
+        assertEquals(listOf("淘宝", "网购"), TagTextCodec.parse(tbDraft.tags))
+
+        val jdSnapshot = ScreenSnapshot(
+            packageName = "com.jingdong.app.mall",
+            className = "com.jd.lib.ordercenter.detail.OrderDetailActivity",
+            texts = listOf(
+                "订单详情",
+                "已完成",
+                "Logitech罗技京东自营旗舰店 >",
+                "罗技 MX Master 3S 无线蓝牙鼠标",
+                "石墨黑 x1",
+                "商品总额 ¥599.00",
+                "京豆 -¥10.00",
+                "运费 ¥0.00",
+                "实付款：¥549.00",
+                "订单号：293847561029"
+            )
+        )
+        val jdOutcome = parser.parse(jdSnapshot, fullAliases, fullAccounts, fullCategories)
+        assertEquals(ScreenPageKind.ORDER_DETAIL, jdOutcome.pageKind)
+        val jdDraft = jdOutcome.draft!!
+        assertEquals(MoneyAmount.parseToMicros("549.00"), jdDraft.origAmountMicros)
+        assertEquals("Logitech罗技京东自营旗舰店", jdDraft.merchant)
+        assertEquals("数码配件", jdDraft.categoryName)
+        assertTrue(jdDraft.note.contains("罗技 MX Master 3S"))
+        assertEquals(listOf("京东", "网购"), TagTextCodec.parse(jdDraft.tags))
+    }
+
+    @Test
+    fun parsesMeituanTakeoutAndElemeDeliveredOrderDetailsIgnoringFeesAndCoupons() = runTest {
+        val fullAccDao = FakeAccountDao()
+        val fullAliasDao = FakeAccountAliasDao()
+        val fullCatDao = FakeCategoryDao()
+        DefaultSeedData.ensureAccountsAndTransitCard(fullAccDao, fullAliasDao)
+        DefaultSeedData.ensurePresetCategories(fullCatDao)
+        val fullAccounts = fullAccDao.getAll()
+        val fullAliases = fullAliasDao.getEnabled()
+        val fullCategories = fullCatDao.getAll()
+
+        val meituanSnapshot = ScreenSnapshot(
+            packageName = "com.sankuai.meituan.takeoutnew",
+            className = "com.sankuai.waimai.bussiness.order.detail.WMOrderDetailActivity",
+            texts = listOf(
+                "订单详情",
+                "已送达",
+                "蜜雪冰城(观音桥店) >",
+                "冰鲜柠檬水",
+                "正常冰/标准糖",
+                "x1",
+                "¥4.00",
+                "满天星奶茶",
+                "热/七分糖",
+                "x1",
+                "¥8.00",
+                "打包费 ¥1.00",
+                "配送费 ¥3.00",
+                "美团红包 -¥3.00",
+                "神券 -¥1.00",
+                "实付 ¥12.00",
+                "订单号码 10293847561029384"
+            )
+        )
+        val mtOutcome = parser.parse(meituanSnapshot, fullAliases, fullAccounts, fullCategories)
+        assertEquals(ScreenPageKind.ORDER_DETAIL, mtOutcome.pageKind)
+        val mtDraft = mtOutcome.draft!!
+        assertEquals(MoneyAmount.parseToMicros("12.00"), mtDraft.origAmountMicros)
+        assertEquals("蜜雪冰城(观音桥店)", mtDraft.merchant)
+        assertTrue(mtDraft.note.contains("冰鲜柠檬水"))
+        assertTrue(mtDraft.note.contains("满天星奶茶"))
+        assertEquals("外卖", mtDraft.categoryName)
+        assertEquals(listOf("美团", "外卖"), TagTextCodec.parse(mtDraft.tags))
+
+        val elemeSnapshot = ScreenSnapshot(
+            packageName = "me.ele",
+            className = "me.ele.order.detail.OrderDetailActivity",
+            texts = listOf(
+                "订单详情",
+                "商品已送达",
+                "肯德基宅急送（中关村店）",
+                "香辣鸡腿堡套餐 x1",
+                "¥29.00",
+                "上校鸡块 x1",
+                "¥12.50",
+                "餐盒费 ¥1.50",
+                "餐具费 ¥0.00",
+                "配送费 ¥5.00",
+                "店铺立减 -¥5.00",
+                "合计实付 ¥43.00",
+                "订单号：8829103847561920"
+            )
+        )
+        val eleOutcome = parser.parse(elemeSnapshot, fullAliases, fullAccounts, fullCategories)
+        assertEquals(ScreenPageKind.ORDER_DETAIL, eleOutcome.pageKind)
+        val eleDraft = eleOutcome.draft!!
+        assertEquals(MoneyAmount.parseToMicros("43.00"), eleDraft.origAmountMicros)
+        assertEquals("肯德基宅急送（中关村店）", eleDraft.merchant)
+        assertTrue(eleDraft.note.contains("香辣鸡腿堡套餐"))
+        assertTrue(eleDraft.note.contains("上校鸡块"))
+        assertEquals("外卖", eleDraft.categoryName)
+        assertEquals(listOf("外卖"), TagTextCodec.parse(eleDraft.tags))
+    }
+
+    @Test
+    fun doesNotMisfireOnEcommerceCartProductDetailPendingPaymentOrOrderList() {
+        val productDetail = ScreenSnapshot(
+            packageName = "com.taobao.taobao",
+            className = "ProductDetailActivity",
+            texts = listOf("优衣库男装法兰绒衬衫", "¥149.00", "加入购物车", "立即购买", "猜你喜欢")
+        )
+        val productOutcome = parser.parse(productDetail, aliases, accounts, categories)
+        assertEquals(ScreenPageKind.UNKNOWN, productOutcome.pageKind)
+        assertNull(productOutcome.draft)
+
+        val cartCheckout = ScreenSnapshot(
+            packageName = "com.xunmeng.pinduoduo",
+            className = "CartActivity",
+            texts = listOf("购物车", "纯棉四件套", "实付 ¥99.00", "去结算", "提交订单")
+        )
+        val cartOutcome = parser.parse(cartCheckout, aliases, accounts, categories)
+        assertEquals(ScreenPageKind.UNKNOWN, cartOutcome.pageKind)
+        assertNull(cartOutcome.draft)
+
+        val unpaidOrder = ScreenSnapshot(
+            packageName = "com.jingdong.app.mall",
+            className = "OrderDetailActivity",
+            texts = listOf("订单详情", "等待买家付款", "实付款 ¥299.00", "立即下单", "订单号：12345678", "待付款")
+        )
+        val unpaidOutcome = parser.parse(unpaidOrder, aliases, accounts, categories)
+        assertEquals(ScreenPageKind.UNKNOWN, unpaidOutcome.pageKind)
+        assertNull(unpaidOutcome.draft)
+
+        val orderListWithHeader = ScreenSnapshot(
+            packageName = "com.taobao.taobao",
+            className = "OrderListActivity",
+            texts = listOf(
+                "全部订单",
+                "交易成功", "南极人家纺旗舰店", "实付 ¥99.00", "订单号：11111111", "再来一单",
+                "交易成功", "三只松鼠旗舰店", "实付 ¥49.00", "订单号：22222222", "再来一单",
+                "猜你喜欢"
+            )
+        )
+        val listOutcome = parser.parse(orderListWithHeader, aliases, accounts, categories)
+        assertEquals(ScreenPageKind.UNKNOWN, listOutcome.pageKind)
+        assertNull(listOutcome.draft)
+
+        val scrolledMultiOrderCards = ScreenSnapshot(
+            packageName = "com.xunmeng.pinduoduo",
+            className = "OrderListActivity",
+            texts = listOf(
+                "交易成功", "店铺A", "实付 ¥99.00", "订单号：11111111",
+                "交易成功", "店铺B", "实付 ¥49.00", "订单号：22222222"
+            )
+        )
+        val multiOutcome = parser.parse(scrolledMultiOrderCards, aliases, accounts, categories)
+        assertEquals(ScreenPageKind.UNKNOWN, multiOutcome.pageKind)
+        assertNull(multiOutcome.draft)
+    }
+
+    @Test
+    fun unpacksWeChatAndAlipayPlatformShellMerchantFromGoodsForAccurateSubcategory() = runTest {
+        val fullAccDao = FakeAccountDao()
+        val fullAliasDao = FakeAccountAliasDao()
+        val fullCatDao = FakeCategoryDao()
+        DefaultSeedData.ensureAccountsAndTransitCard(fullAccDao, fullAliasDao)
+        DefaultSeedData.ensurePresetCategories(fullCatDao)
+        val fullAccounts = fullAccDao.getAll()
+        val fullAliases = fullAliasDao.getEnabled()
+        val fullCategories = fullCatDao.getAll()
+
+        val wechatPddCatFood = ScreenSnapshot(
+            packageName = "com.tencent.mm",
+            className = "com.tencent.mm.plugin.webview.ui.tools.MMWebViewUI",
+            texts = listOf(
+                "账单详情",
+                "拼多多平台商户",
+                "-59.90",
+                "当前状态", "支付成功",
+                "商品", "拼多多订单-241123998877665544-皇家猫粮全价成猫粮2kg",
+                "商户全称", "上海寻梦信息技术有限公司",
+                "支付方式", "零钱",
+                "交易单号", "4200001234567890"
+            )
+        )
+        val outcome1 = parser.parse(wechatPddCatFood, fullAliases, fullAccounts, fullCategories)
+        assertEquals(ScreenPageKind.BILL_DETAIL, outcome1.pageKind)
+        val draft1 = outcome1.draft!!
+        assertEquals(MoneyAmount.parseToMicros("59.90"), draft1.origAmountMicros)
+        assertEquals("宠物食品", draft1.categoryName)
+        assertTrue(draft1.merchant.contains("皇家猫粮"))
+        assertTrue(draft1.note.contains("皇家猫粮"))
+        assertEquals(listOf("拼多多", "网购"), TagTextCodec.parse(draft1.tags))
+
+        val wechatPddShop = ScreenSnapshot(
+            packageName = "com.tencent.mm",
+            className = "com.tencent.mm.plugin.webview.ui.tools.MMWebViewUI",
+            texts = listOf(
+                "账单详情",
+                "拼多多平台商户",
+                "-99.00",
+                "当前状态", "支付成功",
+                "商品", "拼多多订单-南极人家纺旗舰店 纯棉四件套",
+                "支付方式", "零钱",
+                "交易单号", "4200001234567899"
+            )
+        )
+        val outcome2 = parser.parse(wechatPddShop, fullAliases, fullAccounts, fullCategories)
+        assertEquals(ScreenPageKind.BILL_DETAIL, outcome2.pageKind)
+        val draft2 = outcome2.draft!!
+        assertEquals("南极人家纺旗舰店", draft2.merchant)
+        assertEquals("家居日用", draft2.categoryName)
+        assertEquals(listOf("拼多多", "网购"), TagTextCodec.parse(draft2.tags))
+    }
+
+    @Test
+    fun parsesXiaomiWalletTransitSwipeResultAndIgnoresEntryOnlyPage() = runTest {
+        val fullAccDao = FakeAccountDao()
+        val fullAliasDao = FakeAccountAliasDao()
+        val fullCatDao = FakeCategoryDao()
+        DefaultSeedData.ensureAccountsAndTransitCard(fullAccDao, fullAliasDao)
+        DefaultSeedData.ensurePresetCategories(fullCatDao)
+        val fullAccounts = fullAccDao.getAll()
+        val fullAliases = fullAliasDao.getEnabled()
+        val fullCategories = fullCatDao.getAll()
+
+        val swipeResult = ScreenSnapshot(
+            packageName = "com.miui.tsmclient",
+            className = "com.miui.tsmclient.ui.QuickCardActivity",
+            texts = listOf("重庆畅通卡", "刷卡成功", "-2.00", "卡内余额 38.50元")
+        )
+        val swipeOutcome = parser.parse(swipeResult, fullAliases, fullAccounts, fullCategories)
+        assertEquals(ScreenPageKind.PAY_SUCCESS, swipeOutcome.pageKind)
+        val swipeDraft = swipeOutcome.draft!!
+        assertEquals(TransactionType.EXPENSE, swipeDraft.type)
+        assertEquals(MoneyAmount.parseToMicros("2.00"), swipeDraft.origAmountMicros)
+        assertEquals("重庆畅通卡", swipeDraft.merchant)
+        assertEquals("地铁公交", swipeDraft.categoryName)
+        assertEquals("公交卡", fullAccounts.first { it.id == swipeDraft.accountId }.name)
+        assertEquals("通勤", swipeDraft.tags)
+
+        val exitInteger = ScreenSnapshot(
+            packageName = "com.mipay.wallet",
+            className = "com.mipay.wallet.TransitResultActivity",
+            texts = listOf("小米钱包", "重庆畅通卡", "出站扣费2元", "卡内余额38.50元")
+        )
+        val exitOutcome = parser.parse(exitInteger, fullAliases, fullAccounts, fullCategories)
+        assertEquals(ScreenPageKind.PAY_SUCCESS, exitOutcome.pageKind)
+        val exitDraft = exitOutcome.draft!!
+        assertEquals(MoneyAmount.parseToMicros("2.00"), exitDraft.origAmountMicros)
+        assertEquals("重庆畅通卡", exitDraft.merchant)
+        assertEquals("地铁公交", exitDraft.categoryName)
+        assertEquals("通勤", exitDraft.tags)
+
+        val entryOnly = ScreenSnapshot(
+            packageName = "com.miui.tsmclient",
+            className = "com.miui.tsmclient.ui.QuickCardActivity",
+            texts = listOf("重庆畅通卡", "进站成功", "闸机已开启", "卡内余额 38.50元")
+        )
+        val entryOutcome = parser.parse(entryOnly, fullAliases, fullAccounts, fullCategories)
+        assertEquals(ScreenPageKind.UNKNOWN, entryOutcome.pageKind)
+        assertNull(entryOutcome.draft)
     }
 }

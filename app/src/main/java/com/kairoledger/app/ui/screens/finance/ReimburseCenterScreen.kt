@@ -371,18 +371,10 @@ private fun ReimburseSummaryHeroCard(
     onSelectTab: (Int) -> Unit
 ) {
     val semantic = KairoTheme.semantic
-    val gradientColors = if (semantic.isDark) {
-        listOf(Color(0xFF143E2D), Color(0xFF1B4A37))
-    } else {
-        listOf(Color(0xFFE3F7EE), Color(0xFFD5F1E4), Color(0xFFEDF9F3))
-    }
-    val titleColor = if (semantic.isDark) Color(0xFFCFF7E3) else Color(0xFF0A3D28)
-    val borderColor = if (semantic.isDark) {
-        Color(0xFF5BD2A0).copy(alpha = 0.25f)
-    } else {
-        Color(0xFF2AA876).copy(alpha = 0.22f)
-    }
-    val pillBg = if (semantic.isDark) Color(0xFF0F251C).copy(alpha = 0.72f) else Color.White.copy(alpha = 0.88f)
+    val gradientColors = semantic.heroGradient
+    val titleColor = semantic.heroOnSurface
+    val borderColor = semantic.heroBorder
+    val pillBg = semantic.heroPillBg
 
     Surface(
         shape = RoundedCornerShape(24.dp),

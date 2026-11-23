@@ -57,6 +57,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.kairoledger.app.AppContainer
+import com.kairoledger.app.data.db.TagEntity
 import com.kairoledger.app.data.db.TransactionEntity
 import com.kairoledger.app.data.db.TransactionType
 import com.kairoledger.app.data.prefs.AppSettings
@@ -67,6 +68,7 @@ import com.kairoledger.app.ui.components.SmartInputSheet
 import com.kairoledger.app.ui.screens.assets.AccountDetailScreen
 import com.kairoledger.app.ui.screens.assets.AssetsScreen
 import com.kairoledger.app.ui.screens.categories.CategoryManageScreen
+import com.kairoledger.app.ui.screens.categories.TagManageScreen
 import com.kairoledger.app.ui.screens.finance.DebtCenterScreen
 import com.kairoledger.app.ui.screens.finance.ReimburseCenterScreen
 import com.kairoledger.app.ui.screens.settings.AppearanceSecurityScreen
@@ -107,6 +109,7 @@ private object OverlayRouteKinds {
     const val REIMBURSE = "REIMBURSE"
     const val DEBTS = "DEBTS"
     const val CATEGORIES = "CATEGORIES"
+    const val TAGS = "TAGS"
 }
 
 @Composable
@@ -275,7 +278,9 @@ fun KairoAppRoot(
     KairoLedgerTheme(
         themeMode = settings.themeMode,
         dynamicColor = settings.dynamicColor,
-        themeStyle = settings.themeStyle
+        themeStyle = settings.themeStyle,
+        oledPureBlack = settings.oledPureBlack,
+        greenExpenseMode = settings.greenExpenseMode
     ) {
         CompositionLocalProvider(LocalPrivacyMasked provides settings.privacyMaskEnabled) {
             Box(modifier = Modifier.fillMaxSize()) {
@@ -323,6 +328,10 @@ fun KairoAppRoot(
                                 onBack = { overlayKind = OverlayRouteKinds.NONE }
                             )
                             OverlayRouteKinds.CATEGORIES -> CategoryManageHost(
+                                viewModel = viewModel,
+                                onBack = { overlayKind = OverlayRouteKinds.NONE }
+                            )
+                            OverlayRouteKinds.TAGS -> TagManageHost(
                                 viewModel = viewModel,
                                 onBack = { overlayKind = OverlayRouteKinds.NONE }
                             )
@@ -527,6 +536,7 @@ fun KairoAppRoot(
                                         onNavigate = { route ->
                                             when (route) {
                                                 SettingsRoutes.CATEGORIES -> overlayKind = OverlayRouteKinds.CATEGORIES
+                                                SettingsRoutes.TAGS -> overlayKind = OverlayRouteKinds.TAGS
                                                 SettingsRoutes.REIMBURSE -> overlayKind = OverlayRouteKinds.REIMBURSE
                                                 SettingsRoutes.DEBTS -> overlayKind = OverlayRouteKinds.DEBTS
                                                 else -> settingsSubRoute = route
@@ -582,6 +592,7 @@ fun KairoAppRoot(
                 val activeAccounts by viewModel.activeAccounts.collectAsStateWithLifecycle()
                 val categories by viewModel.categories.collectAsStateWithLifecycle()
                 val ledgers by viewModel.ledgers.collectAsStateWithLifecycle()
+                val tags by viewModel.tags.collectAsStateWithLifecycle()
                 QuickRecordSheet(
                     viewModel = viewModel,
                     accounts = activeAccounts,
@@ -601,6 +612,18 @@ fun KairoAppRoot(
                         editingTransaction = null
                         refundOriginTransaction = null
                         overlayKind = OverlayRouteKinds.CATEGORIES
+                    },
+                    availableTags = tags,
+                    onQuickCreateTag = { name, colorHex ->
+                        viewModel.saveTag(
+                            TagEntity(
+                                name = name,
+                                groupName = "自定义",
+                                colorHex = colorHex,
+                                sortOrder = 300,
+                                isSystem = false
+                            )
+                        )
                     },
                     onDismiss = {
                         showQuickRecord = false
@@ -770,6 +793,25 @@ private fun CategoryManageHost(
         categories = categories,
         onSaveCategory = { cat -> viewModel.saveCategory(cat) },
         onDeleteCategory = { catId -> viewModel.deleteCategory(catId) },
+        onSeedPresets = { viewModel.seedPresetCatalog() },
+        onBack = onBack
+    )
+}
+
+@Composable
+private fun TagManageHost(
+    viewModel: KairoMainViewModel,
+    onBack: () -> Unit
+) {
+    val tags by viewModel.tags.collectAsStateWithLifecycle()
+    val transactions by viewModel.allTransactions.collectAsStateWithLifecycle()
+
+    TagManageScreen(
+        tags = tags,
+        transactions = transactions,
+        onSaveTag = { tag -> viewModel.saveTag(tag) },
+        onDeleteTag = { tagId -> viewModel.deleteTag(tagId) },
+        onSeedPresets = { viewModel.seedPresetCatalog() },
         onBack = onBack
     )
 }

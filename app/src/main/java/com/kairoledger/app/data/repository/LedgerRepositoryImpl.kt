@@ -23,6 +23,7 @@ import com.kairoledger.app.data.db.DebtDirection
 import com.kairoledger.app.data.db.DebtRecordDao
 import com.kairoledger.app.data.db.DebtRecordEntity
 import com.kairoledger.app.data.db.DebtStatus
+import com.kairoledger.app.data.db.DefaultSeedData
 import com.kairoledger.app.data.db.InstallmentPlanDao
 import com.kairoledger.app.data.db.InstallmentPlanEntity
 import com.kairoledger.app.data.db.KairoDatabase
@@ -31,6 +32,8 @@ import com.kairoledger.app.data.db.LedgerEntity
 import com.kairoledger.app.data.db.RecurringRuleDao
 import com.kairoledger.app.data.db.RecurringRuleEntity
 import com.kairoledger.app.data.db.ReimburseStatus
+import com.kairoledger.app.data.db.TagDao
+import com.kairoledger.app.data.db.TagEntity
 import com.kairoledger.app.data.db.TransactionDao
 import com.kairoledger.app.data.db.TransactionEntity
 import com.kairoledger.app.data.db.TransactionStatus
@@ -63,7 +66,9 @@ class LedgerRepositoryImpl(
     private val getSettings: suspend () -> AppSettings = { AppSettings() },
     private val inTransaction: suspend (suspend () -> Any?) -> Any? = { block -> block() },
     private val zoneId: ZoneId = ZoneId.systemDefault(),
-    private val clockMillisProvider: () -> Long = { System.currentTimeMillis() }
+    private val clockMillisProvider: () -> Long = { System.currentTimeMillis() },
+    private val tagDao: TagDao? = null,
+    private val presetCatalogSeeder: (suspend () -> Pair<Int, Int>)? = null
 ) : LedgerService {
 
     constructor(
@@ -81,7 +86,11 @@ class LedgerRepositoryImpl(
         debtRecordDao = db.debtRecordDao(),
         installmentPlanDao = db.installmentPlanDao(),
         getSettings = { settingsStore.getSnapshot() },
-        inTransaction = { block -> db.withTransaction { block() } }
+        inTransaction = { block -> db.withTransaction { block() } },
+        tagDao = db.tagDao(),
+        presetCatalogSeeder = {
+            DefaultSeedData.ensurePresetCategories(db) to DefaultSeedData.ensurePresetTags(db)
+        }
     )
 
     override fun observeActiveAccounts(): Flow<List<AccountEntity>> = accountDao.observeActive()
@@ -873,6 +882,46 @@ class LedgerRepositoryImpl(
             nowMillis = clockMillisProvider(),
             fetchRate = { from, to -> exchangeRateProvider.getRate(from, to).rateMicros }
         )
+    }
+
+    override fun observeTags(): Flow<List<TagEntity>> =
+        tagDao?.observeAll() ?: kotlinx.coroutines.flow.flowOf(emptyList())
+
+    override suspend fun saveTag(tag: TagEntity): Long {
+        val dao = tagDao ?: return 0L
+        val normalizedName = tag.name.trim()
+        if (normalizedName.isEmpty()) return 0L
+        val normalized = tag.copy(
+            name = normalizedName,
+            groupName = tag.groupName.trim().ifBlank { "常用" }
+        )
+        if (normalized.id > 0L && dao.getById(normalized.id) != null) {
+            val conflict = dao.findByName(normalized.name)
+            if (conflict != null && conflict.id != normalized.id) {
+                dao.update(normalized.copy(id = conflict.id))
+                return conflict.id
+            }
+            dao.update(normalized)
+            return normalized.id
+        }
+        val existingByName = dao.findByName(normalized.name)
+        return if (existingByName != null) {
+            dao.update(normalized.copy(id = existingByName.id))
+            existingByName.id
+        } else {
+            dao.insert(normalized)
+        }
+    }
+
+    override suspend fun deleteTag(tagId: Long) {
+        tagDao?.deleteById(tagId)
+    }
+
+    override suspend fun ensurePresetCatalogSeeded(): Pair<Int, Int> {
+        presetCatalogSeeder?.let { return it() }
+        val addedCategories = DefaultSeedData.ensurePresetCategories(categoryDao)
+        val addedTags = tagDao?.let { DefaultSeedData.ensurePresetTags(it) } ?: 0
+        return addedCategories to addedTags
     }
 
     private suspend fun resolveConversion(

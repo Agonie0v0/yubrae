@@ -40,6 +40,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
+import androidx.core.graphics.ColorUtils
 import com.kairoledger.app.BuildConfig
 import com.kairoledger.app.MainActivity
 import com.kairoledger.app.R
@@ -53,10 +54,14 @@ import com.kairoledger.app.data.db.CaptureChannel
 import com.kairoledger.app.data.db.CategoryEntity
 import com.kairoledger.app.data.db.LedgerEntity
 import com.kairoledger.app.data.db.ReimburseStatus
+import com.kairoledger.app.data.db.TagEntity
+import com.kairoledger.app.data.db.TagTextCodec
 import com.kairoledger.app.data.db.TransactionEntity
 import com.kairoledger.app.data.db.TransactionStatus
 import com.kairoledger.app.data.db.TransactionType
 import com.kairoledger.app.data.prefs.AppSettings
+import com.kairoledger.app.data.prefs.ThemeMode
+import com.kairoledger.app.ui.theme.resolveOverlayThemeColors
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -104,7 +109,7 @@ class FloatingConfirmService : Service() {
         val timestamp: Long,
         val sourceType: String,
         val rawEventId: Long?,
-        val tags: String,
+        var tags: String,
         val attachmentPaths: String,
         val refundOfTxId: Long?,
         val reimbursedTxId: Long?,
@@ -231,7 +236,8 @@ class FloatingConfirmService : Service() {
                 val categories = runCatching { db?.categoryDao()?.getAll() }.getOrNull().orEmpty()
                 val allLedgers = runCatching { db?.ledgerDao()?.getAll() }.getOrNull().orEmpty()
                 val activeLedgers = allLedgers.filter { !it.archived }.ifEmpty { allLedgers }
-                LoadedContext(settings, tx, activeAccounts, categories, activeLedgers)
+                val tags = runCatching { db?.tagDao()?.getAll() }.getOrNull().orEmpty()
+                LoadedContext(settings, tx, activeAccounts, categories, activeLedgers, tags)
             }
 
             val shown = showInteractiveOverlay(payload, loaded)
@@ -252,7 +258,8 @@ class FloatingConfirmService : Service() {
         val tx: TransactionEntity?,
         val accounts: List<AccountEntity>,
         val categories: List<CategoryEntity>,
-        val ledgers: List<LedgerEntity>
+        val ledgers: List<LedgerEntity>,
+        val tags: List<TagEntity>
     )
 
     override fun onDestroy() {
@@ -287,47 +294,41 @@ class FloatingConfirmService : Service() {
         }
     }
 
-    private fun buildTheme(): OverlayTheme {
-        val isDark = (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
+    private fun resolveDark(themeMode: ThemeMode): Boolean = when (themeMode) {
+        ThemeMode.LIGHT -> false
+        ThemeMode.DARK -> true
+        ThemeMode.SYSTEM -> (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
             Configuration.UI_MODE_NIGHT_YES
-        return if (isDark) {
-            OverlayTheme(
-                isDark = true,
-                cardBg = Color.parseColor("#181F1C"),
-                cardStroke = Color.parseColor("#2C3732"),
-                textPrimary = Color.parseColor("#E1E8E4"),
-                textSecondary = Color.parseColor("#A9B7B0"),
-                chipBg = Color.parseColor("#212A26"),
-                mintAccent = Color.parseColor("#2AA876"),
-                mintContainer = Color.parseColor("#124D36"),
-                onMintContainer = Color.parseColor("#CFF7E3"),
-                expenseColor = Color.parseColor("#FF8983"),
-                incomeColor = Color.parseColor("#65DAA0"),
-                transferColor = Color.parseColor("#8DB9FF"),
-                inputBg = Color.parseColor("#212A26"),
-                warningBg = Color.parseColor("#4B3008"),
-                warningText = Color.parseColor("#FBBF24")
-            )
-        } else {
-            OverlayTheme(
-                isDark = false,
-                cardBg = Color.parseColor("#FFFFFF"),
-                cardStroke = Color.parseColor("#DDE5E1"),
-                textPrimary = Color.parseColor("#1A211E"),
-                textSecondary = Color.parseColor("#54635C"),
-                chipBg = Color.parseColor("#F0F4F2"),
-                mintAccent = Color.parseColor("#2AA876"),
-                mintContainer = Color.parseColor("#E4F6EE"),
-                onMintContainer = Color.parseColor("#0A3D28"),
-                expenseColor = Color.parseColor("#E05252"),
-                incomeColor = Color.parseColor("#22A06B"),
-                transferColor = Color.parseColor("#3B82F6"),
-                inputBg = Color.parseColor("#F6F9F7"),
-                warningBg = Color.parseColor("#FEF3C7"),
-                warningText = Color.parseColor("#B45309")
-            )
-        }
     }
+
+    private fun buildTheme(settings: AppSettings): OverlayTheme {
+        val resolved = resolveOverlayThemeColors(
+            themeStyle = settings.themeStyle,
+            isDark = resolveDark(settings.themeMode),
+            oledPureBlack = settings.oledPureBlack,
+            greenExpenseMode = settings.greenExpenseMode
+        )
+        return OverlayTheme(
+            isDark = resolved.isDark,
+            cardBg = resolved.cardBg,
+            cardStroke = resolved.cardStroke,
+            textPrimary = resolved.textPrimary,
+            textSecondary = resolved.textSecondary,
+            chipBg = resolved.chipBg,
+            mintAccent = resolved.accent,
+            mintContainer = resolved.accentContainer,
+            onMintContainer = resolved.onAccentContainer,
+            expenseColor = resolved.expenseColor,
+            incomeColor = resolved.incomeColor,
+            transferColor = resolved.transferColor,
+            inputBg = resolved.inputBg,
+            warningBg = resolved.warningBg,
+            warningText = resolved.warningText
+        )
+    }
+
+    private fun contrastOnAccent(accentColor: Int): Int =
+        if (ColorUtils.calculateLuminance(accentColor) > 0.52) Color.BLACK else Color.WHITE
 
     private fun buildInitialState(payload: OverlayPayload, loaded: LoadedContext): EditorState {
         val tx = loaded.tx
@@ -409,7 +410,7 @@ class FloatingConfirmService : Service() {
         countdownPaused = false
         windowFocusableForIme = false
 
-        val theme = buildTheme()
+        val theme = buildTheme(loaded.settings)
         val state = buildInitialState(payload, loaded)
 
         val rootCard = LinearLayout(this).apply {
@@ -929,6 +930,51 @@ class FloatingConfirmService : Service() {
         toAccountSection.addView(toAccountScroll)
         bodyContainer.addView(toAccountSection)
 
+        // 6c. 账单标签横向滚动彩色多选区（已选标签靠前高亮）
+        if (loaded.tags.isNotEmpty() || state.tags.isNotBlank()) {
+            bodyContainer.addView(buildSectionLabel("标签（可多选）", theme))
+            val tagRow = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+            }
+            val tagScroll = createHorizontalScroll(topMarginDp = 4, theme = theme).apply {
+                addView(tagRow)
+            }
+            fun rebuildTagChips() {
+                tagRow.removeAllViews()
+                val selectedNames = TagTextCodec.parse(state.tags)
+                val selectedSet = selectedNames.toSet()
+                val tagColorMap = loaded.tags.associate { it.name to it.colorHex.toInt() }
+                val orderedTags = LinkedHashSet<String>()
+                orderedTags.addAll(selectedNames)
+                loaded.tags.sortedWith(compareBy<TagEntity> { it.sortOrder }.thenBy { it.id })
+                    .forEach { orderedTags.add(it.name) }
+
+                for (tagName in orderedTags) {
+                    val isSelected = tagName in selectedSet
+                    val dotColor = tagColorMap[tagName] ?: fallbackOverlayTagColor(tagName)
+                    val pill = buildColoredTagPill(
+                        label = if (isSelected) "✓ $tagName" else tagName,
+                        dotColor = dotColor,
+                        selected = isSelected,
+                        theme = theme
+                    ) {
+                        pauseCountdownForUserInteraction(theme)
+                        val current = TagTextCodec.parse(state.tags)
+                        val updated = if (tagName in current) {
+                            current.filterNot { it == tagName }
+                        } else {
+                            current + tagName
+                        }
+                        state.tags = TagTextCodec.format(updated)
+                        rebuildTagChips()
+                    }
+                    tagRow.addView(pill, horizontalItemParams())
+                }
+            }
+            rebuildTagChips()
+            bodyContainer.addView(tagScroll)
+        }
+
         // 7. 商户 / 备注点击输入区域（动态 FLAG_NOT_FOCUSABLE 切换软键盘）
         val inputHeaderRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -946,7 +992,7 @@ class FloatingConfirmService : Service() {
         }
         val finishInputPill = TextView(this).apply {
             text = "完成输入"
-            setTextColor(Color.WHITE)
+            setTextColor(contrastOnAccent(theme.mintAccent))
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
             typeface = Typeface.DEFAULT_BOLD
             setPadding(dp(10), dp(3), dp(10), dp(3))
@@ -1173,7 +1219,7 @@ class FloatingConfirmService : Service() {
         }
         val saveConfirmBtn = buildActionButton(
             label = "保存确认",
-            textColor = Color.WHITE,
+            textColor = contrastOnAccent(theme.mintAccent),
             bgColor = theme.mintAccent,
             strokeColor = Color.TRANSPARENT
         ) {
@@ -1250,10 +1296,12 @@ class FloatingConfirmService : Service() {
 
         val catName = loaded.categories.firstOrNull { it.id == state.categoryId }?.name ?: payload.categoryName
         val accName = loaded.accounts.firstOrNull { it.id == state.accountId }?.name ?: payload.accountName
+        val tagSummary = TagTextCodec.parse(state.tags).joinToString(" ") { "#$it" }
         val metaParts = listOfNotNull(
             state.merchant.takeIf { it.isNotBlank() },
             catName.takeIf { it.isNotBlank() },
-            accName.takeIf { it.isNotBlank() }
+            accName.takeIf { it.isNotBlank() },
+            tagSummary.takeIf { it.isNotBlank() }
         )
         val metaView = TextView(this).apply {
             text = metaParts.joinToString(" · ").ifBlank { "点击展开编辑或确认账单" }
@@ -1287,7 +1335,7 @@ class FloatingConfirmService : Service() {
         }
         val confirmBtn = buildActionButton(
             label = "确认",
-            textColor = Color.WHITE,
+            textColor = contrastOnAccent(theme.mintAccent),
             bgColor = theme.mintAccent,
             strokeColor = Color.TRANSPARENT
         ) {
@@ -1464,6 +1512,54 @@ class FloatingConfirmService : Service() {
         addView(dot)
         addView(tv)
         setOnClickListener { onClick() }
+    }
+
+    private fun buildColoredTagPill(
+        label: String,
+        dotColor: Int,
+        selected: Boolean,
+        theme: OverlayTheme,
+        onClick: () -> Unit
+    ): LinearLayout = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        setPadding(dp(9), dp(5), dp(11), dp(5))
+        background = GradientDrawable().apply {
+            setColor(if (selected) withAlpha(dotColor, 46) else theme.chipBg)
+            cornerRadius = dp(16).toFloat()
+            if (selected) {
+                setStroke(dp(1), dotColor)
+            }
+        }
+        val dot = View(context).apply {
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(dotColor)
+            }
+            layoutParams = LinearLayout.LayoutParams(dp(7), dp(7)).apply { marginEnd = dp(5) }
+        }
+        val tv = TextView(context).apply {
+            text = label
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+            typeface = if (selected) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
+            setTextColor(theme.textPrimary)
+            maxLines = 1
+        }
+        addView(dot)
+        addView(tv)
+        setOnClickListener { onClick() }
+    }
+
+    private fun fallbackOverlayTagColor(tagName: String): Int {
+        val palette = intArrayOf(
+            0xFF2AA876.toInt(),
+            0xFF0284C7.toInt(),
+            0xFFEA580C.toInt(),
+            0xFF7C3AED.toInt(),
+            0xFFDB2777.toInt(),
+            0xFF0D9488.toInt()
+        )
+        return palette[kotlin.math.abs(tagName.hashCode()) % palette.size]
     }
 
     private fun buildCategoryIconPill(
@@ -1665,7 +1761,7 @@ class FloatingConfirmService : Service() {
                     categoryId = if (state.type == TransactionType.TRANSFER) null else state.categoryId,
                     merchant = state.merchant.trim(),
                     note = state.note.trim(),
-                    tags = state.tags,
+                    tags = TagTextCodec.format(TagTextCodec.parse(state.tags)),
                     reimburseStatus = state.reimburseStatus,
                     sourceType = state.sourceType,
                     rawEventId = state.rawEventId,

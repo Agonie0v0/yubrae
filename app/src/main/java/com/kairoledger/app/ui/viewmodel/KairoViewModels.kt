@@ -18,6 +18,7 @@ import com.kairoledger.app.core.contract.ParsedBillDraft
 import com.kairoledger.app.core.contract.RateQuote
 import com.kairoledger.app.core.contract.RecordTransactionRequest
 import com.kairoledger.app.core.contract.RemoteBackupFile
+import com.kairoledger.app.core.contract.TagStat
 import com.kairoledger.app.core.contract.TrendBucketPoint
 import com.kairoledger.app.core.model.CurrencyCatalog
 import com.kairoledger.app.core.model.MoneyAmount
@@ -36,12 +37,17 @@ import com.kairoledger.app.data.db.RawCaptureLogEntity
 import com.kairoledger.app.data.db.RecurringRuleEntity
 import com.kairoledger.app.data.db.ReimburseStatus
 import com.kairoledger.app.data.db.StatsGranularity
+import com.kairoledger.app.data.db.TagEntity
+import com.kairoledger.app.data.db.TagTextCodec
 import com.kairoledger.app.data.db.TransactionEntity
 import com.kairoledger.app.data.db.TransactionStatus
 import com.kairoledger.app.data.db.TransactionType
 import com.kairoledger.app.data.prefs.AppSettings
 import com.kairoledger.app.domain.LedgerAnalytics
+import com.kairoledger.app.ui.components.KairoIcons
 import java.io.File
+import java.math.BigDecimal
+import java.math.RoundingMode
 import java.time.DayOfWeek
 import java.time.temporal.TemporalAdjusters
 import android.util.Base64
@@ -82,7 +88,8 @@ data class TransactionFilters(
     val categoryIdFilter: Long? = null,
     val reimburseFilter: String = "ALL",
     val minAmountMicros: Long? = null,
-    val maxAmountMicros: Long? = null
+    val maxAmountMicros: Long? = null,
+    val tagFilter: String? = null
 )
 
 data class DayTransactionGroup(
@@ -130,9 +137,17 @@ data class StatsUiState(
     val trendBuckets: List<TrendBucketPoint> = emptyList(),
     val netWorthHistory: List<NetWorthPoint> = emptyList(),
     val categoryStats: List<CategoryStat> = emptyList(),
+    val tagStats: List<TagStat> = emptyList(),
     val budgetProgressList: List<BudgetProgress> = emptyList(),
     val totalCategoryAmountMicros: Long = 0L,
     val isLoading: Boolean = false
+)
+
+private data class StatsInputSnapshot(
+    val txs: List<TransactionEntity>,
+    val tags: List<TagEntity>,
+    val budgets: List<BudgetEntity>,
+    val rates: List<ExchangeRateEntity>
 )
 
 private data class StatsQueryParams(
@@ -209,6 +224,9 @@ class KairoMainViewModel(
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     val categories: StateFlow<List<CategoryEntity>> = ledgerService.observeCategories()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    val tags: StateFlow<List<TagEntity>> = ledgerService.observeTags()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     val allTransactions: StateFlow<List<TransactionEntity>> = ledgerService.observeTransactions()
@@ -317,7 +335,8 @@ class KairoMainViewModel(
                 tx.merchant.lowercase().contains(queryLower) ||
                 tx.note.lowercase().contains(queryLower) ||
                 tx.tags.lowercase().contains(queryLower)
-            matchCurrency && matchAccount && matchChannel && matchCat && matchReimburse && matchAmount && matchQuery
+            val matchTag = filters.tagFilter == null || filters.tagFilter in TagTextCodec.parse(tx.tags)
+            matchCurrency && matchAccount && matchChannel && matchCat && matchReimburse && matchAmount && matchQuery && matchTag
         }
 
         val groupedDays = filtered
@@ -417,14 +436,14 @@ class KairoMainViewModel(
     }
 
     val statsUiState: StateFlow<StatsUiState> = combine(
-        allTransactions,
+        combine(allTransactions, tags) { txs, tagList -> txs to tagList },
         budgets,
         exchangeRates,
         settings,
         combine(_statsMonth, _statsCurrency, _statsType, _statsTimeFlow) { m, c, t, timeArgs ->
             Triple(Triple(m, c, t), timeArgs[0] as String, Triple(timeArgs[1] as Long, timeArgs[2] as Long?, timeArgs[3] as Long?))
         }
-    ) { txs, bgs, rts, appSettings, (baseTriple, granularity, timeRange) ->
+    ) { (txs, tagList), bgs, rts, appSettings, (baseTriple, granularity, timeRange) ->
         StatsQueryParams(
             month = baseTriple.first,
             displayCurrency = baseTriple.second ?: appSettings.baseCurrency,
@@ -434,10 +453,15 @@ class KairoMainViewModel(
             customStartMillis = timeRange.second,
             customEndMillis = timeRange.third,
             activeLedgerId = appSettings.activeLedgerId
-        ) to Triple(txs.size to txs.firstOrNull()?.updatedAt, bgs, rts)
+        ) to StatsInputSnapshot(
+            txs = txs,
+            tags = tagList,
+            budgets = bgs,
+            rates = rts
+        )
     }
         .distinctUntilChanged()
-        .flatMapLatest { (params, _) ->
+        .flatMapLatest { (params, snapshot) ->
         flow {
             val zone = ZoneId.systemDefault()
             val (windowStart, windowEnd) = computeStatsWindowMillis(
@@ -496,6 +520,16 @@ class KairoMainViewModel(
             val catStats = result[3] as List<CategoryStat>
             @Suppress("UNCHECKED_CAST")
             val budgetProgress = result[4] as List<BudgetProgress>
+            val tagStats = computeTagStats(
+                transactions = snapshot.txs,
+                tags = snapshot.tags,
+                rates = snapshot.rates,
+                startMillis = windowStart,
+                endMillis = windowEnd,
+                type = params.type,
+                displayCurrency = params.displayCurrency,
+                activeLedgerId = params.activeLedgerId
+            )
             emit(
                 StatsUiState(
                     selectedMonth = params.month,
@@ -509,6 +543,7 @@ class KairoMainViewModel(
                     trendBuckets = buckets,
                     netWorthHistory = nwHistory,
                     categoryStats = catStats,
+                    tagStats = tagStats,
                     budgetProgressList = budgetProgress,
                     totalCategoryAmountMicros = catStats.sumOf { it.totalBaseMicros },
                     isLoading = false
@@ -518,6 +553,58 @@ class KairoMainViewModel(
     }
         .flowOn(Dispatchers.Default)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), StatsUiState(isLoading = true))
+
+    private fun computeTagStats(
+        transactions: List<TransactionEntity>,
+        tags: List<TagEntity>,
+        rates: List<ExchangeRateEntity>,
+        startMillis: Long,
+        endMillis: Long,
+        type: String,
+        displayCurrency: String,
+        activeLedgerId: Long
+    ): List<TagStat> {
+        val colorMap = tags.associate { it.name to it.colorHex }
+        val totalsByTag = LinkedHashMap<String, Long>()
+        val countsByTag = LinkedHashMap<String, Int>()
+        for (tx in transactions) {
+            if (tx.status != TransactionStatus.CONFIRMED || tx.excludeFromStats) continue
+            if (activeLedgerId > 0L && tx.ledgerId != activeLedgerId) continue
+            if (tx.type != type || tx.refundOfTxId != null) continue
+            if (tx.timestamp !in startMillis..endMillis) continue
+            val parsedTags = TagTextCodec.parse(tx.tags)
+            if (parsedTags.isEmpty()) continue
+            val amountBaseMicros = convertTxToDisplayBase(tx, displayCurrency, rates).coerceAtLeast(0L)
+            for (tagName in parsedTags) {
+                totalsByTag[tagName] = (totalsByTag[tagName] ?: 0L) + amountBaseMicros
+                countsByTag[tagName] = (countsByTag[tagName] ?: 0) + 1
+            }
+        }
+        if (totalsByTag.isEmpty()) return emptyList()
+        val totalTagSum = totalsByTag.values.sum()
+        return totalsByTag.entries
+            .sortedWith(
+                compareByDescending<Map.Entry<String, Long>> { it.value }
+                    .thenByDescending { countsByTag[it.key] ?: 0 }
+                    .thenBy { it.key }
+            )
+            .map { (tagName, totalMicros) ->
+                val ratio = if (totalTagSum > 0L) {
+                    BigDecimal(totalMicros)
+                        .divide(BigDecimal(totalTagSum), 6, RoundingMode.HALF_UP)
+                        .toFloat()
+                } else {
+                    0f
+                }
+                TagStat(
+                    tagName = tagName,
+                    colorHex = colorMap[tagName] ?: KairoIcons.fallbackTagColorHex(tagName),
+                    totalBaseMicros = totalMicros,
+                    count = countsByTag[tagName] ?: 0,
+                    percentage = ratio
+                )
+            }
+    }
 
     private fun computeStatsWindowMillis(
         granularity: String,
@@ -620,13 +707,18 @@ class KairoMainViewModel(
         _txFilters.update { it.copy(minAmountMicros = minMicros, maxAmountMicros = maxMicros) }
     }
 
+    fun setTxTagFilter(tag: String?) {
+        _txFilters.update { it.copy(tagFilter = tag?.trim()?.takeIf { s -> s.isNotEmpty() }) }
+    }
+
     fun clearTxAdvancedFilters() {
         _txFilters.update {
             it.copy(
                 categoryIdFilter = null,
                 reimburseFilter = "ALL",
                 minAmountMicros = null,
-                maxAmountMicros = null
+                maxAmountMicros = null,
+                tagFilter = null
             )
         }
     }
@@ -823,6 +915,30 @@ class KairoMainViewModel(
         }
     }
 
+    fun saveTag(tag: TagEntity, onDone: () -> Unit = {}) {
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) { ledgerService.saveTag(tag) }
+            showMessage("已保存标签「${tag.name.trim()}」")
+            onDone()
+        }
+    }
+
+    fun deleteTag(tagId: Long) {
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) { ledgerService.deleteTag(tagId) }
+            showMessage("标签已删除")
+        }
+    }
+
+    fun seedPresetCatalog() {
+        viewModelScope.launch {
+            val (catCount, tagCount) = withContext(Dispatchers.IO) {
+                ledgerService.ensurePresetCatalogSeeded()
+            }
+            showMessage("已增量补全 $catCount 个预设分类、$tagCount 个预设标签")
+        }
+    }
+
     fun batchUpdateCategory(txIds: List<Long>, categoryId: Long?) {
         viewModelScope.launch {
             withContext(Dispatchers.IO) { ledgerService.batchUpdateCategory(txIds, categoryId) }
@@ -996,6 +1112,7 @@ class KairoMainViewModel(
                             categoryId = draft.categoryId,
                             merchant = draft.merchant,
                             note = draft.note,
+                            tags = draft.tags,
                             sourceType = if (attachmentPath != null) CaptureChannel.AI else CaptureChannel.MANUAL,
                             status = TransactionStatus.CONFIRMED,
                             ledgerId = resolvedLedger,

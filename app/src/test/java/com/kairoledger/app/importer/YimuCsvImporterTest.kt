@@ -376,6 +376,10 @@ class YimuCsvImporterTest {
         override suspend fun computeTrendBuckets(granularity: String, anchorDateMillis: Long, customStartMillis: Long?, customEndMillis: Long?, ledgerId: Long, displayCurrency: String): List<com.kairoledger.app.core.contract.TrendBucketPoint> = emptyList()
         override suspend fun computeCategoryStatsForLedger(startMillis: Long, endMillis: Long, type: String, ledgerId: Long, displayCurrency: String): List<CategoryStat> = emptyList()
         override suspend fun computeBudgetProgressForLedger(year: Int, month: Int, ledgerId: Long): List<BudgetProgress> = emptyList()
+        override fun observeTags(): Flow<List<com.kairoledger.app.data.db.TagEntity>> = MutableStateFlow(emptyList())
+        override suspend fun saveTag(tag: com.kairoledger.app.data.db.TagEntity): Long = 0L
+        override suspend fun deleteTag(tagId: Long) {}
+        override suspend fun ensurePresetCatalogSeeded(): Pair<Int, Int> = 0 to 0
     }
 
     private class FakeAccountDao : AccountDao {

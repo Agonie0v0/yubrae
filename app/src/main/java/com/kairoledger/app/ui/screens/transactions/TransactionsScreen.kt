@@ -111,6 +111,8 @@ import com.kairoledger.app.data.db.ExchangeRateEntity
 import com.kairoledger.app.data.db.LedgerEntity
 import com.kairoledger.app.data.db.RawCaptureLogEntity
 import com.kairoledger.app.data.db.ReimburseStatus
+import com.kairoledger.app.data.db.TagEntity
+import com.kairoledger.app.data.db.TagTextCodec
 import com.kairoledger.app.data.db.TransactionEntity
 import com.kairoledger.app.data.db.TransactionStatus
 import com.kairoledger.app.data.db.TransactionType
@@ -123,6 +125,7 @@ import com.kairoledger.app.ui.components.KairoIcons
 import com.kairoledger.app.ui.components.LocalPrivacyMasked
 import com.kairoledger.app.ui.components.ReceiptThumbnailImage
 import com.kairoledger.app.ui.components.ReceiptZoomPreviewDialog
+import com.kairoledger.app.ui.components.TagBadgeChip
 import com.kairoledger.app.ui.components.YimuCard
 import com.kairoledger.app.ui.components.formatPrivacyAmount
 import com.kairoledger.app.ui.components.transactionAmountColor
@@ -171,6 +174,7 @@ fun TransactionsScreen(
     val accounts by viewModel.allAccounts.collectAsStateWithLifecycle()
     val activeAccounts by viewModel.activeAccounts.collectAsStateWithLifecycle()
     val categories by viewModel.categories.collectAsStateWithLifecycle()
+    val tagsList by viewModel.tags.collectAsStateWithLifecycle()
     val rates by viewModel.exchangeRates.collectAsStateWithLifecycle()
     val vmLedgers by viewModel.ledgers.collectAsStateWithLifecycle()
     val settings by viewModel.settings.collectAsStateWithLifecycle()
@@ -182,6 +186,7 @@ fun TransactionsScreen(
     val accountMap = remember(accounts) { accounts.associateBy { it.id } }
     val categoryMap = remember(categories) { categories.associateBy { it.id } }
     val ledgerMap = remember(resolvedLedgers) { resolvedLedgers.associateBy { it.id } }
+    val tagColorMap = remember(tagsList) { tagsList.associate { it.name to it.colorHex } }
 
     // 视图模式与日历选中日
     var viewMode by rememberSaveable { mutableStateOf(TxViewMode.LIST) }
@@ -239,7 +244,8 @@ fun TransactionsScreen(
         filters.categoryIdFilter != null ||
         filters.reimburseFilter != "ALL" ||
         filters.minAmountMicros != null ||
-        filters.maxAmountMicros != null
+        filters.maxAmountMicros != null ||
+        filters.tagFilter != null
 
     val showSearchAndFilterSection = searchBarExpanded || hasAnySubFilter
 
@@ -247,12 +253,14 @@ fun TransactionsScreen(
         filters.categoryIdFilter,
         filters.reimburseFilter,
         filters.minAmountMicros,
-        filters.maxAmountMicros
+        filters.maxAmountMicros,
+        filters.tagFilter
     ) {
         listOfNotNull(
             filters.categoryIdFilter,
             filters.reimburseFilter.takeIf { it != "ALL" },
-            filters.minAmountMicros ?: filters.maxAmountMicros
+            filters.minAmountMicros ?: filters.maxAmountMicros,
+            filters.tagFilter
         ).size
     }
 
@@ -515,7 +523,7 @@ fun TransactionsScreen(
                             }
                         }
 
-                        // 高级筛选折叠区：分类 / 报销状态 / 金额区间
+                        // 高级筛选折叠区：分类 / 标签 / 报销状态 / 金额区间
                         AnimatedVisibility(visible = showAdvancedFilters) {
                             AdvancedFilterPanel(
                                 categories = categories,
@@ -523,6 +531,11 @@ fun TransactionsScreen(
                                 onSelectCategory = { catId ->
                                     viewModel.setTxCategoryFilter(catId)
                                     onSelectCategoryFilter(catId)
+                                },
+                                tags = tagsList,
+                                selectedTag = filters.tagFilter,
+                                onSelectTag = { tagName ->
+                                    viewModel.setTxTagFilter(tagName)
                                 },
                                 selectedReimburseStatus = filters.reimburseFilter,
                                 onSelectReimburseStatus = { status ->
@@ -668,6 +681,7 @@ fun TransactionsScreen(
                             account = accountMap[tx.accountId],
                             toAccount = tx.toAccountId?.let { accountMap[it] },
                             category = tx.categoryId?.let { categoryMap[it] },
+                            tagColorMap = tagColorMap,
                             privacyMasked = privacyMasked,
                             isMultiSelectMode = isMultiSelectMode,
                             isSelected = isSelected,
@@ -710,6 +724,7 @@ fun TransactionsScreen(
             toAccount = tx.toAccountId?.let { accountMap[it] },
             category = tx.categoryId?.let { categoryMap[it] },
             ledgerName = ledgerMap[tx.ledgerId]?.name,
+            tagColorMap = tagColorMap,
             accounts = activeAccounts,
             privacyMasked = privacyMasked,
             viewModel = viewModel,
@@ -897,18 +912,10 @@ private fun TransactionsTopHeaderCard(
     onToggleViewMode: () -> Unit
 ) {
     val semantic = KairoTheme.semantic
-    val gradientColors = if (semantic.isDark) {
-        listOf(Color(0xFF143E2D), Color(0xFF1D4F3B), Color(0xFF15382A))
-    } else {
-        listOf(Color(0xFFE3F7EE), Color(0xFFD2EFE1), Color(0xFFEDF9F3))
-    }
-    val titleColor = if (semantic.isDark) Color(0xFFCFF7E3) else Color(0xFF0A3D28)
+    val gradientColors = semantic.heroGradient
+    val titleColor = semantic.heroOnSurface
     val subtitleColor = titleColor.copy(alpha = 0.76f)
-    val pillBgColor = if (semantic.isDark) {
-        Color(0xFF0F251C).copy(alpha = 0.72f)
-    } else {
-        Color.White.copy(alpha = 0.86f)
-    }
+    val pillBgColor = semantic.heroPillBg
     val monthLabel = yearMonth.format(DateTimeFormatter.ofPattern("yyyy年M月"))
     val isCurrentMonth = yearMonth == YearMonth.now()
 
@@ -1387,6 +1394,9 @@ private fun AdvancedFilterPanel(
     categories: List<CategoryEntity>,
     selectedCategoryId: Long?,
     onSelectCategory: (Long?) -> Unit,
+    tags: List<TagEntity>,
+    selectedTag: String?,
+    onSelectTag: (String?) -> Unit,
     selectedReimburseStatus: String,
     onSelectReimburseStatus: (String) -> Unit,
     minAmountText: String,
@@ -1472,6 +1482,43 @@ private fun AdvancedFilterPanel(
                             label = { Text(sub.name, style = MaterialTheme.typography.labelSmall) }
                         )
                     }
+                }
+            }
+
+            Text(
+                text = "按标签筛选",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            val tagFilterEntries = remember(tags, selectedTag) {
+                val list = tags.sortedWith(compareBy({ it.sortOrder }, { it.id }))
+                    .map { it.name to it.colorHex }
+                    .toMutableList()
+                if (!selectedTag.isNullOrBlank() && list.none { it.first == selectedTag }) {
+                    list.add(0, selectedTag to KairoIcons.fallbackTagColorHex(selectedTag))
+                }
+                list
+            }
+            LazyRow(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                item(key = "tag_all") {
+                    FilterChip(
+                        selected = selectedTag == null,
+                        onClick = { onSelectTag(null) },
+                        label = { Text("全部标签") }
+                    )
+                }
+                items(tagFilterEntries, key = { it.first }) { (tagName, colorHex) ->
+                    TagBadgeChip(
+                        name = tagName,
+                        colorHex = colorHex,
+                        selected = selectedTag == tagName,
+                        onClick = {
+                            onSelectTag(if (selectedTag == tagName) null else tagName)
+                        }
+                    )
                 }
             }
 
@@ -1763,6 +1810,7 @@ private fun FlattenedTransactionRow(
     account: AccountEntity?,
     toAccount: AccountEntity?,
     category: CategoryEntity?,
+    tagColorMap: Map<String, Long>,
     privacyMasked: Boolean,
     isMultiSelectMode: Boolean,
     isSelected: Boolean,
@@ -1799,6 +1847,7 @@ private fun FlattenedTransactionRow(
             account = account,
             toAccount = toAccount,
             category = category,
+            tagColorMap = tagColorMap,
             privacyMasked = privacyMasked,
             isMultiSelectMode = isMultiSelectMode,
             isSelected = isSelected,
@@ -1822,6 +1871,7 @@ private fun TransactionRowItem(
     account: AccountEntity?,
     toAccount: AccountEntity?,
     category: CategoryEntity?,
+    tagColorMap: Map<String, Long>,
     privacyMasked: Boolean,
     isMultiSelectMode: Boolean,
     isSelected: Boolean,
@@ -1964,6 +2014,36 @@ private fun TransactionRowItem(
                     overflow = TextOverflow.Ellipsis
                 )
             }
+            val txTags = remember(tx.tags) { TagTextCodec.parse(tx.tags) }
+            if (txTags.isNotEmpty()) {
+                val visibleTags = txTags.take(3)
+                val extraCount = txTags.size - visibleTags.size
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    visibleTags.forEach { tagName ->
+                        TagBadgeChip(
+                            name = tagName,
+                            colorHex = tagColorMap[tagName] ?: KairoIcons.fallbackTagColorHex(tagName),
+                            compact = true
+                        )
+                    }
+                    if (extraCount > 0) {
+                        Surface(
+                            shape = RoundedCornerShape(7.dp),
+                            color = MaterialTheme.colorScheme.surfaceContainerHigh
+                        ) {
+                            Text(
+                                text = "+$extraCount",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+                }
+            }
         }
 
         Spacer(modifier = Modifier.width(10.dp))
@@ -2030,6 +2110,7 @@ private fun TransactionDetailSheet(
     toAccount: AccountEntity?,
     category: CategoryEntity?,
     ledgerName: String?,
+    tagColorMap: Map<String, Long>,
     accounts: List<AccountEntity>,
     privacyMasked: Boolean,
     viewModel: KairoMainViewModel,
@@ -2186,7 +2267,34 @@ private fun TransactionDetailSheet(
             if (category != null) DetailRow("分类", category.name)
             if (transaction.merchant.isNotBlank()) DetailRow("商户", transaction.merchant)
             if (transaction.note.isNotBlank()) DetailRow("备注", transaction.note)
-            if (transaction.tags.isNotBlank()) DetailRow("标签", transaction.tags)
+            val detailTags = remember(transaction.tags) { TagTextCodec.parse(transaction.tags) }
+            if (detailTags.isNotEmpty()) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.Top
+                ) {
+                    Text(
+                        text = "标签",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.End),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        detailTags.forEach { tagName ->
+                            TagBadgeChip(
+                                name = tagName,
+                                colorHex = tagColorMap[tagName] ?: KairoIcons.fallbackTagColorHex(tagName),
+                                compact = true
+                            )
+                        }
+                    }
+                }
+            }
             if (transaction.reimburseStatus != ReimburseStatus.NONE) {
                 val reimburseLabel = when (transaction.reimburseStatus) {
                     ReimburseStatus.PENDING -> "待报销"

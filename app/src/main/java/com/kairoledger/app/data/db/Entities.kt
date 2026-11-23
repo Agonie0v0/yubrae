@@ -317,3 +317,40 @@ data class RecurringRuleEntity(
     @ColumnInfo(name = "next_run_epoch_millis") val nextRunEpochMillis: Long,
     val enabled: Boolean = true
 )
+
+@Entity(
+    tableName = "tags",
+    indices = [Index(value = ["name"], unique = true)]
+)
+data class TagEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0L,
+    val name: String,
+    @ColumnInfo(name = "group_name") val groupName: String = "常用",
+    @ColumnInfo(name = "color_hex") val colorHex: Long = 0xFF2AA876L,
+    @ColumnInfo(name = "sort_order") val sortOrder: Int = 0,
+    @ColumnInfo(name = "is_system") val isSystem: Boolean = true
+)
+
+object TagTextCodec {
+    private val SEPARATORS = charArrayOf(',', '，', ';', '；', '#')
+
+    fun parse(raw: String): List<String> {
+        if (raw.isBlank()) return emptyList()
+        return raw.split(*SEPARATORS)
+            .asSequence()
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .distinct()
+            .toList()
+    }
+
+    fun format(tags: Iterable<String>): String =
+        tags.asSequence()
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .distinct()
+            .joinToString(",")
+
+    fun merge(existing: String, incoming: String): String =
+        format(parse(existing) + parse(incoming))
+}

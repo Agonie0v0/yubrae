@@ -397,18 +397,10 @@ private fun NetWorthHeroCard(
 ) {
     val semantic = KairoTheme.semantic
     val info = CurrencyCatalog.find(displayCurrency)
-    val gradientColors = if (semantic.isDark) {
-        listOf(Color(0xFF143E2D), Color(0xFF1D4F3B), Color(0xFF15382A))
-    } else {
-        listOf(Color(0xFFE3F7EE), Color(0xFFD2EFE1), Color(0xFFEDF9F3))
-    }
-    val titleColor = if (semantic.isDark) Color(0xFFCFF7E3) else Color(0xFF0A3D28)
+    val gradientColors = semantic.heroGradient
+    val titleColor = semantic.heroOnSurface
     val subtitleColor = titleColor.copy(alpha = 0.76f)
-    val pillBgColor = if (semantic.isDark) {
-        Color(0xFF0F251C).copy(alpha = 0.72f)
-    } else {
-        Color.White.copy(alpha = 0.86f)
-    }
+    val pillBgColor = semantic.heroPillBg
     val shape = RoundedCornerShape(bottomStart = 26.dp, bottomEnd = 26.dp)
 
     Surface(

@@ -6,7 +6,9 @@ import com.kairoledger.app.data.db.AccountAliasEntity
 import com.kairoledger.app.data.db.AccountEntity
 import com.kairoledger.app.data.db.CaptureChannel
 import com.kairoledger.app.data.db.CategoryEntity
+import com.kairoledger.app.data.db.DefaultSeedData
 import com.kairoledger.app.data.db.ParseRuleEntity
+import com.kairoledger.app.data.db.TagTextCodec
 import com.kairoledger.app.data.db.TransactionType
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -206,5 +208,163 @@ class LocalRuleParserTest {
         assertEquals("LOCAL_RULE:高优瑞幸专属规则", draft!!.parserUsed)
         assertEquals("瑞幸咖啡", draft.merchant)
         assertEquals(MoneyAmount.parseToMicros("18.50"), draft.origAmountMicros)
+    }
+
+    @Test
+    fun parsesMiWalletTransitCardDecimalsAndIntegersStrippingBalanceAndInfersCommuteTag() = runTest {
+        val fullAccDao = FakeAccountDao()
+        val fullAliasDao = FakeAccountAliasDao()
+        val fullCatDao = FakeCategoryDao()
+        val fullRuleDao = FakeParseRuleDao()
+        DefaultSeedData.ensureAccountsAndTransitCard(fullAccDao, fullAliasDao)
+        DefaultSeedData.ensurePresetCategories(fullCatDao)
+        DefaultSeedData.ensurePresetParseRules(fullRuleDao)
+
+        val fullAccounts = fullAccDao.getAll()
+        val fullAliases = fullAliasDao.getEnabled()
+        val fullCategories = fullCatDao.getAll()
+        val fullRules = fullRuleDao.getEnabled()
+
+        val decimalInput = CaptureInput(
+            channel = CaptureChannel.NOTIFICATION,
+            sourcePackage = "com.miui.tsmclient",
+            title = "重庆畅通卡",
+            content = "刷卡消费2.50元，卡内余额38.50元"
+        )
+        val decimalDraft = parser.parse(decimalInput, fullRules, fullAliases, fullAccounts, fullCategories)
+        assertNotNull(decimalDraft)
+        assertEquals(TransactionType.EXPENSE, decimalDraft!!.type)
+        assertEquals(MoneyAmount.parseToMicros("2.50"), decimalDraft.origAmountMicros)
+        assertEquals("CNY", decimalDraft.origCurrency)
+        assertEquals("重庆畅通卡", decimalDraft.merchant)
+        assertEquals("地铁公交", decimalDraft.categoryName)
+        assertEquals("公交卡", fullAccounts.first { it.id == decimalDraft.accountId }.name)
+        assertEquals("通勤", decimalDraft.tags)
+
+        val integerInput = CaptureInput(
+            channel = CaptureChannel.NOTIFICATION,
+            sourcePackage = "com.mipay.wallet",
+            title = "小米钱包",
+            content = "重庆畅通卡 本次扣费2元，卡内余额38.50元"
+        )
+        val integerDraft = parser.parse(integerInput, fullRules, fullAliases, fullAccounts, fullCategories)
+        assertNotNull(integerDraft)
+        assertEquals(MoneyAmount.parseToMicros("2.00"), integerDraft!!.origAmountMicros)
+        assertEquals("重庆畅通卡", integerDraft.merchant)
+        assertEquals("地铁公交", integerDraft.categoryName)
+        assertEquals("公交卡", fullAccounts.first { it.id == integerDraft.accountId }.name)
+        assertEquals("通勤", integerDraft.tags)
+
+        val heuristicTransitInput = CaptureInput(
+            channel = CaptureChannel.NOTIFICATION,
+            sourcePackage = "com.miui.tsmclient",
+            title = "小米钱包",
+            content = "重庆畅通卡 出站扣费2元，卡内余额38.50元"
+        )
+        val heuristicDraft = parser.parse(heuristicTransitInput, emptyList(), fullAliases, fullAccounts, fullCategories)
+        assertNotNull(heuristicDraft)
+        assertEquals("LOCAL_HEURISTIC", heuristicDraft!!.parserUsed)
+        assertEquals(MoneyAmount.parseToMicros("2.00"), heuristicDraft.origAmountMicros)
+        assertEquals("重庆畅通卡", heuristicDraft.merchant)
+        assertEquals("地铁公交", heuristicDraft.categoryName)
+        assertEquals("通勤", heuristicDraft.tags)
+    }
+
+    @Test
+    fun ignoresTransitEntryAndLowBalanceNoiseUnlessExplicitDeductionPresent() = runTest {
+        val fullAccDao = FakeAccountDao()
+        val fullAliasDao = FakeAccountAliasDao()
+        val fullCatDao = FakeCategoryDao()
+        val fullRuleDao = FakeParseRuleDao()
+        DefaultSeedData.ensureAccountsAndTransitCard(fullAccDao, fullAliasDao)
+        DefaultSeedData.ensurePresetCategories(fullCatDao)
+        DefaultSeedData.ensurePresetParseRules(fullRuleDao)
+
+        val fullAccounts = fullAccDao.getAll()
+        val fullAliases = fullAliasDao.getEnabled()
+        val fullCategories = fullCatDao.getAll()
+        val fullRules = fullRuleDao.getEnabled()
+
+        val transitNoiseSamples = listOf(
+            CaptureInput(CaptureChannel.NOTIFICATION, "com.miui.tsmclient", "重庆畅通卡", "进站成功"),
+            CaptureInput(CaptureChannel.NOTIFICATION, "com.mipay.wallet", "小米钱包", "已进站，闸机已开启，卡内余额38.50元"),
+            CaptureInput(CaptureChannel.NOTIFICATION, "com.miui.tsmclient", "重庆畅通卡", "刷卡进站，请刷卡出站"),
+            CaptureInput(CaptureChannel.NOTIFICATION, "com.miui.tsmclient", "重庆畅通卡", "余额不足，卡内余额1.20元，请及时充值"),
+            CaptureInput(CaptureChannel.NOTIFICATION, "com.mipay.wallet", "小米钱包", "开卡成功，欢迎使用手机交通卡"),
+            CaptureInput(CaptureChannel.NOTIFICATION, "com.xiaomi.pass", "小米智能卡", "NFC已开启")
+        )
+        transitNoiseSamples.forEach { sample ->
+            assertNull(
+                "Expected transit non-charge noise to return null: ${sample.content}",
+                parser.parse(sample, fullRules, fullAliases, fullAccounts, fullCategories)
+            )
+        }
+
+        val exitDeductWithLowBalanceWarning = CaptureInput(
+            channel = CaptureChannel.NOTIFICATION,
+            sourcePackage = "com.miui.tsmclient",
+            title = "重庆畅通卡",
+            content = "出站扣费2元，余额不足，请及时充值，卡内余额0.50元"
+        )
+        val draft = parser.parse(exitDeductWithLowBalanceWarning, fullRules, fullAliases, fullAccounts, fullCategories)
+        assertNotNull(draft)
+        assertEquals(MoneyAmount.parseToMicros("2.00"), draft!!.origAmountMicros)
+        assertEquals("重庆畅通卡", draft.merchant)
+        assertEquals("通勤", draft.tags)
+    }
+
+    @Test
+    fun matchesExpandedSubcategoriesAndAutoTagsWithFullSeededCatalog() = runTest {
+        val fullAccDao = FakeAccountDao()
+        val fullAliasDao = FakeAccountAliasDao()
+        val fullCatDao = FakeCategoryDao()
+        val fullRuleDao = FakeParseRuleDao()
+        DefaultSeedData.ensureAccountsAndTransitCard(fullAccDao, fullAliasDao)
+        DefaultSeedData.ensurePresetCategories(fullCatDao)
+        DefaultSeedData.ensurePresetParseRules(fullRuleDao)
+
+        val fullAccounts = fullAccDao.getAll()
+        val fullAliases = fullAliasDao.getEnabled()
+        val fullCategories = fullCatDao.getAll()
+        val fullRules = fullRuleDao.getEnabled()
+
+        val catFoodDraft = parser.parse(
+            CaptureInput(
+                channel = CaptureChannel.NOTIFICATION,
+                sourcePackage = "com.tencent.mm",
+                title = "微信支付",
+                content = "微信支付：向淘宝付款68.00元，购买皇家猫粮2kg"
+            ),
+            fullRules, fullAliases, fullAccounts, fullCategories
+        )
+        assertNotNull(catFoodDraft)
+        assertEquals("宠物食品", catFoodDraft!!.categoryName)
+        assertEquals(listOf("淘宝", "网购"), TagTextCodec.parse(catFoodDraft.tags))
+
+        val takeoutDraft = parser.parse(
+            CaptureInput(
+                channel = CaptureChannel.NOTIFICATION,
+                sourcePackage = "com.tencent.mm",
+                title = "微信支付",
+                content = "微信支付：向美团外卖付款26.50元"
+            ),
+            fullRules, fullAliases, fullAccounts, fullCategories
+        )
+        assertNotNull(takeoutDraft)
+        assertEquals("外卖", takeoutDraft!!.categoryName)
+        assertEquals(listOf("美团", "外卖"), TagTextCodec.parse(takeoutDraft.tags))
+
+        val bookDraft = parser.parse(
+            CaptureInput(
+                channel = CaptureChannel.SMS,
+                sourcePackage = "95555",
+                title = "短信 (95555)",
+                content = "【招商银行】您尾号6688信用卡消费USD 19.99，商户：Amazon 买书"
+            ),
+            fullRules, fullAliases, fullAccounts, fullCategories
+        )
+        assertNotNull(bookDraft)
+        assertEquals("书籍资料", bookDraft!!.categoryName)
+        assertTrue(TagTextCodec.parse(bookDraft.tags).contains("跨境"))
     }
 }

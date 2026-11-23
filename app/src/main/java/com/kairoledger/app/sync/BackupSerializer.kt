@@ -13,6 +13,7 @@ import com.kairoledger.app.data.db.LedgerDao
 import com.kairoledger.app.data.db.ParseRuleDao
 import com.kairoledger.app.data.db.RawCaptureLogDao
 import com.kairoledger.app.data.db.RecurringRuleDao
+import com.kairoledger.app.data.db.TagDao
 import com.kairoledger.app.data.db.TransactionDao
 import com.kairoledger.app.data.prefs.AppSettings
 import com.kairoledger.app.data.prefs.SettingsStore
@@ -26,7 +27,8 @@ data class RestoreSummary(
     val exchangeRatesCount: Int,
     val rulesAndAliasesCount: Int,
     val budgetsAndRecurringCount: Int,
-    val captureLogsCount: Int
+    val captureLogsCount: Int,
+    val tagsCount: Int = 0
 )
 
 /**
@@ -48,7 +50,8 @@ class BackupSerializer(
     private val runInTransaction: suspend (suspend () -> Unit) -> Unit,
     private val ledgerDao: LedgerDao? = null,
     private val debtRecordDao: DebtRecordDao? = null,
-    private val installmentPlanDao: InstallmentPlanDao? = null
+    private val installmentPlanDao: InstallmentPlanDao? = null,
+    private val tagDao: TagDao? = null
 ) {
 
     constructor(db: KairoDatabase, settingsStore: SettingsStore) : this(
@@ -66,7 +69,8 @@ class BackupSerializer(
         runInTransaction = { block -> db.withTransaction { block() } },
         ledgerDao = db.ledgerDao(),
         debtRecordDao = db.debtRecordDao(),
-        installmentPlanDao = db.installmentPlanDao()
+        installmentPlanDao = db.installmentPlanDao(),
+        tagDao = db.tagDao()
     )
 
     private val jsonCodec = Json {
@@ -93,7 +97,8 @@ class BackupSerializer(
             recurringRules = recurringRuleDao.getAll().map { it.toDto() },
             ledgers = ledgerDao?.getAll()?.map { it.toDto() }.orEmpty(),
             debts = debtRecordDao?.getAll()?.map { it.toDto() }.orEmpty(),
-            installments = installmentPlanDao?.getAll()?.map { it.toDto() }.orEmpty()
+            installments = installmentPlanDao?.getAll()?.map { it.toDto() }.orEmpty(),
+            tags = tagDao?.getAll()?.map { it.toDto() }.orEmpty()
         )
     }
 
@@ -136,6 +141,7 @@ class BackupSerializer(
         val ledgers = snapshot.ledgers.map { it.toEntity() }
         val debts = snapshot.debts.map { it.toEntity() }
         val installments = snapshot.installments.map { it.toEntity() }
+        val tags = snapshot.tags.map { it.toEntity() }
 
         runInTransaction {
             transactionDao.clearAll()
@@ -152,6 +158,10 @@ class BackupSerializer(
             if (ledgers.isNotEmpty()) {
                 ledgerDao?.clearAll()
                 ledgerDao?.insertAll(ledgers)
+            }
+            if (snapshot.formatVersion >= 3 || tags.isNotEmpty()) {
+                tagDao?.clearAll()
+                if (tags.isNotEmpty()) tagDao?.insertAll(tags)
             }
 
             if (accounts.isNotEmpty()) accountDao.insertAll(accounts)
@@ -177,7 +187,8 @@ class BackupSerializer(
             exchangeRatesCount = exchangeRates.size,
             rulesAndAliasesCount = aliases.size + parseRules.size,
             budgetsAndRecurringCount = budgets.size + recurringRules.size,
-            captureLogsCount = captureLogs.size
+            captureLogsCount = captureLogs.size,
+            tagsCount = tags.size
         )
     }
 }

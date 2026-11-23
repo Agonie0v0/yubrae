@@ -15,6 +15,7 @@ import com.kairoledger.app.data.db.ParseRuleEntity
 import com.kairoledger.app.data.db.RawCaptureLogEntity
 import com.kairoledger.app.data.db.RecurringRuleEntity
 import com.kairoledger.app.data.db.ReimburseStatus
+import com.kairoledger.app.data.db.TagEntity
 import com.kairoledger.app.data.db.TransactionEntity
 import com.kairoledger.app.data.db.TransactionStatus
 import com.kairoledger.app.data.db.TransactionType
@@ -43,10 +44,11 @@ data class KairoBackupSnapshot(
     val recurringRules: List<RecurringRuleDto> = emptyList(),
     val ledgers: List<LedgerDto> = emptyList(),
     val debts: List<DebtRecordDto> = emptyList(),
-    val installments: List<InstallmentPlanDto> = emptyList()
+    val installments: List<InstallmentPlanDto> = emptyList(),
+    val tags: List<TagDto> = emptyList()
 ) {
     companion object {
-        const val CURRENT_FORMAT_VERSION = 2
+        const val CURRENT_FORMAT_VERSION = 3
         const val APP_NAME = "KairoLedger"
     }
 }
@@ -72,7 +74,10 @@ data class SettingsSnapshotDto(
     val llmBaseUrl: String = "https://api.openai.com/v1",
     val llmModel: String = "gpt-4o-mini",
     val webDavRemoteDir: String = "/KairoLedger",
-    val autoBackupEnabled: Boolean = false
+    val autoBackupEnabled: Boolean = false,
+    val oledPureBlack: Boolean = false,
+    val greenExpenseMode: Boolean = false,
+    val accessibilityOrderDetailEnabled: Boolean = true
 )
 
 @Serializable
@@ -271,6 +276,16 @@ data class RecurringRuleDto(
     val enabled: Boolean = true
 )
 
+@Serializable
+data class TagDto(
+    val id: Long = 0L,
+    val name: String,
+    val groupName: String = "常用",
+    val colorHex: Long = 0xFF2AA876L,
+    val sortOrder: Int = 0,
+    val isSystem: Boolean = true
+)
+
 internal fun AppSettings.toSnapshotDto(): SettingsSnapshotDto = SettingsSnapshotDto(
     baseCurrency = baseCurrency,
     pinnedCurrencies = pinnedCurrencies,
@@ -291,7 +306,10 @@ internal fun AppSettings.toSnapshotDto(): SettingsSnapshotDto = SettingsSnapshot
     llmBaseUrl = llmBaseUrl,
     llmModel = llmModel,
     webDavRemoteDir = webDavRemoteDir,
-    autoBackupEnabled = autoBackupEnabled
+    autoBackupEnabled = autoBackupEnabled,
+    oledPureBlack = oledPureBlack,
+    greenExpenseMode = greenExpenseMode,
+    accessibilityOrderDetailEnabled = accessibilityOrderDetailEnabled
 )
 
 internal fun SettingsSnapshotDto.applyOnto(current: AppSettings): AppSettings = current.copy(
@@ -314,7 +332,10 @@ internal fun SettingsSnapshotDto.applyOnto(current: AppSettings): AppSettings = 
     llmBaseUrl = llmBaseUrl.ifBlank { current.llmBaseUrl },
     llmModel = llmModel.ifBlank { current.llmModel },
     webDavRemoteDir = webDavRemoteDir.ifBlank { current.webDavRemoteDir },
-    autoBackupEnabled = autoBackupEnabled
+    autoBackupEnabled = autoBackupEnabled,
+    oledPureBlack = oledPureBlack,
+    greenExpenseMode = greenExpenseMode,
+    accessibilityOrderDetailEnabled = accessibilityOrderDetailEnabled
 )
 
 internal fun AccountEntity.toDto() = AccountDto(
@@ -437,4 +458,12 @@ internal fun RecurringRuleEntity.toDto() = RecurringRuleDto(
 internal fun RecurringRuleDto.toEntity() = RecurringRuleEntity(
     id, name, type, amountMicros, currencyCode, accountId, toAccountId,
     categoryId, merchant, note, cycleType, dayOfCycle, nextRunEpochMillis, enabled
+)
+
+internal fun TagEntity.toDto() = TagDto(
+    id, name, groupName, colorHex, sortOrder, isSystem
+)
+
+internal fun TagDto.toEntity() = TagEntity(
+    id, name, groupName, colorHex, sortOrder, isSystem
 )

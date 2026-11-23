@@ -13,11 +13,13 @@ import com.kairoledger.app.data.db.ParseStatus
 import com.kairoledger.app.data.db.RawCaptureLogEntity
 import com.kairoledger.app.data.db.RecurringRuleEntity
 import com.kairoledger.app.data.db.ReimburseStatus
+import com.kairoledger.app.data.db.TagEntity
 import com.kairoledger.app.data.db.TransactionEntity
 import com.kairoledger.app.data.db.TransactionStatus
 import com.kairoledger.app.data.db.TransactionType
 import com.kairoledger.app.data.prefs.AppSettings
 import com.kairoledger.app.data.prefs.ThemeMode
+import com.kairoledger.app.data.prefs.ThemeStyle
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -285,5 +287,108 @@ class CryptoAndBackupTest {
         }
 
         assertEquals(listOf(existing), db.accountDao.getAll())
+    }
+
+    @Test
+    fun backupSerializer_roundTripsV3TagsAndDisplayAccessibilitySettings() = runTest {
+        val db = InMemorySyncDatabase()
+        val tag1 = TagEntity(id = 1L, name = "外卖", groupName = "渠道平台", colorHex = 0xFFEA580CL, sortOrder = 10, isSystem = true)
+        val tag2 = TagEntity(id = 2L, name = "咖啡打卡", groupName = "自定义", colorHex = 0xFF7C3AEDL, sortOrder = 20, isSystem = false)
+        db.tagDao.insertAll(listOf(tag1, tag2))
+
+        db.settings = AppSettings(
+            themeStyle = ThemeStyle.OBSIDIAN_MONO,
+            oledPureBlack = true,
+            greenExpenseMode = true,
+            accessibilityOrderDetailEnabled = false
+        )
+
+        val serializer = db.createSerializer()
+        val json = serializer.exportToJson()
+        val decoded = serializer.decodeFromJson(json)
+        assertEquals(KairoBackupSnapshot.CURRENT_FORMAT_VERSION, decoded.formatVersion)
+        assertEquals(2, decoded.tags.size)
+
+        db.clearAllTables()
+        db.settings = AppSettings(
+            themeStyle = ThemeStyle.YIMU_FRESH,
+            oledPureBlack = false,
+            greenExpenseMode = false,
+            accessibilityOrderDetailEnabled = true
+        )
+
+        val summary = serializer.restoreFromJson(json)
+        assertEquals(2, summary.tagsCount)
+        assertEquals(listOf(tag1, tag2), db.tagDao.getAll())
+        assertEquals(ThemeStyle.OBSIDIAN_MONO, db.settings.themeStyle)
+        assertTrue(db.settings.oledPureBlack)
+        assertTrue(db.settings.greenExpenseMode)
+        assertFalse(db.settings.accessibilityOrderDetailEnabled)
+    }
+
+    @Test
+    fun backupSerializer_backwardCompatibleWithV1AndV2Snapshots() = runTest {
+        val db = InMemorySyncDatabase()
+        val existingTag = TagEntity(id = 9L, name = "保留系统标签", groupName = "渠道平台", colorHex = 0xFF2AA876L, sortOrder = 1, isSystem = true)
+        db.tagDao.insert(existingTag)
+
+        val serializer = db.createSerializer()
+
+        val v1Json = """
+            {
+              "formatVersion": 1,
+              "exportedAtMillis": 1795250000000,
+              "appName": "KairoLedger",
+              "settings": {
+                "baseCurrency": "EUR",
+                "themeMode": "DARK",
+                "dynamicColor": false
+              },
+              "accounts": [
+                {
+                  "id": 1,
+                  "name": "v1账户",
+                  "groupType": "WALLET",
+                  "currencyCode": "EUR"
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val v1Summary = serializer.restoreFromJson(v1Json)
+        assertEquals(1, v1Summary.accountsCount)
+        assertEquals(0, v1Summary.tagsCount)
+        assertEquals("EUR", db.settings.baseCurrency)
+        assertFalse(db.settings.oledPureBlack)
+        assertFalse(db.settings.greenExpenseMode)
+        assertTrue(db.settings.accessibilityOrderDetailEnabled)
+        assertEquals(listOf(existingTag), db.tagDao.getAll())
+
+        val v2Json = """
+            {
+              "formatVersion": 2,
+              "exportedAtMillis": 1795260000000,
+              "appName": "KairoLedger",
+              "settings": {
+                "baseCurrency": "USD",
+                "themeStyle": "PRISM_TEAL"
+              },
+              "accounts": [
+                {
+                  "id": 2,
+                  "name": "v2账户",
+                  "groupType": "DEBIT",
+                  "currencyCode": "USD"
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val v2Summary = serializer.restoreFromJson(v2Json)
+        assertEquals(1, v2Summary.accountsCount)
+        assertEquals(0, v2Summary.tagsCount)
+        assertEquals("USD", db.settings.baseCurrency)
+        assertEquals(ThemeStyle.PRISM_TEAL, db.settings.themeStyle)
+        assertEquals(listOf(existingTag), db.tagDao.getAll())
     }
 }

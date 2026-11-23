@@ -10,6 +10,8 @@ import com.kairoledger.app.data.db.ExchangeRateDao
 import com.kairoledger.app.data.db.ExchangeRateEntity
 import com.kairoledger.app.data.db.RecurringRuleDao
 import com.kairoledger.app.data.db.RecurringRuleEntity
+import com.kairoledger.app.data.db.TagDao
+import com.kairoledger.app.data.db.TagEntity
 import com.kairoledger.app.data.db.TransactionDao
 import com.kairoledger.app.data.db.TransactionEntity
 import com.kairoledger.app.data.db.TransactionStatus
@@ -478,4 +480,53 @@ class FakeInstallmentPlanDao : com.kairoledger.app.data.db.InstallmentPlanDao {
     }
     override suspend fun deleteById(id: Long) { items.removeAll { it.id == id }; emit() }
     override suspend fun clearAll() { items.clear(); emit() }
+}
+
+class FakeTagDao : TagDao {
+    private val items = mutableListOf<TagEntity>()
+    private val flow = MutableStateFlow<List<TagEntity>>(emptyList())
+    private var nextId = 1L
+
+    private fun sortedItems(): List<TagEntity> =
+        items.sortedWith(compareBy<TagEntity> { it.sortOrder }.thenBy { it.id })
+
+    private fun emit() {
+        flow.value = sortedItems()
+    }
+
+    override fun observeAll(): Flow<List<TagEntity>> = flow
+    override suspend fun getAll(): List<TagEntity> = sortedItems()
+    override suspend fun getById(id: Long): TagEntity? = items.firstOrNull { it.id == id }
+    override suspend fun findByName(name: String): TagEntity? = items.firstOrNull { it.name == name }
+
+    override suspend fun insert(tag: TagEntity): Long {
+        val assigned = if (tag.id > 0L) tag.id else nextId++
+        if (assigned >= nextId) nextId = assigned + 1
+        items.removeAll { it.id == assigned || it.name == tag.name }
+        items.add(tag.copy(id = assigned))
+        emit()
+        return assigned
+    }
+
+    override suspend fun insertAll(tags: List<TagEntity>) {
+        tags.forEach { insert(it) }
+    }
+
+    override suspend fun update(tag: TagEntity) {
+        val idx = items.indexOfFirst { it.id == tag.id }
+        if (idx >= 0) {
+            items[idx] = tag
+            emit()
+        }
+    }
+
+    override suspend fun deleteById(id: Long) {
+        items.removeAll { it.id == id }
+        emit()
+    }
+
+    override suspend fun clearAll() {
+        items.clear()
+        emit()
+    }
 }

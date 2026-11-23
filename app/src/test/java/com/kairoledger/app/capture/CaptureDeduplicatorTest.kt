@@ -1,10 +1,15 @@
 package com.kairoledger.app.capture
 
+import com.kairoledger.app.capture.screen.ScreenBillParser
+import com.kairoledger.app.capture.screen.ScreenPageKind
+import com.kairoledger.app.capture.screen.ScreenSnapshot
 import com.kairoledger.app.core.contract.CaptureInput
 import com.kairoledger.app.core.model.MoneyAmount
 import com.kairoledger.app.data.db.AliasMatchType
 import com.kairoledger.app.data.db.CaptureChannel
+import com.kairoledger.app.data.db.DefaultSeedData
 import com.kairoledger.app.data.db.ParseStatus
+import com.kairoledger.app.data.db.TagTextCodec
 import com.kairoledger.app.data.db.TransactionStatus
 import com.kairoledger.app.data.prefs.AppSettings
 import com.kairoledger.app.testutil.TestHttpServer
@@ -314,5 +319,95 @@ class CaptureDeduplicatorTest {
         } finally {
             server.stop(0)
         }
+    }
+
+    @Test
+    fun mergesWeChatPinduoduoShellNotificationWithOrderDetailWithin10MinutesEnrichingMerchantNoteCategoryAndTags() = runTest {
+        // 先以旧泛化分类记录微信支付通知（拼多多平台商户 -> 日用购物）
+        val orchestrator = buildOrchestrator()
+        val baseTime = 1_700_500_000_000L
+
+        val wechatResult = orchestrator.handleIncomingCapture(
+            CaptureInput(
+                channel = CaptureChannel.NOTIFICATION,
+                sourcePackage = "com.tencent.mm",
+                title = "微信支付",
+                content = "微信支付：向拼多多平台商户付款99.00元",
+                timestamp = baseTime
+            )
+        )
+        assertEquals(ParseStatus.MATCHED_LOCAL, wechatResult.status)
+        assertNotNull(wechatResult.transactionId)
+        assertEquals(1, promptTriggerCount)
+
+        val initialTx = transactionDao.getById(wechatResult.transactionId!!)!!
+        assertEquals("拼多多平台商户", initialTx.merchant)
+        assertEquals("日用购物", categoryDao.getById(initialTx.categoryId!!)!!.name)
+        assertEquals(listOf("拼多多", "网购"), TagTextCodec.parse(initialTx.tags))
+
+        // 补齐完整二级分类库（含 家居日用 / 网购百货 等），模拟 8 分钟后打开拼多多订单详情页
+        DefaultSeedData.ensurePresetCategories(categoryDao)
+        val screenParser = ScreenBillParser()
+        val orderDetailSnapshot = ScreenSnapshot(
+            packageName = "com.xunmeng.pinduoduo",
+            className = "com.xunmeng.pinduoduo.activity.NewPageActivity",
+            texts = listOf(
+                "订单详情",
+                "买家已付款",
+                "南极人家纺旗舰店 >",
+                "纯棉四件套全棉床上用品被套床单",
+                "2.0m床-水墨灰 x1",
+                "商品总价 ¥129.00",
+                "百亿补贴 -¥30.00",
+                "实付款 ¥99.00",
+                "订单编号：241123-123456789012345"
+            ),
+            capturedAtMillis = baseTime + 480_000L
+        )
+        val outcome = screenParser.parse(
+            snapshot = orderDetailSnapshot,
+            aliases = aliasDao.getEnabled(),
+            accounts = accountDao.getAll(),
+            categories = categoryDao.getAll()
+        )
+        assertEquals(ScreenPageKind.ORDER_DETAIL, outcome.pageKind)
+
+        val mergeResult = orchestrator.handleScreenCapture(orderDetailSnapshot, outcome)
+        assertEquals(ParseStatus.MERGED_DEDUP, mergeResult.status)
+        assertTrue(mergeResult.mergedIntoExisting)
+        assertEquals(wechatResult.transactionId, mergeResult.transactionId)
+        assertEquals(1, promptTriggerCount)
+        assertEquals(1, transactionDao.getAll().size)
+
+        val enrichedTx = transactionDao.getById(wechatResult.transactionId!!)!!
+        assertEquals("南极人家纺旗舰店", enrichedTx.merchant)
+        assertEquals("家居日用", categoryDao.getById(enrichedTx.categoryId!!)!!.name)
+        assertTrue("Expected note to retain product details, got: ${enrichedTx.note}", enrichedTx.note.contains("纯棉四件套"))
+        assertTrue("Expected note to retain order no, got: ${enrichedTx.note}", enrichedTx.note.contains("241123-123456789012345"))
+        assertEquals(listOf("拼多多", "网购"), TagTextCodec.parse(enrichedTx.tags))
+
+        // 超过 10 分钟窗口（+12 分钟）的另一笔同金额拼多多订单详情不应误融合到已有交易
+        val outsideOrderSnapshot = orderDetailSnapshot.copy(
+            texts = orderDetailSnapshot.texts.map {
+                if (it.startsWith("订单编号")) "订单编号：241123-999999999999999" else it
+            },
+            capturedAtMillis = baseTime + 720_000L
+        )
+        val outsideOutcome = screenParser.parse(
+            snapshot = outsideOrderSnapshot,
+            aliases = aliasDao.getEnabled(),
+            accounts = accountDao.getAll(),
+            categories = categoryDao.getAll()
+        )
+        val outsideResult = orchestrator.handleScreenCapture(outsideOrderSnapshot, outsideOutcome)
+        assertEquals(ParseStatus.MATCHED_LOCAL, outsideResult.status)
+        assertFalse(outsideResult.mergedIntoExisting)
+        assertEquals(2, transactionDao.getAll().size)
+
+        // 当关闭订单详情识别开关时，CaptureOrchestrator 返回 IGNORED
+        currentSettings = currentSettings.copy(accessibilityOrderDetailEnabled = false)
+        val disabledResult = orchestrator.handleScreenCapture(outsideOrderSnapshot, outsideOutcome)
+        assertEquals(ParseStatus.IGNORED, disabledResult.status)
+        assertEquals(2, transactionDao.getAll().size)
     }
 }

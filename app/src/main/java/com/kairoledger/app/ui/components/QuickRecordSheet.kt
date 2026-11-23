@@ -13,6 +13,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -100,6 +101,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.kairoledger.app.core.contract.ConversionPreview
 import com.kairoledger.app.core.contract.ParsedBillDraft
 import com.kairoledger.app.core.contract.RecordTransactionRequest
@@ -110,6 +112,8 @@ import com.kairoledger.app.data.db.CaptureChannel
 import com.kairoledger.app.data.db.CategoryEntity
 import com.kairoledger.app.data.db.LedgerEntity
 import com.kairoledger.app.data.db.ReimburseStatus
+import com.kairoledger.app.data.db.TagEntity
+import com.kairoledger.app.data.db.TagTextCodec
 import com.kairoledger.app.data.db.TransactionEntity
 import com.kairoledger.app.data.db.TransactionStatus
 import com.kairoledger.app.data.db.TransactionType
@@ -529,6 +533,8 @@ fun QuickRecordSheet(
     llmEnabled: Boolean = false,
     onAnalyzeReceiptImage: (suspend (imagePath: String) -> Result<ParsedBillDraft?>)? = null,
     onOpenCategoryManager: (() -> Unit)? = null,
+    availableTags: List<TagEntity> = emptyList(),
+    onQuickCreateTag: ((name: String, colorHex: Long) -> Unit)? = null,
     onDismiss: () -> Unit
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -684,7 +690,19 @@ fun QuickRecordSheet(
             }
         )
     }
-    var tags by remember(stateKey) { mutableStateOf(existingTransaction?.tags ?: "") }
+    var tags by remember(stateKey) {
+        mutableStateOf(
+            TagTextCodec.format(
+                TagTextCodec.parse(
+                    existingTransaction?.tags
+                        ?: initialDraft?.tags
+                        ?: ""
+                )
+            )
+        )
+    }
+    var localCreatedTagColors by remember(stateKey) { mutableStateOf<Map<String, Long>>(emptyMap()) }
+    var showQuickCreateTagDialog by remember { mutableStateOf(false) }
     var reimburseStatus by remember(stateKey) {
         mutableStateOf(existingTransaction?.reimburseStatus ?: ReimburseStatus.NONE)
     }
@@ -777,7 +795,11 @@ fun QuickRecordSheet(
                     existingTransaction.reimburseStatus != ReimburseStatus.NONE
                 )) ||
                 refundOfTransaction != null ||
-                (initialDraft != null && (initialDraft.merchant.isNotBlank() || initialDraft.note.isNotBlank()))
+                (initialDraft != null && (
+                    initialDraft.merchant.isNotBlank() ||
+                        initialDraft.note.isNotBlank() ||
+                        initialDraft.tags.isNotBlank()
+                    ))
         )
     }
 
@@ -1648,10 +1670,19 @@ fun QuickRecordSheet(
                             Text(if (attachmentPaths.isEmpty()) "小票图片" else "小票(${attachmentPaths.size})")
                         }
                     )
+                    val selectedTagCount = remember(tags) { TagTextCodec.parse(tags).size }
                     FilterChip(
                         selected = showExtraDetails,
                         onClick = { showExtraDetails = !showExtraDetails },
-                        label = { Text(if (showExtraDetails) "收起商户/备注/报销" else "商户 · 备注 · 报销") }
+                        label = {
+                            Text(
+                                when {
+                                    showExtraDetails -> "收起商户/标签/备注"
+                                    selectedTagCount > 0 -> "商户 · 标签($selectedTagCount) · 备注"
+                                    else -> "商户 · 标签 · 备注"
+                                }
+                            )
+                        }
                     )
                 }
 
@@ -1704,6 +1735,9 @@ fun QuickRecordSheet(
                                                         }
                                                         if (draft.merchant.isNotBlank()) merchant = draft.merchant
                                                         if (draft.note.isNotBlank()) note = draft.note
+                                                        if (draft.tags.isNotBlank()) {
+                                                            tags = TagTextCodec.merge(tags, draft.tags)
+                                                        }
                                                         if (draft.categoryId != null) selectedCategoryId = draft.categoryId
                                                         if (draft.accountId != null) selectedAccountId = draft.accountId
                                                         if (draft.timestamp > 0L) timestampMillis = draft.timestamp
@@ -1791,6 +1825,28 @@ fun QuickRecordSheet(
 
                 // 商户、备注、标签、报销状态
                 AnimatedVisibility(visible = showExtraDetails) {
+                    val allTxs by viewModel.allTransactions.collectAsStateWithLifecycle()
+                    val selectedTagNames = remember(tags) { TagTextCodec.parse(tags) }
+                    val selectedTagSet = remember(selectedTagNames) { selectedTagNames.toSet() }
+                    val tagColorMap = remember(availableTags, localCreatedTagColors) {
+                        val map = LinkedHashMap<String, Long>(availableTags.size + localCreatedTagColors.size)
+                        availableTags.forEach { map[it.name] = it.colorHex }
+                        localCreatedTagColors.forEach { (k, v) -> map[k] = v }
+                        map
+                    }
+                    val displayTagNames = remember(selectedTagNames, availableTags, allTxs, localCreatedTagColors) {
+                        val ordered = LinkedHashSet<String>()
+                        ordered.addAll(selectedTagNames)
+                        availableTags.sortedWith(compareBy({ it.sortOrder }, { it.id })).forEach { ordered.add(it.name) }
+                        localCreatedTagColors.keys.forEach { ordered.add(it) }
+                        allTxs.forEach { tx ->
+                            if (tx.tags.isNotBlank()) {
+                                TagTextCodec.parse(tx.tags).forEach { ordered.add(it) }
+                            }
+                        }
+                        ordered.toList()
+                    }
+
                     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         OutlinedTextField(
                             value = merchant,
@@ -1810,15 +1866,88 @@ fun QuickRecordSheet(
                                 .fillMaxWidth()
                                 .onFocusChanged { if (it.isFocused) showKeypad = false }
                         )
-                        OutlinedTextField(
-                            value = tags,
-                            onValueChange = { tags = it },
-                            label = { Text("标签（多个用英文逗号分隔）") },
-                            singleLine = true,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .onFocusChanged { if (it.isFocused) showKeypad = false }
-                        )
+
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    text = if (selectedTagNames.isEmpty()) "标签（可多选）" else "标签（已选 ${selectedTagNames.size}）",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                if (selectedTagNames.isNotEmpty()) {
+                                    TextButton(
+                                        onClick = { tags = "" },
+                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                                        modifier = Modifier.height(26.dp)
+                                    ) {
+                                        Text("清空", style = MaterialTheme.typography.labelSmall)
+                                    }
+                                }
+                            }
+                            Surface(
+                                shape = RoundedCornerShape(14.dp),
+                                color = MaterialTheme.colorScheme.surfaceContainerLow,
+                                border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                FlowRow(
+                                    modifier = Modifier.padding(10.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    displayTagNames.forEach { tagName ->
+                                        val isSelected = tagName in selectedTagSet
+                                        val tagColorHex = tagColorMap[tagName] ?: KairoIcons.fallbackTagColorHex(tagName)
+                                        TagBadgeChip(
+                                            name = tagName,
+                                            colorHex = tagColorHex,
+                                            selected = isSelected,
+                                            onClick = {
+                                                val updated = if (isSelected) {
+                                                    selectedTagNames.filterNot { it == tagName }
+                                                } else {
+                                                    selectedTagNames + tagName
+                                                }
+                                                tags = TagTextCodec.format(updated)
+                                            }
+                                        )
+                                    }
+                                    Surface(
+                                        shape = CircleShape,
+                                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.7f),
+                                        border = BorderStroke(
+                                            1.dp,
+                                            MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)
+                                        ),
+                                        modifier = Modifier.clickable { showQuickCreateTagDialog = true }
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Rounded.Add,
+                                                contentDescription = null,
+                                                tint = MaterialTheme.colorScheme.primary,
+                                                modifier = Modifier.size(14.dp)
+                                            )
+                                            Text(
+                                                text = "新建标签",
+                                                style = MaterialTheme.typography.labelMedium,
+                                                color = MaterialTheme.colorScheme.primary,
+                                                fontWeight = FontWeight.SemiBold
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -1875,7 +2004,7 @@ fun QuickRecordSheet(
                             categoryId = if (txType == TransactionType.TRANSFER || txType == TransactionType.ADJUST) null else selectedCategoryId,
                             merchant = merchant.trim(),
                             note = note.trim(),
-                            tags = tags.trim(),
+                            tags = TagTextCodec.format(TagTextCodec.parse(tags)),
                             reimburseStatus = reimburseStatus,
                             sourceType = existingTransaction?.sourceType ?: CaptureChannel.MANUAL,
                             rawEventId = existingTransaction?.rawEventId,
@@ -2038,6 +2167,110 @@ fun QuickRecordSheet(
             onDismiss = { showDeleteConfirm = false }
         )
     }
+
+    if (showQuickCreateTagDialog) {
+        QuickCreateTagDialog(
+            onConfirm = { name, colorHex ->
+                localCreatedTagColors = localCreatedTagColors + (name to colorHex)
+                tags = TagTextCodec.merge(tags, name)
+                onQuickCreateTag?.invoke(name, colorHex)
+                showQuickCreateTagDialog = false
+            },
+            onDismiss = { showQuickCreateTagDialog = false }
+        )
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun QuickCreateTagDialog(
+    onConfirm: (name: String, colorHex: Long) -> Unit,
+    onDismiss: () -> Unit
+) {
+    var name by remember { mutableStateOf("") }
+    var selectedColor by remember { mutableStateOf(KairoIcons.selectableColorPalette.first()) }
+    var nameError by remember { mutableStateOf(false) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("新建标签") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = {
+                        name = it
+                        if (it.isNotBlank()) nameError = false
+                    },
+                    label = { Text("标签名称") },
+                    placeholder = { Text("例如：聚会、咖啡、机场") },
+                    isError = nameError,
+                    supportingText = if (nameError) {
+                        { Text("请输入标签名称") }
+                    } else null,
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Text(
+                    text = "选择颜色",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    KairoIcons.selectableColorPalette.forEach { hex ->
+                        val isSelected = selectedColor == hex
+                        Box(
+                            modifier = Modifier
+                                .size(30.dp)
+                                .clip(CircleShape)
+                                .background(Color(hex))
+                                .then(
+                                    if (isSelected) {
+                                        Modifier.border(
+                                            BorderStroke(2.dp, MaterialTheme.colorScheme.onSurface),
+                                            CircleShape
+                                        )
+                                    } else {
+                                        Modifier
+                                    }
+                                )
+                                .clickable { selectedColor = hex },
+                            contentAlignment = Alignment.Center
+                        ) {
+                            if (isSelected) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Check,
+                                    contentDescription = "已选颜色",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(15.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    val trimmed = name.trim()
+                    if (trimmed.isEmpty()) {
+                        nameError = true
+                    } else {
+                        onConfirm(trimmed, selectedColor)
+                    }
+                }
+            ) {
+                Text("创建并选中")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("取消") }
+        }
+    )
 }
 
 @Composable

@@ -23,6 +23,7 @@ import com.kairoledger.app.data.db.ParseRuleEntity
 import com.kairoledger.app.data.db.RawCaptureLogDao
 import com.kairoledger.app.data.db.RawCaptureLogEntity
 import com.kairoledger.app.data.db.RecurringRuleEntity
+import com.kairoledger.app.data.db.TagEntity
 import com.kairoledger.app.data.db.TransactionDao
 import com.kairoledger.app.data.db.TransactionEntity
 import com.kairoledger.app.data.db.TransactionStatus
@@ -568,6 +569,10 @@ internal class FakeLedgerService(
         displayCurrency: String
     ): List<CategoryStat> = emptyList()
     override suspend fun computeBudgetProgressForLedger(year: Int, month: Int, ledgerId: Long): List<BudgetProgress> = emptyList()
+    override fun observeTags(): Flow<List<TagEntity>> = MutableStateFlow(emptyList())
+    override suspend fun saveTag(tag: TagEntity): Long = 0L
+    override suspend fun deleteTag(tagId: Long) {}
+    override suspend fun ensurePresetCatalogSeeded(): Pair<Int, Int> = 0 to 0
 }
 
 internal object CaptureTestFixtures {

@@ -2,7 +2,7 @@ package com.kairoledger.app.capture.screen
 
 import com.kairoledger.app.core.contract.ParsedBillDraft
 
-enum class ScreenPageKind { PAY_SUCCESS, BILL_DETAIL, UNKNOWN }
+enum class ScreenPageKind { PAY_SUCCESS, BILL_DETAIL, ORDER_DETAIL, UNKNOWN }
 
 data class ScreenTextNode(
     val text: String,

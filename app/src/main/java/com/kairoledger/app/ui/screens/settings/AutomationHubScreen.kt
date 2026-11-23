@@ -11,6 +11,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -51,6 +52,7 @@ import androidx.compose.material.icons.rounded.ExpandLess
 import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.Handshake
 import androidx.compose.material.icons.rounded.Info
+import androidx.compose.material.icons.rounded.LocalOffer
 import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.RequestQuote
@@ -98,12 +100,13 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.kairoledger.app.core.contract.DevicePermissionReport
 import com.kairoledger.app.data.prefs.ThemeMode
-import com.kairoledger.app.data.prefs.ThemeStyle
 import com.kairoledger.app.ui.components.CurrencyBadge
 import com.kairoledger.app.ui.components.CurrencyPickerDialog
 import com.kairoledger.app.ui.components.YimuCard
 import com.kairoledger.app.ui.security.BiometricLockHelper
 import com.kairoledger.app.ui.theme.KairoTheme
+import com.kairoledger.app.ui.theme.KairoThemePreset
+import com.kairoledger.app.ui.theme.KairoThemePresets
 import com.kairoledger.app.ui.viewmodel.KairoMainViewModel
 
 object SettingsRoutes {
@@ -117,6 +120,7 @@ object SettingsRoutes {
     const val RECURRING = "settings_recurring"
     const val IMPORT_BACKUP = "settings_import_backup"
     const val CATEGORIES = "settings_categories"
+    const val TAGS = "settings_tags"
     const val REIMBURSE = "settings_reimburse"
     const val DEBTS = "settings_debts"
 }
@@ -204,10 +208,8 @@ fun MineHubScreen(
 
     val styleLabel = if (settings.dynamicColor) {
         "动态取色"
-    } else if (settings.themeStyle == ThemeStyle.PRISM_TEAL) {
-        "棱镜青蓝"
     } else {
-        "薄荷清风"
+        KairoThemePresets.find(settings.themeStyle).nameZh
     }
     val modeLabel = when (settings.themeMode) {
         ThemeMode.SYSTEM -> "跟随系统"
@@ -316,6 +318,17 @@ fun MineHubScreen(
                                 modifier = Modifier.weight(1f)
                             )
                         }
+
+                        FinanceGridTile(
+                            icon = Icons.Rounded.LocalOffer,
+                            title = "账单标签",
+                            subtitle = "标签分组与自定义管理",
+                            accentColor = Color(0xFF0D9488),
+                            badgeCount = 0,
+                            showTrailingArrow = true,
+                            onClick = { onNavigate(SettingsRoutes.TAGS) },
+                            modifier = Modifier.fillMaxWidth()
+                        )
                     }
                 }
             }
@@ -442,22 +455,10 @@ private fun MineBrandHeroBanner(
     onOpenAutoCapture: () -> Unit
 ) {
     val semantic = KairoTheme.semantic
-    val gradientColors = if (semantic.isDark) {
-        listOf(Color(0xFF143E2D), Color(0xFF1D4F3B), Color(0xFF15382A))
-    } else {
-        listOf(Color(0xFFE3F7EE), Color(0xFFD2EFE1), Color(0xFFEDF9F3))
-    }
-    val titleColor = if (semantic.isDark) Color(0xFFCFF7E3) else Color(0xFF0A3D28)
-    val borderColor = if (semantic.isDark) {
-        Color(0xFF5BD2A0).copy(alpha = 0.25f)
-    } else {
-        Color(0xFF2AA876).copy(alpha = 0.22f)
-    }
-    val pillBgColor = if (semantic.isDark) {
-        Color(0xFF0F251C).copy(alpha = 0.78f)
-    } else {
-        Color.White.copy(alpha = 0.88f)
-    }
+    val gradientColors = semantic.heroGradient
+    val titleColor = semantic.heroOnSurface
+    val borderColor = semantic.heroBorder
+    val pillBgColor = semantic.heroPillBg
 
     val topModifier = if (topInsetPadding > 0.dp) {
         Modifier.padding(top = topInsetPadding + 12.dp)
@@ -607,7 +608,8 @@ private fun FinanceGridTile(
     accentColor: Color,
     badgeCount: Int,
     onClick: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    showTrailingArrow: Boolean = false
 ) {
     Surface(
         shape = RoundedCornerShape(14.dp),
@@ -665,6 +667,15 @@ private fun FinanceGridTile(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
+                )
+            }
+            if (showTrailingArrow) {
+                Spacer(modifier = Modifier.width(6.dp))
+                Icon(
+                    imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowRight,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(18.dp)
                 )
             }
         }
@@ -850,6 +861,15 @@ fun AutoCaptureSettingsScreen(
                                         viewModel.updateSettings { it.copy(accessibilityBillDetailEnabled = checked) }
                                     }
                                 )
+                                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.25f))
+                                SwitchSettingRow(
+                                    title = "电商与外卖订单详情识别",
+                                    subtitle = "支持拼多多、淘宝、京东、美团、饿了么已支付订单自动提取商品与跨渠道融合",
+                                    checked = settings.accessibilityOrderDetailEnabled,
+                                    onCheckedChange = { checked ->
+                                        viewModel.updateSettings { it.copy(accessibilityOrderDetailEnabled = checked) }
+                                    }
+                                )
                             }
                         }
                         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f))
@@ -972,30 +992,50 @@ fun AppearanceSecurityScreen(
                             )
                         }
 
-                        Text(
-                            text = "界面视觉风格",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            FilterChip(
-                                selected = settings.themeStyle != ThemeStyle.PRISM_TEAL,
-                                onClick = {
-                                    viewModel.updateSettings {
-                                        it.copy(themeStyle = ThemeStyle.YIMU_FRESH, dynamicColor = false)
-                                    }
-                                },
-                                label = { Text("薄荷清风 (推荐)") }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(
+                                text = "界面视觉风格（10 套主题画廊）",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
-                            FilterChip(
-                                selected = settings.themeStyle == ThemeStyle.PRISM_TEAL,
-                                onClick = {
-                                    viewModel.updateSettings {
-                                        it.copy(themeStyle = ThemeStyle.PRISM_TEAL, dynamicColor = false)
+                            if (settings.dynamicColor) {
+                                Text(
+                                    text = "动态取色已接管",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        }
+
+                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            KairoThemePresets.all.chunked(2).forEach { rowPresets ->
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    rowPresets.forEach { preset ->
+                                        val isSelected = !settings.dynamicColor &&
+                                            preset.id.equals(settings.themeStyle, ignoreCase = true)
+                                        ThemePresetGalleryCard(
+                                            preset = preset,
+                                            selected = isSelected,
+                                            onClick = {
+                                                viewModel.updateSettings {
+                                                    it.copy(themeStyle = preset.id, dynamicColor = false)
+                                                }
+                                            },
+                                            modifier = Modifier.weight(1f)
+                                        )
                                     }
-                                },
-                                label = { Text("棱镜青蓝") }
-                            )
+                                    if (rowPresets.size == 1) {
+                                        Spacer(modifier = Modifier.weight(1f))
+                                    }
+                                }
+                            }
                         }
 
                         Text(
@@ -1020,13 +1060,53 @@ fun AppearanceSecurityScreen(
                         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f))
 
                         SwitchSettingRow(
+                            title = "OLED 纯黑深色背景",
+                            subtitle = "深色模式下使用纯黑背景与逐级压暗容器，省电且降低夜间刺眼",
+                            checked = settings.oledPureBlack,
+                            onCheckedChange = { enabled ->
+                                viewModel.updateSettings { it.copy(oledPureBlack = enabled) }
+                            }
+                        )
+
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f))
+
+                        SwitchSettingRow(
                             title = "Material You 动态取色",
-                            subtitle = "Android 12+ 自动提取壁纸色板，关闭则使用所选预设色板",
+                            subtitle = "Android 12+ 自动提取壁纸色板，关闭则使用上方所选主题画廊",
                             checked = settings.dynamicColor,
                             onCheckedChange = { enabled ->
                                 viewModel.updateSettings { it.copy(dynamicColor = enabled) }
                             }
                         )
+
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f))
+
+                        Text(
+                            text = "收支颜色习惯",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            val expenseIncomeOptions = listOf(
+                                Triple(false, "红支绿收 (国内习惯)", Color(0xFFE05252) to Color(0xFF22A06B)),
+                                Triple(true, "绿支红收 (国际习惯)", Color(0xFF22A06B) to Color(0xFFE05252))
+                            )
+                            expenseIncomeOptions.forEach { (isGreenExpense, label, dotPair) ->
+                                val selected = settings.greenExpenseMode == isGreenExpense
+                                ExpenseHabitCapsule(
+                                    label = label,
+                                    expenseDotColor = dotPair.first,
+                                    incomeDotColor = dotPair.second,
+                                    selected = selected,
+                                    onClick = {
+                                        viewModel.updateSettings { it.copy(greenExpenseMode = isGreenExpense) }
+                                    }
+                                )
+                            }
+                        }
 
                         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f))
 
@@ -1117,6 +1197,168 @@ fun AppearanceSecurityScreen(
             onSelect = { code -> viewModel.updateSettings { it.copy(baseCurrency = code) } },
             onDismiss = { showBaseCurrencyPicker = false }
         )
+    }
+}
+
+@Composable
+private fun ThemePresetGalleryCard(
+    preset: KairoThemePreset,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val border = if (selected) {
+        BorderStroke(2.dp, MaterialTheme.colorScheme.primary)
+    } else {
+        BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f))
+    }
+    val containerColor = if (selected) {
+        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.28f)
+    } else {
+        MaterialTheme.colorScheme.surfaceContainerLow
+    }
+
+    Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = containerColor,
+        border = border,
+        modifier = modifier
+            .clip(RoundedCornerShape(16.dp))
+            .clickable(onClick = onClick)
+    ) {
+        Column {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(44.dp)
+                    .background(Brush.linearGradient(colors = preset.previewGradient))
+                    .padding(horizontal = 10.dp, vertical = 8.dp)
+            ) {
+                Row(
+                    modifier = Modifier.align(Alignment.CenterStart),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(5.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(16.dp)
+                            .clip(CircleShape)
+                            .background(preset.previewPrimary)
+                            .border(1.5.dp, Color.White.copy(alpha = 0.92f), CircleShape)
+                    )
+                    Box(
+                        modifier = Modifier
+                            .size(12.dp)
+                            .clip(CircleShape)
+                            .background(preset.previewSecondary)
+                            .border(1.dp, Color.White.copy(alpha = 0.88f), CircleShape)
+                    )
+                }
+                if (selected) {
+                    Surface(
+                        shape = CircleShape,
+                        color = Color.White.copy(alpha = 0.94f),
+                        modifier = Modifier
+                            .align(Alignment.CenterEnd)
+                            .size(20.dp)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = Icons.Rounded.CheckCircle,
+                                contentDescription = "已选中",
+                                tint = preset.previewPrimary,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
+                }
+            }
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                Text(
+                    text = preset.nameZh,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = if (selected) FontWeight.Bold else FontWeight.SemiBold,
+                    color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = preset.taglineZh,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ExpenseHabitCapsule(
+    label: String,
+    expenseDotColor: Color,
+    incomeDotColor: Color,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
+    Surface(
+        shape = CircleShape,
+        color = if (selected) {
+            MaterialTheme.colorScheme.primaryContainer
+        } else {
+            MaterialTheme.colorScheme.surfaceContainerHigh
+        },
+        border = BorderStroke(
+            width = if (selected) 1.5.dp else 1.dp,
+            color = if (selected) {
+                MaterialTheme.colorScheme.primary
+            } else {
+                MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)
+            }
+        ),
+        modifier = Modifier
+            .clip(CircleShape)
+            .clickable(onClick = onClick)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(3.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(8.dp)
+                        .clip(CircleShape)
+                        .background(expenseDotColor)
+                )
+                Box(
+                    modifier = Modifier
+                        .size(8.dp)
+                        .clip(CircleShape)
+                        .background(incomeDotColor)
+                )
+            }
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelLarge,
+                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                color = if (selected) {
+                    MaterialTheme.colorScheme.onPrimaryContainer
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                }
+            )
+        }
     }
 }
 

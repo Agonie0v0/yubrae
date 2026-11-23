@@ -3,6 +3,7 @@ package com.kairoledger.app.ui.theme
 import android.app.Activity
 import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.dynamicDarkColorScheme
@@ -14,6 +15,8 @@ import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
@@ -30,156 +33,306 @@ data class KairoSemanticColors(
     val transferContainer: Color,
     val warning: Color,
     val warningContainer: Color,
-    val isDark: Boolean
+    val isDark: Boolean,
+    val heroGradient: List<Color>,
+    val heroOnSurface: Color,
+    val heroPillBg: Color,
+    val heroBorder: Color
+)
+
+@Immutable
+data class KairoThemePreset(
+    val id: String,
+    val nameZh: String,
+    val taglineZh: String,
+    val previewPrimary: Color,
+    val previewContainer: Color,
+    val previewSecondary: Color,
+    val previewGradient: List<Color> = listOf(previewContainer, previewContainer)
+)
+
+object KairoThemePresets {
+    val all: List<KairoThemePreset> = AllThemePaletteSpecs.map { spec ->
+        KairoThemePreset(
+            id = spec.id,
+            nameZh = spec.nameZh,
+            taglineZh = spec.taglineZh,
+            previewPrimary = spec.light.primary,
+            previewContainer = spec.light.primaryContainer,
+            previewSecondary = spec.light.tertiary,
+            previewGradient = spec.light.heroGradient
+        )
+    }
+
+    fun find(themeStyle: String): KairoThemePreset {
+        val normalized = themeStyle.trim()
+        return all.firstOrNull { it.id.equals(normalized, ignoreCase = true) } ?: all.first()
+    }
+}
+
+data class OverlayThemeColors(
+    val isDark: Boolean,
+    val cardBg: Int,
+    val cardStroke: Int,
+    val textPrimary: Int,
+    val textSecondary: Int,
+    val chipBg: Int,
+    val accent: Int,
+    val accentContainer: Int,
+    val onAccentContainer: Int,
+    val expenseColor: Int,
+    val incomeColor: Int,
+    val transferColor: Int,
+    val inputBg: Int,
+    val warningBg: Int,
+    val warningText: Int
 )
 
 val LocalKairoSemanticColors = staticCompositionLocalOf {
     KairoSemanticColors(
-        expense = ExpenseLight,
+        expense = YimuExpenseLight,
         expenseContainer = ExpenseContainerLight,
-        income = IncomeLight,
+        income = YimuIncomeLight,
         incomeContainer = IncomeContainerLight,
-        transfer = TransferLight,
+        transfer = YimuTransferLight,
         transferContainer = TransferContainerLight,
-        warning = WarningLight,
+        warning = YimuWarningLight,
         warningContainer = WarningContainerLight,
-        isDark = false
+        isDark = false,
+        heroGradient = YimuPaletteSpec.light.heroGradient,
+        heroOnSurface = YimuPaletteSpec.light.heroOnSurface,
+        heroPillBg = YimuPaletteSpec.light.heroPillBg,
+        heroBorder = YimuPaletteSpec.light.heroBorder
     )
 }
 
-private val LightColorScheme = lightColorScheme(
-    primary = PrismPrimaryLight,
-    onPrimary = PrismOnPrimaryLight,
-    primaryContainer = PrismPrimaryContainerLight,
-    onPrimaryContainer = PrismOnPrimaryContainerLight,
-    secondary = PrismSecondaryLight,
-    onSecondary = PrismOnSecondaryLight,
-    secondaryContainer = PrismSecondaryContainerLight,
-    onSecondaryContainer = PrismOnSecondaryContainerLight,
-    tertiary = PrismTertiaryLight,
-    onTertiary = PrismOnTertiaryLight,
-    tertiaryContainer = PrismTertiaryContainerLight,
-    onTertiaryContainer = PrismOnTertiaryContainerLight,
-    background = PrismBackgroundLight,
-    onBackground = PrismOnBackgroundLight,
-    surface = PrismSurfaceLight,
-    onSurface = PrismOnSurfaceLight,
-    surfaceVariant = PrismSurfaceVariantLight,
-    onSurfaceVariant = PrismOnSurfaceVariantLight,
-    outline = PrismOutlineLight,
-    outlineVariant = PrismOutlineVariantLight,
-    surfaceContainerLowest = PrismSurfaceContainerLowestLight,
-    surfaceContainerLow = PrismSurfaceContainerLowLight,
-    surfaceContainer = PrismSurfaceContainerLight,
-    surfaceContainerHigh = PrismSurfaceContainerHighLight,
-    surfaceContainerHighest = PrismSurfaceContainerHighestLight,
+private fun resolveThemeSpec(themeStyle: String): ThemePaletteSpec {
+    val normalized = themeStyle.trim()
+    return AllThemePaletteSpecs.firstOrNull { it.id.equals(normalized, ignoreCase = true) }
+        ?: YimuPaletteSpec
+}
+
+private fun ThemeColorSet.toLightColorScheme(): ColorScheme = lightColorScheme(
+    primary = primary,
+    onPrimary = onPrimary,
+    primaryContainer = primaryContainer,
+    onPrimaryContainer = onPrimaryContainer,
+    secondary = secondary,
+    onSecondary = onSecondary,
+    secondaryContainer = secondaryContainer,
+    onSecondaryContainer = onSecondaryContainer,
+    tertiary = tertiary,
+    onTertiary = onTertiary,
+    tertiaryContainer = tertiaryContainer,
+    onTertiaryContainer = onTertiaryContainer,
+    background = background,
+    onBackground = onBackground,
+    surface = surface,
+    onSurface = onSurface,
+    surfaceVariant = surfaceVariant,
+    onSurfaceVariant = onSurfaceVariant,
+    outline = outline,
+    outlineVariant = outlineVariant,
+    surfaceContainerLowest = surfaceContainerLowest,
+    surfaceContainerLow = surfaceContainerLow,
+    surfaceContainer = surfaceContainer,
+    surfaceContainerHigh = surfaceContainerHigh,
+    surfaceContainerHighest = surfaceContainerHighest,
     error = PrismErrorLight,
     onError = PrismOnErrorLight,
     errorContainer = PrismErrorContainerLight,
     onErrorContainer = PrismOnErrorContainerLight
 )
 
-private val DarkColorScheme = darkColorScheme(
-    primary = PrismPrimaryDark,
-    onPrimary = PrismOnPrimaryDark,
-    primaryContainer = PrismPrimaryContainerDark,
-    onPrimaryContainer = PrismOnPrimaryContainerDark,
-    secondary = PrismSecondaryDark,
-    onSecondary = PrismOnSecondaryDark,
-    secondaryContainer = PrismSecondaryContainerDark,
-    onSecondaryContainer = PrismOnSecondaryContainerDark,
-    tertiary = PrismTertiaryDark,
-    onTertiary = PrismOnTertiaryDark,
-    tertiaryContainer = PrismTertiaryContainerDark,
-    onTertiaryContainer = PrismOnTertiaryContainerDark,
-    background = PrismBackgroundDark,
-    onBackground = PrismOnBackgroundDark,
-    surface = PrismSurfaceDark,
-    onSurface = PrismOnSurfaceDark,
-    surfaceVariant = PrismSurfaceVariantDark,
-    onSurfaceVariant = PrismOnSurfaceVariantDark,
-    outline = PrismOutlineDark,
-    outlineVariant = PrismOutlineVariantDark,
-    surfaceContainerLowest = PrismSurfaceContainerLowestDark,
-    surfaceContainerLow = PrismSurfaceContainerLowDark,
-    surfaceContainer = PrismSurfaceContainerDark,
-    surfaceContainerHigh = PrismSurfaceContainerHighDark,
-    surfaceContainerHighest = PrismSurfaceContainerHighestDark,
+private fun ThemeColorSet.toDarkColorScheme(): ColorScheme = darkColorScheme(
+    primary = primary,
+    onPrimary = onPrimary,
+    primaryContainer = primaryContainer,
+    onPrimaryContainer = onPrimaryContainer,
+    secondary = secondary,
+    onSecondary = onSecondary,
+    secondaryContainer = secondaryContainer,
+    onSecondaryContainer = onSecondaryContainer,
+    tertiary = tertiary,
+    onTertiary = onTertiary,
+    tertiaryContainer = tertiaryContainer,
+    onTertiaryContainer = onTertiaryContainer,
+    background = background,
+    onBackground = onBackground,
+    surface = surface,
+    onSurface = onSurface,
+    surfaceVariant = surfaceVariant,
+    onSurfaceVariant = onSurfaceVariant,
+    outline = outline,
+    outlineVariant = outlineVariant,
+    surfaceContainerLowest = surfaceContainerLowest,
+    surfaceContainerLow = surfaceContainerLow,
+    surfaceContainer = surfaceContainer,
+    surfaceContainerHigh = surfaceContainerHigh,
+    surfaceContainerHighest = surfaceContainerHighest,
     error = PrismErrorDark,
     onError = PrismOnErrorDark,
     errorContainer = PrismErrorContainerDark,
     onErrorContainer = PrismOnErrorContainerDark
 )
 
-private val YimuLightColorScheme = lightColorScheme(
-    primary = YimuPrimaryLight,
-    onPrimary = YimuOnPrimaryLight,
-    primaryContainer = YimuPrimaryContainerLight,
-    onPrimaryContainer = YimuOnPrimaryContainerLight,
-    secondary = YimuSecondaryLight,
-    onSecondary = YimuOnSecondaryLight,
-    secondaryContainer = YimuSecondaryContainerLight,
-    onSecondaryContainer = YimuOnSecondaryContainerLight,
-    tertiary = YimuTertiaryLight,
-    onTertiary = YimuOnTertiaryLight,
-    tertiaryContainer = YimuTertiaryContainerLight,
-    onTertiaryContainer = YimuOnTertiaryContainerLight,
-    background = YimuBackgroundLight,
-    onBackground = YimuOnBackgroundLight,
-    surface = YimuSurfaceLight,
-    onSurface = YimuOnSurfaceLight,
-    surfaceVariant = YimuSurfaceVariantLight,
-    onSurfaceVariant = YimuOnSurfaceVariantLight,
-    outline = YimuOutlineLight,
-    outlineVariant = YimuOutlineVariantLight,
-    surfaceContainerLowest = YimuSurfaceContainerLowestLight,
-    surfaceContainerLow = YimuSurfaceContainerLowLight,
-    surfaceContainer = YimuSurfaceContainerLight,
-    surfaceContainerHigh = YimuSurfaceContainerHighLight,
-    surfaceContainerHighest = YimuSurfaceContainerHighestLight,
-    error = PrismErrorLight,
-    onError = PrismOnErrorLight,
-    errorContainer = PrismErrorContainerLight,
-    onErrorContainer = PrismOnErrorContainerLight
+private fun ColorScheme.withOledPureBlack(): ColorScheme = copy(
+    background = Color.Black,
+    surface = Color.Black,
+    surfaceContainerLowest = Color.Black,
+    surfaceContainerLow = Color(0xFF08080A),
+    surfaceContainer = Color(0xFF101013),
+    surfaceContainerHigh = Color(0xFF16161A),
+    surfaceContainerHighest = Color(0xFF1E1E24),
+    surfaceVariant = Color(0xFF18181D),
+    outlineVariant = Color(0xFF282830)
 )
 
-private val YimuDarkColorScheme = darkColorScheme(
-    primary = YimuPrimaryDark,
-    onPrimary = YimuOnPrimaryDark,
-    primaryContainer = YimuPrimaryContainerDark,
-    onPrimaryContainer = YimuOnPrimaryContainerDark,
-    secondary = YimuSecondaryDark,
-    onSecondary = YimuOnSecondaryDark,
-    secondaryContainer = YimuSecondaryContainerDark,
-    onSecondaryContainer = YimuOnSecondaryContainerDark,
-    tertiary = YimuTertiaryDark,
-    onTertiary = YimuOnTertiaryDark,
-    tertiaryContainer = YimuTertiaryContainerDark,
-    onTertiaryContainer = YimuOnTertiaryContainerDark,
-    background = YimuBackgroundDark,
-    onBackground = YimuOnBackgroundDark,
-    surface = YimuSurfaceDark,
-    onSurface = YimuOnSurfaceDark,
-    surfaceVariant = YimuSurfaceVariantDark,
-    onSurfaceVariant = YimuOnSurfaceVariantDark,
-    outline = YimuOutlineDark,
-    outlineVariant = YimuOutlineVariantDark,
-    surfaceContainerLowest = YimuSurfaceContainerLowestDark,
-    surfaceContainerLow = YimuSurfaceContainerLowDark,
-    surfaceContainer = YimuSurfaceContainerDark,
-    surfaceContainerHigh = YimuSurfaceContainerHighDark,
-    surfaceContainerHighest = YimuSurfaceContainerHighestDark,
-    error = PrismErrorDark,
-    onError = PrismOnErrorDark,
-    errorContainer = PrismErrorContainerDark,
-    onErrorContainer = PrismOnErrorContainerDark
-)
+private fun resolveSemanticColors(
+    spec: ThemePaletteSpec,
+    darkTheme: Boolean,
+    oledPureBlack: Boolean,
+    greenExpenseMode: Boolean,
+    dynamicBaseScheme: ColorScheme?
+): KairoSemanticColors {
+    val isYimu = spec.id == ThemeStyle.YIMU_FRESH
+    val baseExpense = when {
+        darkTheme -> ExpenseDark
+        isYimu -> YimuExpenseLight
+        else -> ExpenseLight
+    }
+    val baseExpenseContainer = if (darkTheme) ExpenseContainerDark else ExpenseContainerLight
+    val baseIncome = when {
+        darkTheme -> IncomeDark
+        isYimu -> YimuIncomeLight
+        else -> IncomeLight
+    }
+    val baseIncomeContainer = if (darkTheme) IncomeContainerDark else IncomeContainerLight
+
+    val expense = if (greenExpenseMode) baseIncome else baseExpense
+    val expenseContainer = if (greenExpenseMode) baseIncomeContainer else baseExpenseContainer
+    val income = if (greenExpenseMode) baseExpense else baseIncome
+    val incomeContainer = if (greenExpenseMode) baseExpenseContainer else baseIncomeContainer
+
+    val transfer = when {
+        darkTheme -> TransferDark
+        isYimu -> YimuTransferLight
+        else -> TransferLight
+    }
+    val transferContainer = if (darkTheme) TransferContainerDark else TransferContainerLight
+    val warning = when {
+        darkTheme -> WarningDark
+        isYimu -> YimuWarningLight
+        else -> WarningLight
+    }
+    val warningContainer = if (darkTheme) WarningContainerDark else WarningContainerLight
+
+    val heroGradient: List<Color>
+    val heroOnSurface: Color
+    val heroPillBg: Color
+    val heroBorder: Color
+
+    if (dynamicBaseScheme != null) {
+        val rawStops = listOf(
+            dynamicBaseScheme.primaryContainer,
+            dynamicBaseScheme.secondaryContainer,
+            dynamicBaseScheme.tertiaryContainer
+        )
+        heroGradient = if (darkTheme && oledPureBlack) {
+            rawStops.map { lerp(it, Color.Black, 0.58f) }
+        } else {
+            rawStops
+        }
+        heroOnSurface = dynamicBaseScheme.onPrimaryContainer
+        heroPillBg = when {
+            darkTheme && oledPureBlack -> Color(0xFF0A0A0E).copy(alpha = 0.88f)
+            darkTheme -> dynamicBaseScheme.surfaceContainerLowest.copy(alpha = 0.78f)
+            else -> Color.White.copy(alpha = 0.86f)
+        }
+        heroBorder = dynamicBaseScheme.primary.copy(alpha = if (darkTheme) 0.25f else 0.22f)
+    } else {
+        val colorSet = if (darkTheme) spec.dark else spec.light
+        heroGradient = if (darkTheme && oledPureBlack) spec.oledHeroGradient else colorSet.heroGradient
+        heroOnSurface = colorSet.heroOnSurface
+        heroPillBg = if (darkTheme && oledPureBlack) spec.oledHeroPillBg else colorSet.heroPillBg
+        heroBorder = colorSet.heroBorder
+    }
+
+    return KairoSemanticColors(
+        expense = expense,
+        expenseContainer = expenseContainer,
+        income = income,
+        incomeContainer = incomeContainer,
+        transfer = transfer,
+        transferContainer = transferContainer,
+        warning = warning,
+        warningContainer = warningContainer,
+        isDark = darkTheme,
+        heroGradient = heroGradient,
+        heroOnSurface = heroOnSurface,
+        heroPillBg = heroPillBg,
+        heroBorder = heroBorder
+    )
+}
+
+fun resolveOverlayThemeColors(
+    themeStyle: String,
+    isDark: Boolean,
+    oledPureBlack: Boolean = false,
+    greenExpenseMode: Boolean = false
+): OverlayThemeColors {
+    val spec = resolveThemeSpec(themeStyle)
+    val colorSet = if (isDark) spec.dark else spec.light
+    val baseScheme = if (isDark) colorSet.toDarkColorScheme() else colorSet.toLightColorScheme()
+    val scheme = if (isDark && oledPureBlack) baseScheme.withOledPureBlack() else baseScheme
+    val semantic = resolveSemanticColors(
+        spec = spec,
+        darkTheme = isDark,
+        oledPureBlack = oledPureBlack,
+        greenExpenseMode = greenExpenseMode,
+        dynamicBaseScheme = null
+    )
+
+    val cardBg = when {
+        isDark && oledPureBlack -> scheme.surfaceContainerLow
+        isDark -> scheme.surfaceContainer
+        else -> scheme.surfaceContainerLowest
+    }
+    val cardStroke = scheme.outlineVariant
+    val chipBg = if (isDark) scheme.surfaceContainerHigh else scheme.surfaceContainer
+    val inputBg = if (isDark) {
+        if (oledPureBlack) scheme.surfaceContainer else scheme.surfaceContainerHigh
+    } else {
+        scheme.surfaceContainerLow
+    }
+    val warningText = if (isDark) semantic.warning else Color(0xFFB45309)
+
+    return OverlayThemeColors(
+        isDark = isDark,
+        cardBg = cardBg.toArgb(),
+        cardStroke = cardStroke.toArgb(),
+        textPrimary = scheme.onSurface.toArgb(),
+        textSecondary = scheme.onSurfaceVariant.toArgb(),
+        chipBg = chipBg.toArgb(),
+        accent = colorSet.overlayAccent.toArgb(),
+        accentContainer = scheme.primaryContainer.toArgb(),
+        onAccentContainer = scheme.onPrimaryContainer.toArgb(),
+        expenseColor = semantic.expense.toArgb(),
+        incomeColor = semantic.income.toArgb(),
+        transferColor = semantic.transfer.toArgb(),
+        inputBg = inputBg.toArgb(),
+        warningBg = semantic.warningContainer.toArgb(),
+        warningText = warningText.toArgb()
+    )
+}
 
 @Composable
 fun KairoLedgerTheme(
     themeMode: ThemeMode = ThemeMode.SYSTEM,
     dynamicColor: Boolean = false,
     themeStyle: String = ThemeStyle.YIMU_FRESH,
+    oledPureBlack: Boolean = false,
+    greenExpenseMode: Boolean = false,
     content: @Composable () -> Unit
 ) {
     val darkTheme = when (themeMode) {
@@ -188,55 +341,30 @@ fun KairoLedgerTheme(
         ThemeMode.DARK -> true
     }
 
-    val isYimuFresh = !themeStyle.equals(ThemeStyle.PRISM_TEAL, ignoreCase = true)
+    val spec = resolveThemeSpec(themeStyle)
     val context = LocalContext.current
-    val colorScheme = when {
-        dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
-            if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
-        }
-        isYimuFresh && darkTheme -> YimuDarkColorScheme
-        isYimuFresh -> YimuLightColorScheme
-        darkTheme -> DarkColorScheme
-        else -> LightColorScheme
+    val useDynamic = dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+    val dynamicBaseScheme = if (useDynamic) {
+        if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
+    } else {
+        null
     }
 
-    val semanticColors = if (darkTheme) {
-        KairoSemanticColors(
-            expense = ExpenseDark,
-            expenseContainer = ExpenseContainerDark,
-            income = IncomeDark,
-            incomeContainer = IncomeContainerDark,
-            transfer = TransferDark,
-            transferContainer = TransferContainerDark,
-            warning = WarningDark,
-            warningContainer = WarningContainerDark,
-            isDark = true
-        )
-    } else if (isYimuFresh) {
-        KairoSemanticColors(
-            expense = YimuExpenseLight,
-            expenseContainer = ExpenseContainerLight,
-            income = YimuIncomeLight,
-            incomeContainer = IncomeContainerLight,
-            transfer = YimuTransferLight,
-            transferContainer = TransferContainerLight,
-            warning = YimuWarningLight,
-            warningContainer = WarningContainerLight,
-            isDark = false
-        )
+    val baseScheme = dynamicBaseScheme
+        ?: if (darkTheme) spec.dark.toDarkColorScheme() else spec.light.toLightColorScheme()
+    val colorScheme = if (darkTheme && oledPureBlack) {
+        baseScheme.withOledPureBlack()
     } else {
-        KairoSemanticColors(
-            expense = ExpenseLight,
-            expenseContainer = ExpenseContainerLight,
-            income = IncomeLight,
-            incomeContainer = IncomeContainerLight,
-            transfer = TransferLight,
-            transferContainer = TransferContainerLight,
-            warning = WarningLight,
-            warningContainer = WarningContainerLight,
-            isDark = false
-        )
+        baseScheme
     }
+
+    val semanticColors = resolveSemanticColors(
+        spec = spec,
+        darkTheme = darkTheme,
+        oledPureBlack = oledPureBlack,
+        greenExpenseMode = greenExpenseMode,
+        dynamicBaseScheme = dynamicBaseScheme
+    )
 
     val view = LocalView.current
     if (!view.isInEditMode) {

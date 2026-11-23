@@ -37,6 +37,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
+import androidx.compose.material.icons.automirrored.rounded.Label
 import androidx.compose.material.icons.automirrored.rounded.MenuBook
 import androidx.compose.material.icons.automirrored.rounded.TrendingUp
 import androidx.compose.material.icons.rounded.Add
@@ -102,6 +103,7 @@ import com.kairoledger.app.core.contract.BudgetProgress
 import com.kairoledger.app.core.contract.CategoryStat
 import com.kairoledger.app.core.contract.MonthlyPoint
 import com.kairoledger.app.core.contract.NetWorthPoint
+import com.kairoledger.app.core.contract.TagStat
 import com.kairoledger.app.core.contract.TrendBucketPoint
 import com.kairoledger.app.core.model.CurrencyCatalog
 import com.kairoledger.app.core.model.MoneyAmount
@@ -111,6 +113,7 @@ import com.kairoledger.app.data.db.CategoryEntity
 import com.kairoledger.app.data.db.ExchangeRateEntity
 import com.kairoledger.app.data.db.LedgerEntity
 import com.kairoledger.app.data.db.StatsGranularity
+import com.kairoledger.app.data.db.TagTextCodec
 import com.kairoledger.app.data.db.TransactionEntity
 import com.kairoledger.app.data.db.TransactionStatus
 import com.kairoledger.app.data.db.TransactionType
@@ -205,6 +208,8 @@ fun StatsScreen(
     var deleteBudgetCandidate by remember { mutableStateOf<BudgetEntity?>(null) }
     var highlightedCategoryId by remember { mutableStateOf<Long?>(null) }
     var drillDownCategory by remember { mutableStateOf<CategoryStat?>(null) }
+    var highlightedTagName by remember { mutableStateOf<String?>(null) }
+    var drillDownTag by remember { mutableStateOf<TagStat?>(null) }
 
     val zone = ZoneId.systemDefault()
     val anchorDate = remember(resolvedAnchorMillis) {
@@ -306,6 +311,7 @@ fun StatsScreen(
                         selectedGranularity = localGranularity,
                         onSelect = { target ->
                             highlightedCategoryId = null
+                            highlightedTagName = null
                             localGranularity = target
                             onSelectGranularity(target)
                             if (target == StatsGranularity.CUSTOM &&
@@ -329,6 +335,7 @@ fun StatsScreen(
                             IconButton(
                                 onClick = {
                                     highlightedCategoryId = null
+                                    highlightedTagName = null
                                     if (localGranularity == StatsGranularity.CUSTOM) {
                                         val sDate = Instant.ofEpochMilli(timeWindow.first).atZone(zone).toLocalDate()
                                         val eDate = Instant.ofEpochMilli(timeWindow.second).atZone(zone).toLocalDate()
@@ -364,6 +371,7 @@ fun StatsScreen(
                             IconButton(
                                 onClick = {
                                     highlightedCategoryId = null
+                                    highlightedTagName = null
                                     if (localGranularity == StatsGranularity.CUSTOM) {
                                         val sDate = Instant.ofEpochMilli(timeWindow.first).atZone(zone).toLocalDate()
                                         val eDate = Instant.ofEpochMilli(timeWindow.second).atZone(zone).toLocalDate()
@@ -389,6 +397,7 @@ fun StatsScreen(
                                 selected = uiState.selectedType == TransactionType.EXPENSE,
                                 onClick = {
                                     highlightedCategoryId = null
+                                    highlightedTagName = null
                                     viewModel.setStatsType(TransactionType.EXPENSE)
                                 },
                                 label = { Text("支出分析") }
@@ -397,6 +406,7 @@ fun StatsScreen(
                                 selected = uiState.selectedType == TransactionType.INCOME,
                                 onClick = {
                                     highlightedCategoryId = null
+                                    highlightedTagName = null
                                     viewModel.setStatsType(TransactionType.INCOME)
                                 },
                                 label = { Text("收入分析") }
@@ -476,6 +486,22 @@ fun StatsScreen(
             )
         }
 
+        // 标签消费/收入分布排行（支持点击下钻明细）
+        item(key = "tag_breakdown_card", contentType = "tag_breakdown") {
+            TagBreakdownCard(
+                stats = uiState.tagStats,
+                type = uiState.selectedType,
+                displayCurrency = uiState.displayCurrency,
+                privacyMasked = privacyMasked,
+                highlightedTagName = highlightedTagName,
+                onSelectTag = { stat ->
+                    highlightedTagName = stat.tagName
+                    drillDownTag = stat
+                },
+                modifier = Modifier.padding(horizontal = 16.dp)
+            )
+        }
+
         // 净资产历史走势 Canvas 折线图卡片
         item(key = "net_worth_history_card", contentType = "net_worth_chart") {
             NetWorthHistoryCard(
@@ -548,6 +574,55 @@ fun StatsScreen(
                 onEditTransaction(tx)
             },
             onDismiss = { drillDownCategory = null }
+        )
+    }
+
+    // 标签明细下钻 ModalBottomSheet
+    drillDownTag?.let { targetTagStat ->
+        val resolvedTransactions = if (allTransactions.isNotEmpty()) {
+            allTransactions
+        } else {
+            viewModel.allTransactions.collectAsStateWithLifecycle().value
+        }
+        val resolvedAccounts = if (accounts.isNotEmpty()) {
+            accounts
+        } else {
+            viewModel.allAccounts.collectAsStateWithLifecycle().value
+        }
+        val categories by viewModel.categories.collectAsStateWithLifecycle()
+        val accountMap = remember(resolvedAccounts) { resolvedAccounts.associateBy { it.id } }
+        val categoryMap = remember(categories) { categories.associateBy { it.id } }
+        val drillDownTxs = remember(
+            resolvedTransactions,
+            targetTagStat,
+            timeWindow,
+            uiState.selectedType,
+            resolvedLedgerId
+        ) {
+            filterTagDrillDownTransactions(
+                transactions = resolvedTransactions,
+                tagName = targetTagStat.tagName,
+                selectedType = uiState.selectedType,
+                startMillis = timeWindow.first,
+                endMillis = timeWindow.second,
+                activeLedgerId = resolvedLedgerId
+            )
+        }
+
+        TagDrillDownBottomSheet(
+            stat = targetTagStat,
+            periodTitle = periodTitle,
+            transactions = drillDownTxs,
+            accountMap = accountMap,
+            categoryMap = categoryMap,
+            displayCurrency = uiState.displayCurrency,
+            rates = rates,
+            privacyMasked = privacyMasked,
+            onEditTransaction = { tx ->
+                drillDownTag = null
+                onEditTransaction(tx)
+            },
+            onDismiss = { drillDownTag = null }
         )
     }
 
@@ -662,17 +737,9 @@ private fun StatsTopHeaderCard(
 ) {
     val semantic = KairoTheme.semantic
     val info = CurrencyCatalog.find(displayCurrency)
-    val gradientColors = if (semantic.isDark) {
-        listOf(Color(0xFF143E2D), Color(0xFF1D4F3B), Color(0xFF15382A))
-    } else {
-        listOf(Color(0xFFE3F7EE), Color(0xFFD2EFE1), Color(0xFFEDF9F3))
-    }
-    val titleColor = if (semantic.isDark) Color(0xFFCFF7E3) else Color(0xFF0A3D28)
-    val pillBgColor = if (semantic.isDark) {
-        Color(0xFF0F251C).copy(alpha = 0.72f)
-    } else {
-        Color.White.copy(alpha = 0.86f)
-    }
+    val gradientColors = semantic.heroGradient
+    val titleColor = semantic.heroOnSurface
+    val pillBgColor = semantic.heroPillBg
 
     Surface(
         shape = RoundedCornerShape(bottomStart = 24.dp, bottomEnd = 24.dp),
@@ -1570,7 +1637,7 @@ private fun NetWorthHistoryCard(
     modifier: Modifier = Modifier
 ) {
     val semantic = KairoTheme.semantic
-    val mintColor = if (semantic.isDark) Color(0xFF5BD2A0) else Color(0xFF2AA876)
+    val mintColor = MaterialTheme.colorScheme.primary
     val surfaceBg = MaterialTheme.colorScheme.surfaceContainerLowest
     val gridColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
     val textMeasurer = rememberTextMeasurer()
@@ -2667,4 +2734,382 @@ private fun formatCompactScale(micros: Long, currency: String): String {
         absUnits >= 1_000L -> String.format(Locale.US, "%s%s%.1fk", sign, symbol, absUnits / 1_000.0)
         else -> "$sign$symbol$absUnits"
     }
+}
+
+@Composable
+private fun TagBreakdownCard(
+    stats: List<TagStat>,
+    type: String,
+    displayCurrency: String,
+    privacyMasked: Boolean,
+    highlightedTagName: String?,
+    onSelectTag: (TagStat) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val titleText = if (type == TransactionType.EXPENSE) "支出标签排行" else "收入标签排行"
+    YimuCard(modifier = modifier) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = titleText,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
+                if (stats.isNotEmpty()) {
+                    Text(
+                        text = "点击标签查看明细",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            if (stats.isEmpty()) {
+                EmptyStateCard(
+                    icon = Icons.AutoMirrored.Rounded.Label,
+                    title = "当前周期暂无带标签的${if (type == TransactionType.EXPENSE) "支出" else "收入"}流水",
+                    subtitle = "为账单添加标签后，可在此查看各标签的汇总金额、笔数与占比排行。"
+                )
+            } else {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    stats.forEach { stat ->
+                        val tagColor = Color(stat.colorHex)
+                        val isHighlighted = highlightedTagName == stat.tagName
+                        Surface(
+                            shape = RoundedCornerShape(14.dp),
+                            color = if (isHighlighted) {
+                                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.36f)
+                            } else {
+                                MaterialTheme.colorScheme.surfaceContainerLow
+                            },
+                            border = BorderStroke(
+                                0.5.dp,
+                                if (isHighlighted) {
+                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.45f)
+                                } else {
+                                    MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
+                                }
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(14.dp))
+                                .clickable { onSelectTag(stat) }
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Surface(
+                                        shape = CircleShape,
+                                        color = if (isHighlighted) tagColor else tagColor.copy(alpha = 0.14f),
+                                        border = BorderStroke(1.dp, tagColor.copy(alpha = 0.35f)),
+                                        modifier = Modifier.size(34.dp)
+                                    ) {
+                                        Box(contentAlignment = Alignment.Center) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(11.dp)
+                                                    .clip(CircleShape)
+                                                    .background(if (isHighlighted) Color.White else tagColor)
+                                            )
+                                        }
+                                    }
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = "#${stat.tagName}",
+                                            style = MaterialTheme.typography.titleSmall,
+                                            fontWeight = FontWeight.SemiBold,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        Text(
+                                            text = "${stat.count} 笔",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                    Column(horizontalAlignment = Alignment.End) {
+                                        Text(
+                                            text = formatPrivacyAmount(
+                                                privacyMasked,
+                                                MoneyAmount.format(stat.totalBaseMicros, displayCurrency)
+                                            ),
+                                            style = MaterialTheme.typography.titleSmall.tabular(),
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                        Text(
+                                            text = String.format(Locale.US, "%.1f%%", stat.percentage * 100f),
+                                            style = MaterialTheme.typography.labelSmall.tabular(),
+                                            color = tagColor
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Icon(
+                                        imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowRight,
+                                        contentDescription = "查看标签明细",
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
+                                LinearProgressIndicator(
+                                    progress = { stat.percentage.coerceIn(0f, 1f) },
+                                    color = tagColor,
+                                    trackColor = tagColor.copy(alpha = 0.14f),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(6.dp)
+                                        .clip(CircleShape)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun TagDrillDownBottomSheet(
+    stat: TagStat,
+    periodTitle: String,
+    transactions: List<TransactionEntity>,
+    accountMap: Map<Long, AccountEntity>,
+    categoryMap: Map<Long, CategoryEntity>,
+    displayCurrency: String,
+    rates: List<ExchangeRateEntity>,
+    privacyMasked: Boolean,
+    onEditTransaction: (TransactionEntity) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val semantic = KairoTheme.semantic
+    val tagColor = Color(stat.colorHex)
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = MaterialTheme.colorScheme.surface
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .padding(horizontal = 16.dp)
+                .padding(bottom = 20.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Surface(
+                    shape = CircleShape,
+                    color = tagColor.copy(alpha = 0.16f),
+                    border = BorderStroke(1.2.dp, tagColor),
+                    modifier = Modifier.size(44.dp)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Rounded.Label,
+                            contentDescription = null,
+                            tint = tagColor,
+                            modifier = Modifier.size(22.dp)
+                        )
+                    }
+                }
+                Column(modifier = Modifier.weight(1f)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            text = "#${stat.tagName}",
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Surface(
+                            shape = CircleShape,
+                            color = MaterialTheme.colorScheme.surfaceContainerHigh
+                        ) {
+                            Text(
+                                text = periodTitle,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+                    Text(
+                        text = "共 ${transactions.size} 笔流水 · 点击单笔可编辑",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Column(horizontalAlignment = Alignment.End) {
+                    Text(
+                        text = "标签总额",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Text(
+                        text = formatPrivacyAmount(
+                            privacyMasked,
+                            MoneyAmount.format(stat.totalBaseMicros, displayCurrency)
+                        ),
+                        style = MaterialTheme.typography.titleMedium.tabular(),
+                        fontWeight = FontWeight.Bold,
+                        color = tagColor
+                    )
+                }
+            }
+
+            HorizontalDivider()
+
+            if (transactions.isEmpty()) {
+                EmptyStateCard(
+                    icon = Icons.AutoMirrored.Rounded.Label,
+                    title = "当前时间窗口暂无明细",
+                    subtitle = "可能该标签流水已被修改或删除。"
+                )
+            } else {
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 440.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(transactions, key = { it.id }) { tx ->
+                        val cat = tx.categoryId?.let { categoryMap[it] }
+                        val accountName = accountMap[tx.accountId]?.name ?: "账户 #${tx.accountId}"
+                        val title = tx.merchant.ifBlank {
+                            cat?.name ?: tx.note.ifBlank { "#${stat.tagName}" }
+                        }
+                        val amountColor = if (tx.type == TransactionType.INCOME) semantic.income else semantic.expense
+                        val prefix = if (tx.type == TransactionType.INCOME) "+" else "-"
+                        val rawOrig = MoneyAmount.format(
+                            tx.origAmountMicros,
+                            tx.origCurrency,
+                            showCurrencyCode = true
+                        )
+                        val showBaseApprox = !tx.origCurrency.equals(displayCurrency, ignoreCase = true)
+                        val baseApproxMicros = if (showBaseApprox) {
+                            convertFrozenBaseAmount(tx, displayCurrency, rates)
+                        } else {
+                            0L
+                        }
+
+                        YimuCard(
+                            containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+                            cornerRadius = 14.dp,
+                            onClick = { onEditTransaction(tx) }
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                CategoryIconBadge(
+                                    iconKey = cat?.icon ?: "label",
+                                    colorHex = cat?.colorHex ?: stat.colorHex,
+                                    size = 36.dp,
+                                    iconSize = 18.dp
+                                )
+                                Spacer(modifier = Modifier.width(10.dp))
+                                Column(
+                                    modifier = Modifier.weight(1f),
+                                    verticalArrangement = Arrangement.spacedBy(3.dp)
+                                ) {
+                                    Text(
+                                        text = title,
+                                        style = MaterialTheme.typography.titleSmall,
+                                        fontWeight = FontWeight.SemiBold,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        Text(
+                                            text = "$accountName · ${KairoFormats.formatDateTime(tx.timestamp)}",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.weight(1f, fill = false)
+                                        )
+                                        ChannelChip(channel = tx.sourceType)
+                                    }
+                                    if (tx.note.isNotBlank() && tx.note != title) {
+                                        Text(
+                                            text = tx.note,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                }
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Column(horizontalAlignment = Alignment.End) {
+                                    Text(
+                                        text = if (privacyMasked) "****" else "$prefix$rawOrig",
+                                        style = MaterialTheme.typography.titleSmall.tabular(),
+                                        fontWeight = FontWeight.Bold,
+                                        color = amountColor
+                                    )
+                                    if (showBaseApprox) {
+                                        Text(
+                                            text = if (privacyMasked) {
+                                                "****"
+                                            } else {
+                                                "≈ ${MoneyAmount.format(baseApproxMicros, displayCurrency)}"
+                                            },
+                                            style = MaterialTheme.typography.labelSmall.tabular(),
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun filterTagDrillDownTransactions(
+    transactions: List<TransactionEntity>,
+    tagName: String,
+    selectedType: String,
+    startMillis: Long,
+    endMillis: Long,
+    activeLedgerId: Long
+): List<TransactionEntity> {
+    return transactions
+        .filter { tx ->
+            if (tx.status != TransactionStatus.CONFIRMED || tx.excludeFromStats) return@filter false
+            if (activeLedgerId > 0L && tx.ledgerId != activeLedgerId) return@filter false
+            if (tx.type != selectedType || tx.refundOfTxId != null) return@filter false
+            if (tx.timestamp !in startMillis..endMillis) return@filter false
+            tagName in TagTextCodec.parse(tx.tags)
+        }
+        .sortedWith(compareByDescending<TransactionEntity> { it.timestamp }.thenByDescending { it.id })
 }

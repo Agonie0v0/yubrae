@@ -31,8 +31,10 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Category
 import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.SubdirectoryArrowRight
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -83,9 +85,11 @@ fun CategoryManageScreen(
     categories: List<CategoryEntity>,
     onSaveCategory: (CategoryEntity) -> Unit,
     onDeleteCategory: (Long) -> Unit,
+    onSeedPresets: (() -> Unit)? = null,
     onBack: () -> Unit
 ) {
     var selectedType by remember { mutableStateOf(TransactionType.EXPENSE) }
+    var searchQuery by remember { mutableStateOf("") }
     var editorTarget by remember { mutableStateOf<CategoryEditorTarget?>(null) }
     var deleteCandidate by remember { mutableStateOf<CategoryEntity?>(null) }
 
@@ -105,6 +109,30 @@ fun CategoryManageScreen(
     val orphanChildren = remember(typedCategories, parentIds) {
         typedCategories.filter { it.parentId != null && it.parentId !in parentIds }
     }
+    val normalizedQuery = remember(searchQuery) { searchQuery.trim().lowercase() }
+    val visibleParentEntries = remember(parentCategories, childrenByParent, normalizedQuery) {
+        if (normalizedQuery.isEmpty()) {
+            parentCategories.map { it to childrenByParent[it.id].orEmpty() }
+        } else {
+            parentCategories.mapNotNull { parent ->
+                val allChildren = childrenByParent[parent.id].orEmpty()
+                val parentMatches = parent.name.lowercase().contains(normalizedQuery)
+                val matchedChildren = allChildren.filter { it.name.lowercase().contains(normalizedQuery) }
+                when {
+                    parentMatches -> parent to allChildren
+                    matchedChildren.isNotEmpty() -> parent to matchedChildren
+                    else -> null
+                }
+            }
+        }
+    }
+    val visibleOrphanChildren = remember(orphanChildren, normalizedQuery) {
+        if (normalizedQuery.isEmpty()) {
+            orphanChildren
+        } else {
+            orphanChildren.filter { it.name.lowercase().contains(normalizedQuery) }
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -116,6 +144,11 @@ fun CategoryManageScreen(
                     }
                 },
                 actions = {
+                    if (onSeedPresets != null) {
+                        TextButton(onClick = onSeedPresets) {
+                            Text("补充预设")
+                        }
+                    }
                     IconButton(onClick = { editorTarget = CategoryEditorTarget() }) {
                         Icon(Icons.Rounded.Add, contentDescription = "新增分类")
                     }
@@ -154,24 +187,54 @@ fun CategoryManageScreen(
                 )
             }
 
+            OutlinedTextField(
+                value = searchQuery,
+                onValueChange = { searchQuery = it },
+                placeholder = { Text("搜索一级或二级分类名称...") },
+                leadingIcon = {
+                    Icon(Icons.Rounded.Search, contentDescription = null)
+                },
+                trailingIcon = {
+                    if (searchQuery.isNotEmpty()) {
+                        IconButton(onClick = { searchQuery = "" }) {
+                            Icon(Icons.Rounded.Close, contentDescription = "清除搜索")
+                        }
+                    }
+                },
+                singleLine = true,
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 16.dp, end = 16.dp, top = 10.dp, bottom = 2.dp)
+            )
+
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
-                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 96.dp),
+                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 10.dp, bottom = 96.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                if (parentCategories.isEmpty() && orphanChildren.isEmpty()) {
+                if (visibleParentEntries.isEmpty() && visibleOrphanChildren.isEmpty()) {
                     item(key = "empty_categories") {
-                        EmptyStateCard(
-                            icon = Icons.Rounded.Category,
-                            title = "暂无${if (selectedType == TransactionType.EXPENSE) "支出" else "收入"}分类",
-                            subtitle = "点击右下角「新建分类」添加自定义一级或二级分类。",
-                            actionLabel = "立即新建",
-                            onAction = { editorTarget = CategoryEditorTarget() }
-                        )
+                        if (normalizedQuery.isNotEmpty()) {
+                            EmptyStateCard(
+                                icon = Icons.Rounded.Search,
+                                title = "未找到匹配「${searchQuery.trim()}」的分类",
+                                subtitle = "可清空搜索关键词查看全部预设分类，或点击「新建分类」创建。",
+                                actionLabel = "清除搜索",
+                                onAction = { searchQuery = "" }
+                            )
+                        } else {
+                            EmptyStateCard(
+                                icon = Icons.Rounded.Category,
+                                title = "暂无${if (selectedType == TransactionType.EXPENSE) "支出" else "收入"}分类",
+                                subtitle = "点击右下角「新建分类」添加自定义一级或二级分类，或点击右上角「补充预设」。",
+                                actionLabel = "立即新建",
+                                onAction = { editorTarget = CategoryEditorTarget() }
+                            )
+                        }
                     }
                 } else {
-                    items(parentCategories, key = { it.id }) { parent ->
-                        val children = childrenByParent[parent.id].orEmpty()
+                    items(visibleParentEntries, key = { it.first.id }) { (parent, children) ->
                         CategoryTreeGroupCard(
                             parent = parent,
                             children = children,
@@ -187,7 +250,7 @@ fun CategoryManageScreen(
                         )
                     }
 
-                    if (orphanChildren.isNotEmpty()) {
+                    if (visibleOrphanChildren.isNotEmpty()) {
                         item(key = "orphan_categories") {
                             YimuCard(cornerRadius = 18.dp) {
                                 Column(modifier = Modifier.padding(14.dp)) {
@@ -197,7 +260,7 @@ fun CategoryManageScreen(
                                         color = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                     Spacer(modifier = Modifier.height(8.dp))
-                                    orphanChildren.forEachIndexed { idx, child ->
+                                    visibleOrphanChildren.forEachIndexed { idx, child ->
                                         if (idx > 0) {
                                             HorizontalDivider(
                                                 color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)
@@ -552,42 +615,57 @@ private fun CategoryEditorDialog(
                 }
 
                 Text(
-                    text = "图标选择",
+                    text = "图标选择（${KairoIcons.selectableCategoryIcons.size} 个）",
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerLow,
+                    border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    KairoIcons.selectableCategoryIcons.forEach { (key, label) ->
-                        val isSelected = selectedIcon == key
-                        Column(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(10.dp))
-                                .clickable { selectedIcon = key }
-                                .padding(2.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.spacedBy(2.dp)
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(210.dp)
+                            .verticalScroll(rememberScrollState())
+                            .padding(8.dp)
+                    ) {
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            CategoryIconBadge(
-                                iconKey = key,
-                                colorHex = selectedColor,
-                                size = 36.dp,
-                                iconSize = 18.dp,
-                                selected = isSelected
-                            )
-                            Text(
-                                text = label,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = if (isSelected) Color(selectedColor) else MaterialTheme.colorScheme.onSurfaceVariant
-                            )
+                            KairoIcons.selectableCategoryIcons.forEach { (key, label) ->
+                                val isSelected = selectedIcon == key
+                                Column(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .clickable { selectedIcon = key }
+                                        .padding(2.dp),
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                                ) {
+                                    CategoryIconBadge(
+                                        iconKey = key,
+                                        colorHex = selectedColor,
+                                        size = 36.dp,
+                                        iconSize = 18.dp,
+                                        selected = isSelected
+                                    )
+                                    Text(
+                                        text = label,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = if (isSelected) Color(selectedColor) else MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
                         }
                     }
                 }
 
                 Text(
-                    text = "颜色选择",
+                    text = "颜色选择（${KairoIcons.selectableColorPalette.size} 色）",
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

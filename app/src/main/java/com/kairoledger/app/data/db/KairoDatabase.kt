@@ -20,9 +20,10 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         RecurringRuleEntity::class,
         LedgerEntity::class,
         DebtRecordEntity::class,
-        InstallmentPlanEntity::class
+        InstallmentPlanEntity::class,
+        TagEntity::class
     ],
-    version = 2,
+    version = 3,
     exportSchema = true
 )
 abstract class KairoDatabase : RoomDatabase() {
@@ -38,6 +39,7 @@ abstract class KairoDatabase : RoomDatabase() {
     abstract fun ledgerDao(): LedgerDao
     abstract fun debtRecordDao(): DebtRecordDao
     abstract fun installmentPlanDao(): InstallmentPlanDao
+    abstract fun tagDao(): TagDao
 
     companion object {
         const val DB_NAME = "kairo_ledger.db"
@@ -120,13 +122,31 @@ abstract class KairoDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_2_3: Migration = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `tags` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `name` TEXT NOT NULL,
+                        `group_name` TEXT NOT NULL,
+                        `color_hex` INTEGER NOT NULL,
+                        `sort_order` INTEGER NOT NULL,
+                        `is_system` INTEGER NOT NULL
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_tags_name` ON `tags` (`name`)")
+            }
+        }
+
         fun build(context: Context): KairoDatabase =
             Room.databaseBuilder(
                 context.applicationContext,
                 KairoDatabase::class.java,
                 DB_NAME
             )
-                .addMigrations(MIGRATION_1_2)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                 .fallbackToDestructiveMigrationOnDowngrade()
                 .build()
     }
