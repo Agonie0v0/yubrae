@@ -4,11 +4,20 @@ import com.kairoledger.app.core.contract.ParsedBillDraft
 
 enum class ScreenPageKind { PAY_SUCCESS, BILL_DETAIL, UNKNOWN }
 
+data class ScreenTextNode(
+    val text: String,
+    val topPx: Int = -1,
+    val heightPx: Int = 0,
+    val isContentDesc: Boolean = false
+)
+
 data class ScreenSnapshot(
     val packageName: String,
     val className: String,
     val texts: List<String>,
-    val capturedAtMillis: Long = System.currentTimeMillis()
+    val capturedAtMillis: Long = System.currentTimeMillis(),
+    val nodes: List<ScreenTextNode> = emptyList(),
+    val screenHeightPx: Int = 0
 )
 
 data class ScreenParseOutcome(
