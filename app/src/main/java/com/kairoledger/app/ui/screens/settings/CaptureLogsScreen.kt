@@ -4,6 +4,8 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -20,6 +22,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.AddLink
+import androidx.compose.material.icons.rounded.ContentCopy
 import androidx.compose.material.icons.rounded.ReceiptLong
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -43,6 +46,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -66,6 +71,7 @@ fun CaptureLogsScreen(
 ) {
     val logs by viewModel.captureLogs.collectAsStateWithLifecycle()
     val accounts by viewModel.activeAccounts.collectAsStateWithLifecycle()
+    val clipboardManager = LocalClipboardManager.current
 
     var statusFilter by remember { mutableStateOf("ALL") }
     var expandedLogId by remember { mutableStateOf<Long?>(null) }
@@ -133,6 +139,10 @@ fun CaptureLogsScreen(
                         onToggleExpand = {
                             expandedLogId = if (expandedLogId == log.id) null else log.id
                         },
+                        onCopyLog = {
+                            clipboardManager.setText(AnnotatedString(formatCaptureLogForClipboard(log)))
+                            viewModel.showMessage("已复制完整捕获报文")
+                        },
                         onOpenTransaction = { txId -> onOpenTransaction(txId) },
                         onPromote = { promoteTargetLog = log }
                     )
@@ -155,11 +165,13 @@ fun CaptureLogsScreen(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun CaptureLogCard(
     log: RawCaptureLogEntity,
     expanded: Boolean,
     onToggleExpand: () -> Unit,
+    onCopyLog: () -> Unit,
     onOpenTransaction: (Long) -> Unit,
     onPromote: () -> Unit
 ) {
@@ -206,7 +218,7 @@ private fun CaptureLogCard(
             Text(
                 text = log.content,
                 style = MaterialTheme.typography.bodyMedium,
-                maxLines = if (expanded) 20 else 2,
+                maxLines = if (expanded) Int.MAX_VALUE else 2,
                 overflow = TextOverflow.Ellipsis,
                 color = MaterialTheme.colorScheme.onSurface
             )
@@ -249,30 +261,56 @@ private fun CaptureLogCard(
                         )
                     }
 
-                    Row(
+                    FlowRow(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
+                        OutlinedButton(
+                            onClick = onCopyLog,
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
+                        ) {
+                            Icon(Icons.Rounded.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("复制报文", maxLines = 1)
+                        }
                         if (log.linkedTransactionId != null) {
                             OutlinedButton(
                                 onClick = { onOpenTransaction(log.linkedTransactionId) },
-                                modifier = Modifier.weight(1f)
+                                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
                             ) {
-                                Text("查看关联交易 #${log.linkedTransactionId}")
+                                Text("查看关联交易 #${log.linkedTransactionId}", maxLines = 1)
                             }
                         }
                         Button(
                             onClick = onPromote,
-                            modifier = Modifier.weight(1f)
+                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)
                         ) {
                             Icon(Icons.Rounded.AddLink, null, modifier = Modifier.size(16.dp))
                             Spacer(modifier = Modifier.width(4.dp))
-                            Text("沉淀为账户指纹")
+                            Text("沉淀为账户指纹", maxLines = 1)
                         }
                     }
                 }
             }
         }
+    }
+}
+
+private fun formatCaptureLogForClipboard(log: RawCaptureLogEntity): String = buildString {
+    append("包名/来源：").append(log.sourcePackage.ifBlank { "-" })
+    if (log.parserUsed.isNotBlank()) {
+        append(" · 解析器：").append(log.parserUsed)
+    }
+    if (log.title.isNotBlank()) {
+        append("\n标题：").append(log.title)
+    }
+    append("\n原始报文：\n").append(log.content)
+    if (log.extractedJson.isNotBlank()) {
+        append("\n解析JSON:\n").append(log.extractedJson)
+    }
+    if (log.errorMessage.isNotBlank()) {
+        append("\n提示:").append(log.errorMessage)
     }
 }
 

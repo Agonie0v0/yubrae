@@ -1,6 +1,7 @@
 package com.kairoledger.app.capture.screen
 
 import android.accessibilityservice.AccessibilityService
+import android.graphics.Rect
 import android.os.Build
 import android.util.Log
 import android.view.accessibility.AccessibilityEvent
@@ -357,9 +358,22 @@ class KairoAccessibilityService : AccessibilityService() {
         if (resolvedPkg == packageName || !ScreenBillParser.isWatchedPackage(resolvedPkg)) {
             return null
         }
+        val rootRect = Rect()
+        root.getBoundsInScreen(rootRect)
+        val screenHeightPx = rootRect.height().takeIf { it > 0 }
+            ?: resources.displayMetrics.heightPixels
+
         val collected = ArrayList<String>(64)
+        val collectedNodes = ArrayList<ScreenTextNode>(64)
         val counter = IntArray(1)
-        collectVisibleTexts(root, depth = 0, visitedCounter = counter, out = collected)
+        collectVisibleTexts(
+            node = root,
+            depth = 0,
+            visitedCounter = counter,
+            out = collected,
+            outNodes = collectedNodes,
+            rect = rootRect
+        )
         if (collected.isEmpty()) return null
 
         val cls = if (latestWindowPackage == resolvedPkg && latestWindowClassName.isNotBlank()) {
@@ -371,7 +385,9 @@ class KairoAccessibilityService : AccessibilityService() {
             packageName = resolvedPkg,
             className = cls,
             texts = collected,
-            capturedAtMillis = System.currentTimeMillis()
+            capturedAtMillis = System.currentTimeMillis(),
+            nodes = collectedNodes,
+            screenHeightPx = screenHeightPx
         )
     }
 
@@ -403,7 +419,9 @@ class KairoAccessibilityService : AccessibilityService() {
         node: AccessibilityNodeInfo,
         depth: Int,
         visitedCounter: IntArray,
-        out: MutableList<String>
+        out: MutableList<String>,
+        outNodes: MutableList<ScreenTextNode>,
+        rect: Rect
     ) {
         if (depth > MAX_TREE_DEPTH || visitedCounter[0] >= MAX_TREE_NODES) return
         visitedCounter[0]++
@@ -414,11 +432,29 @@ class KairoAccessibilityService : AccessibilityService() {
         val nodeText = node.text?.toString()?.trim().orEmpty()
         if (nodeText.isNotEmpty() && out.lastOrNull() != nodeText) {
             out.add(nodeText)
+            node.getBoundsInScreen(rect)
+            outNodes.add(
+                ScreenTextNode(
+                    text = nodeText,
+                    topPx = rect.top,
+                    heightPx = rect.height().coerceAtLeast(0),
+                    isContentDesc = false
+                )
+            )
         }
 
         val nodeDesc = node.contentDescription?.toString()?.trim().orEmpty()
         if (nodeDesc.isNotEmpty() && nodeDesc != nodeText && out.lastOrNull() != nodeDesc) {
             out.add(nodeDesc)
+            node.getBoundsInScreen(rect)
+            outNodes.add(
+                ScreenTextNode(
+                    text = nodeDesc,
+                    topPx = rect.top,
+                    heightPx = rect.height().coerceAtLeast(0),
+                    isContentDesc = true
+                )
+            )
         }
 
         val childCount = node.childCount
@@ -426,7 +462,7 @@ class KairoAccessibilityService : AccessibilityService() {
             if (visitedCounter[0] >= MAX_TREE_NODES) break
             val child = runCatching { node.getChild(i) }.getOrNull() ?: continue
             try {
-                collectVisibleTexts(child, depth + 1, visitedCounter, out)
+                collectVisibleTexts(child, depth + 1, visitedCounter, out, outNodes, rect)
             } finally {
                 child.safeRecycle()
             }

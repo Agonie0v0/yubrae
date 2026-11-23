@@ -1143,4 +1143,428 @@ class ScreenBillParserTest {
         assertNotNull(outcome2.draft)
         assertEquals(MoneyAmount.parseToMicros("42.00"), outcome2.draft!!.origAmountMicros)
     }
+
+    @Test
+    fun parsesRealAlipayPasswordRedPacketIncomeDetailWithoutSwallowingFieldsOrAddPlaceholder() {
+        val snapshot = ScreenSnapshot(
+            packageName = "com.eg.android.AlipayGphone",
+            className = "com.alipay.mobile.bill.detail.ui.BillDetailActivity",
+            texts = listOf(
+                "账单详情",
+                "阿麦",
+                "15元",
+                "交易成功",
+                "创建时间", "2026-11-20 15:29:19",
+                "收款方式", "账户余额",
+                "红包说明", "收到口令红包",
+                "账单分类", "红包",
+                "对方账户", "138****1234",
+                "订单号", "202611202200148899001122",
+                "标签和备注",
+                "备注…", "添加",
+                "对此订单有疑问"
+            )
+        )
+
+        val outcome = parser.parse(snapshot, aliases, accounts, categories)
+        assertEquals(ScreenPageKind.BILL_DETAIL, outcome.pageKind)
+        assertEquals("202611202200148899001122", outcome.orderNo)
+
+        val draft = outcome.draft
+        assertNotNull(draft)
+        assertEquals(TransactionType.INCOME, draft!!.type)
+        assertEquals(MoneyAmount.parseToMicros("15.00"), draft.origAmountMicros)
+        assertEquals("CNY", draft.origCurrency)
+        assertEquals("阿麦", draft.merchant)
+        assertTrue("Expected note to contain 收到口令红包, got: ${draft.note}", draft.note.contains("收到口令红包"))
+        assertTrue("Expected note to contain 账户余额, got: ${draft.note}", draft.note.contains("账户余额"))
+        assertFalse("Expected note not to contain 添加, got: ${draft.note}", draft.note.contains("添加"))
+        assertEquals("支付宝", accounts.first { it.id == draft.accountId }.name)
+
+        val expectedMillis = LocalDateTime.of(2026, 11, 20, 15, 29, 19)
+            .atZone(testZone)
+            .toInstant()
+            .toEpochMilli()
+        assertEquals(expectedMillis, draft.timestamp)
+    }
+
+    @Test
+    fun parsesAlipayQrExpenseWithCashbackAndArrivedKeywordsAsExpense() {
+        val signedQrExpense = ScreenSnapshot(
+            packageName = "com.eg.android.AlipayGphone",
+            className = "com.alipay.mobile.bill.detail.ui.BillDetailActivity",
+            texts = listOf(
+                "账单详情",
+                "路边煎饼摊",
+                "-25.80",
+                "交易成功",
+                "商品说明", "二维码收款",
+                "笔笔返现", "+0.18",
+                "已到账",
+                "付款方式", "花呗",
+                "创建时间", "2026-11-23 08:25:10",
+                "订单号", "202611232200140000112233"
+            )
+        )
+        val outcome1 = parser.parse(signedQrExpense, aliases, accounts, categories)
+        assertEquals(ScreenPageKind.BILL_DETAIL, outcome1.pageKind)
+        val draft1 = outcome1.draft
+        assertNotNull(draft1)
+        assertEquals(TransactionType.EXPENSE, draft1!!.type)
+        assertEquals(MoneyAmount.parseToMicros("25.80"), draft1.origAmountMicros)
+        assertEquals("CNY", draft1.origCurrency)
+        assertEquals("路边煎饼摊", draft1.merchant)
+
+        // 即使顶部金额不带负号且存在付款方式，二维码收款/笔笔返现/已到账也绝不误判为收入
+        val unsignedQrExpense = ScreenSnapshot(
+            packageName = "com.eg.android.AlipayGphone",
+            className = "BillDetailActivity",
+            texts = listOf(
+                "账单详情",
+                "路边煎饼摊",
+                "25.80",
+                "当前状态", "已到账",
+                "商品说明", "二维码收款",
+                "笔笔返现", "0.18元",
+                "到账成功",
+                "付款方式", "余额宝",
+                "创建时间", "2026-11-23 08:25:10",
+                "订单号", "202611232200140000112234"
+            )
+        )
+        val outcome2 = parser.parse(unsignedQrExpense, aliases, accounts, categories)
+        assertEquals(ScreenPageKind.BILL_DETAIL, outcome2.pageKind)
+        assertEquals(TransactionType.EXPENSE, outcome2.draft!!.type)
+        assertEquals(MoneyAmount.parseToMicros("25.80"), outcome2.draft!!.origAmountMicros)
+    }
+
+    @Test
+    fun mergesSplitDecimalAmountNodesAcrossFormatsAndPreservesGeometry() {
+        val splitNegative = ScreenSnapshot(
+            packageName = "com.eg.android.AlipayGphone",
+            className = "BillDetailActivity",
+            texts = listOf("账单详情", "麦当劳", "-26", ".80", "交易成功", "创建时间", "2026-11-23 12:00:00", "付款方式", "支付宝")
+        )
+        val out1 = parser.parse(splitNegative, aliases, accounts, categories)
+        assertEquals(TransactionType.EXPENSE, out1.draft!!.type)
+        assertEquals(MoneyAmount.parseToMicros("26.80"), out1.draft!!.origAmountMicros)
+
+        val splitSignAndDigits = ScreenSnapshot(
+            packageName = "com.eg.android.AlipayGphone",
+            className = "BillDetailActivity",
+            texts = listOf("账单详情", "麦当劳", "-", "26", ".80", "交易成功", "创建时间", "2026-11-23 12:00:00", "付款方式", "支付宝")
+        )
+        val out2 = parser.parse(splitSignAndDigits, aliases, accounts, categories)
+        assertEquals(TransactionType.EXPENSE, out2.draft!!.type)
+        assertEquals(MoneyAmount.parseToMicros("26.80"), out2.draft!!.origAmountMicros)
+
+        val splitCurrencyAndDigits = ScreenSnapshot(
+            packageName = "com.tencent.mm",
+            className = "WalletPaidSuccessUI",
+            texts = listOf("支付成功", "麦当劳", "¥", "26", ".80", "完成")
+        )
+        val out3 = parser.parse(splitCurrencyAndDigits, aliases, accounts, categories)
+        assertEquals(TransactionType.EXPENSE, out3.draft!!.type)
+        assertEquals(MoneyAmount.parseToMicros("26.80"), out3.draft!!.origAmountMicros)
+
+        val splitPositive = ScreenSnapshot(
+            packageName = "com.eg.android.AlipayGphone",
+            className = "BillDetailActivity",
+            texts = listOf("账单详情", "张三", "+15", ".00", "交易成功", "创建时间", "2026-11-23 12:00:00", "订单号", "2026112300015000")
+        )
+        val out4 = parser.parse(splitPositive, aliases, accounts, categories)
+        assertEquals(TransactionType.INCOME, out4.draft!!.type)
+        assertEquals(MoneyAmount.parseToMicros("15.00"), out4.draft!!.origAmountMicros)
+
+        val splitTrailingDot = ScreenSnapshot(
+            packageName = "com.eg.android.AlipayGphone",
+            className = "BillDetailActivity",
+            texts = listOf("账单详情", "麦当劳", "26.", "80", "交易成功", "创建时间", "2026-11-23 12:00:00", "付款方式", "支付宝")
+        )
+        val out5 = parser.parse(splitTrailingDot, aliases, accounts, categories)
+        assertEquals(TransactionType.EXPENSE, out5.draft!!.type)
+        assertEquals(MoneyAmount.parseToMicros("26.80"), out5.draft!!.origAmountMicros)
+    }
+
+    @Test
+    fun parsesSignedAndCurrencyIntegerAmountsInHeroZoneWhileIgnoringBareCounts() {
+        val signedNegativeInt = ScreenSnapshot(
+            packageName = "com.eg.android.AlipayGphone",
+            className = "BillDetailActivity",
+            texts = listOf(
+                "账单详情",
+                "便利蜂",
+                "-50",
+                "交易成功",
+                "创建时间", "2026-11-23 13:00:00",
+                "付款方式", "花呗",
+                "订单号", "2026112300050001"
+            )
+        )
+        val out1 = parser.parse(signedNegativeInt, aliases, accounts, categories)
+        assertEquals(TransactionType.EXPENSE, out1.draft!!.type)
+        assertEquals(MoneyAmount.parseToMicros("50.00"), out1.draft!!.origAmountMicros)
+
+        val signedPositiveInt = ScreenSnapshot(
+            packageName = "com.eg.android.AlipayGphone",
+            className = "BillDetailActivity",
+            texts = listOf(
+                "账单详情",
+                "李四",
+                "+200",
+                "交易成功",
+                "创建时间", "2026-11-23 13:05:00",
+                "收款方式", "余额宝",
+                "订单号", "2026112300050002"
+            )
+        )
+        val out2 = parser.parse(signedPositiveInt, aliases, accounts, categories)
+        assertEquals(TransactionType.INCOME, out2.draft!!.type)
+        assertEquals(MoneyAmount.parseToMicros("200.00"), out2.draft!!.origAmountMicros)
+
+        val currencyIntAndStrayCounter = ScreenSnapshot(
+            packageName = "com.eg.android.AlipayGphone",
+            className = "BillDetailActivity",
+            texts = listOf(
+                "账单详情",
+                "3",
+                "便利蜂",
+                "¥15",
+                "交易成功",
+                "创建时间", "2026-11-23 13:10:00",
+                "付款方式", "余额"
+            )
+        )
+        val out3 = parser.parse(currencyIntAndStrayCounter, aliases, accounts, categories)
+        assertEquals(TransactionType.EXPENSE, out3.draft!!.type)
+        assertEquals(MoneyAmount.parseToMicros("15.00"), out3.draft!!.origAmountMicros)
+    }
+
+    @Test
+    fun prefersUpperHalfHeroVisualWithLargerHeightPxOverSmallFontAmounts() {
+        val nodes = listOf(
+            ScreenTextNode("账单详情", topPx = 80, heightPx = 44),
+            ScreenTextNode("喜茶", topPx = 200, heightPx = 48),
+            // 即使小字金额出现在大字主金额之前（例如顶部小角标），仍应被 HERO_VISUAL 压倒
+            ScreenTextNode("¥3.00", topPx = 280, heightPx = 36),
+            ScreenTextNode("-48", topPx = 340, heightPx = 120),
+            ScreenTextNode(".00", topPx = 390, heightPx = 64),
+            ScreenTextNode("交易成功", topPx = 500, heightPx = 40),
+            ScreenTextNode("创建时间", topPx = 640, heightPx = 40),
+            ScreenTextNode("2026-11-23 15:00:00", topPx = 640, heightPx = 40),
+            ScreenTextNode("付款方式", topPx = 720, heightPx = 40),
+            ScreenTextNode("支付宝", topPx = 720, heightPx = 40),
+            ScreenTextNode("订单号", topPx = 800, heightPx = 40),
+            ScreenTextNode("2026112300048001", topPx = 800, heightPx = 40)
+        )
+        val snapshot = ScreenSnapshot(
+            packageName = "com.eg.android.AlipayGphone",
+            className = "BillDetailActivity",
+            texts = nodes.map { it.text },
+            nodes = nodes,
+            screenHeightPx = 2400
+        )
+
+        val outcome = parser.parse(snapshot, aliases, accounts, categories)
+        assertEquals(ScreenPageKind.BILL_DETAIL, outcome.pageKind)
+        val draft = outcome.draft
+        assertNotNull(draft)
+        assertEquals(TransactionType.EXPENSE, draft!!.type)
+        assertEquals(MoneyAmount.parseToMicros("48.00"), draft.origAmountMicros)
+
+        // 无正负号的几何大字 "15元" (heightPx=120) 同样压倒带负号的小字 "¥3.00" (heightPx=36)
+        val incomeNodes = listOf(
+            ScreenTextNode("账单详情", topPx = 80, heightPx = 42),
+            ScreenTextNode("阿麦", topPx = 200, heightPx = 46),
+            ScreenTextNode("-¥3.00", topPx = 270, heightPx = 36),
+            ScreenTextNode("15元", topPx = 340, heightPx = 120),
+            ScreenTextNode("交易成功", topPx = 500, heightPx = 40),
+            ScreenTextNode("收款方式", topPx = 660, heightPx = 40),
+            ScreenTextNode("账户余额", topPx = 660, heightPx = 40),
+            ScreenTextNode("创建时间", topPx = 740, heightPx = 40),
+            ScreenTextNode("2026-11-20 15:29:19", topPx = 740, heightPx = 40)
+        )
+        val incomeSnapshot = ScreenSnapshot(
+            packageName = "com.eg.android.AlipayGphone",
+            className = "BillDetailActivity",
+            texts = incomeNodes.map { it.text },
+            nodes = incomeNodes,
+            screenHeightPx = 2400
+        )
+        val incomeOutcome = parser.parse(incomeSnapshot, aliases, accounts, categories)
+        assertEquals(TransactionType.INCOME, incomeOutcome.draft!!.type)
+        assertEquals(MoneyAmount.parseToMicros("15.00"), incomeOutcome.draft!!.origAmountMicros)
+    }
+
+    @Test
+    fun ignoresAlipayTouchPayDiscountConsumerGoldAndSavingsKeywords() {
+        val snapshot = ScreenSnapshot(
+            packageName = "com.eg.android.AlipayGphone",
+            className = "com.alipay.mobile.bill.detail.ui.BillDetailActivity",
+            texts = listOf(
+                "账单详情",
+                "肯德基",
+                "交易成功",
+                "原价", "¥38.00",
+                "商家优惠", "-¥5.00",
+                "碰一下立减", "-¥3.00",
+                "消费金", "-¥2.00",
+                "花呗金", "-¥1.00",
+                "鼓励金", "-¥0.50",
+                "体验金", "-¥1.00",
+                "淘金币", "-¥0.50",
+                "共省13.00元",
+                "笔笔攒 1.88元",
+                "运费险 0.50元",
+                "实付金额", "¥25.00",
+                "付款方式", "花呗",
+                "创建时间", "2026-11-23 12:10:00",
+                "订单号", "202611232200148899007788"
+            )
+        )
+
+        val outcome = parser.parse(snapshot, aliases, accounts, categories)
+        assertEquals(ScreenPageKind.BILL_DETAIL, outcome.pageKind)
+        val draft = outcome.draft
+        assertNotNull(draft)
+        assertEquals(TransactionType.EXPENSE, draft!!.type)
+        assertEquals(MoneyAmount.parseToMicros("25.00"), draft.origAmountMicros)
+        assertEquals("CNY", draft.origCurrency)
+        assertEquals("肯德基", draft.merchant)
+    }
+
+    @Test
+    fun doesNotReverseExpenseWhenRefundDetailEntryOrPartialRefundAppears() {
+        val partialRefundSigned = ScreenSnapshot(
+            packageName = "com.eg.android.AlipayGphone",
+            className = "BillDetailActivity",
+            texts = listOf(
+                "账单详情",
+                "优衣库",
+                "-68.00",
+                "当前状态", "部分已退",
+                "付款方式", "招商银行信用卡(6688)",
+                "创建时间", "2026-11-23 14:00:00",
+                "订单号", "202611232200148899009900",
+                "退款详情",
+                "查看退款详情"
+            )
+        )
+        val outcome1 = parser.parse(partialRefundSigned, aliases, accounts, categories)
+        assertEquals(ScreenPageKind.BILL_DETAIL, outcome1.pageKind)
+        assertEquals(TransactionType.EXPENSE, outcome1.draft!!.type)
+        assertEquals(MoneyAmount.parseToMicros("68.00"), outcome1.draft!!.origAmountMicros)
+        assertEquals("招商信用卡6688", accounts.first { it.id == outcome1.draft!!.accountId }.name)
+
+        // 即使顶部金额无负号，仅有付款方式与部分已退/退款详情入口，仍保持 EXPENSE
+        val partialRefundUnsigned = ScreenSnapshot(
+            packageName = "com.eg.android.AlipayGphone",
+            className = "BillDetailActivity",
+            texts = listOf(
+                "账单详情",
+                "优衣库",
+                "¥68.00",
+                "部分已退",
+                "付款方式", "花呗",
+                "创建时间", "2026-11-23 14:00:00",
+                "订单号", "202611232200148899009901",
+                "退款详情"
+            )
+        )
+        val outcome2 = parser.parse(partialRefundUnsigned, aliases, accounts, categories)
+        assertEquals(ScreenPageKind.BILL_DETAIL, outcome2.pageKind)
+        assertEquals(TransactionType.EXPENSE, outcome2.draft!!.type)
+        assertEquals(MoneyAmount.parseToMicros("68.00"), outcome2.draft!!.origAmountMicros)
+    }
+
+    @Test
+    fun ignoresAlipayRedPacketAndMixedPaymentBreakdownWithoutLeakingSubAmounts() {
+        val mixedPaymentSnapshot = ScreenSnapshot(
+            packageName = "com.eg.android.AlipayGphone",
+            className = "BillDetailActivity",
+            texts = listOf(
+                "账单详情",
+                "美团",
+                "-18.00",
+                "交易成功",
+                "付款方式", "花呗 15.00 + 红包 3.00",
+                "组合支付",
+                "支付宝红包 3.00元",
+                "支付宝红包",
+                "3.00元",
+                "创建时间", "2026-11-23 18:00:00",
+                "订单号", "202611232200148899005566"
+            )
+        )
+
+        val outcome = parser.parse(mixedPaymentSnapshot, aliases, accounts, categories)
+        assertEquals(ScreenPageKind.BILL_DETAIL, outcome.pageKind)
+        val draft = outcome.draft
+        assertNotNull(draft)
+        assertEquals(TransactionType.EXPENSE, draft!!.type)
+        assertEquals(MoneyAmount.parseToMicros("18.00"), draft.origAmountMicros)
+        assertEquals("美团", draft.merchant)
+        assertFalse("Expected note not to contain discount sub-item 红包 3.00, got: ${draft.note}", draft.note.contains("红包 3.00"))
+    }
+
+    @Test
+    fun preservesHeroBareDecimalWhenCategoryMerchantAndDiscountLikeGoodsAppearAboveIt() {
+        val snapshot = ScreenSnapshot(
+            packageName = "com.eg.android.AlipayGphone",
+            className = "BillDetailActivity",
+            texts = listOf(
+                "账单详情",
+                "账单分类", "餐饮美食",
+                "商户", "蓝蛙",
+                "商品说明", "美团满30减5",
+                "-25.80",
+                "当前状态", "支付成功",
+                "支付时间", "2026-11-23 19:00:00",
+                "支付方式", "余额",
+                "交易单号", "420000111122223333"
+            )
+        )
+
+        val outcome = parser.parse(snapshot, aliases, accounts, categories)
+        assertEquals(ScreenPageKind.BILL_DETAIL, outcome.pageKind)
+        val draft = outcome.draft
+        assertNotNull(draft)
+        assertEquals(TransactionType.EXPENSE, draft!!.type)
+        assertEquals(MoneyAmount.parseToMicros("25.80"), draft.origAmountMicros)
+        assertEquals("蓝蛙", draft.merchant)
+        assertTrue("Expected note to contain 美团满30减5, got: ${draft.note}", draft.note.contains("美团满30减5"))
+        assertTrue("Expected note to contain 余额, got: ${draft.note}", draft.note.contains("余额"))
+    }
+
+    @Test
+    fun filtersAllUiPlaceholdersAndAllowsWalletBalanceNamesInPaymentMethod() {
+        val snapshot = ScreenSnapshot(
+            packageName = "com.eg.android.AlipayGphone",
+            className = "BillDetailActivity",
+            texts = listOf(
+                "账单详情",
+                "去添加",
+                "全家便利店",
+                "-12.50",
+                "当前状态", "交易成功",
+                "付款方式", "零钱通",
+                "商品说明", "未设置",
+                "备注...", "暂无",
+                "创建时间", "2026-11-23 20:00:00",
+                "订单号", "202611232200148899003344"
+            )
+        )
+
+        val outcome = parser.parse(snapshot, aliases, accounts, categories)
+        assertEquals(ScreenPageKind.BILL_DETAIL, outcome.pageKind)
+        val draft = outcome.draft
+        assertNotNull(draft)
+        assertEquals(TransactionType.EXPENSE, draft!!.type)
+        assertEquals(MoneyAmount.parseToMicros("12.50"), draft.origAmountMicros)
+        assertEquals("全家便利店", draft.merchant)
+        assertTrue("Expected note to contain 零钱通, got: ${draft.note}", draft.note.contains("零钱通"))
+        assertFalse(draft.note.contains("未设置"))
+        assertFalse(draft.note.contains("暂无"))
+        assertFalse(draft.note.contains("去添加"))
+    }
 }

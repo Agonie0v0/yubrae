@@ -54,11 +54,19 @@ class ScreenBillParser(
         val ignoredLineIndices: Set<Int>
     )
 
+    private data class NormalizedLine(
+        val text: String,
+        val topPx: Int = -1,
+        val heightPx: Int = 0,
+        val isContentDesc: Boolean = false
+    )
+
     private enum class AmountRole(val priority: Int) {
-        ACTUAL_PAID(4),
-        FOREIGN_ORIG(4),
-        TRANSACTION_AMOUNT(3),
-        HERO(2),
+        HERO_VISUAL(5),
+        HERO(4),
+        ACTUAL_PAID(3),
+        FOREIGN_ORIG(3),
+        TRANSACTION_AMOUNT(2),
         ORDER_AMOUNT(1),
         GENERIC(0)
     }
@@ -69,7 +77,8 @@ class ScreenBillParser(
         val hasExplicitCurrency: Boolean,
         val role: AmountRole,
         val lineIndex: Int,
-        val signHint: String?
+        val signHint: String?,
+        val heightPx: Int = 0
     )
 
     private data class ResolvedAmountResult(
@@ -84,8 +93,9 @@ class ScreenBillParser(
         if (isBlockedChatOrFeedWindow(snapshot.packageName, snapshot.className)) {
             return ScreenPageKind.UNKNOWN
         }
-        val lines = normalizeLines(snapshot.texts)
-        if (lines.isEmpty()) return ScreenPageKind.UNKNOWN
+        val normalizedLines = normalizeLinesWithNodes(snapshot)
+        if (normalizedLines.isEmpty()) return ScreenPageKind.UNKNOWN
+        val lines = normalizedLines.map { it.text }
         val fieldResult = extractFields(lines)
         return classifyPageInternal(snapshot.packageName, snapshot.className, lines, fieldResult.fields).first
     }
@@ -107,10 +117,11 @@ class ScreenBillParser(
             )
         }
 
-        val lines = normalizeLines(snapshot.texts)
-        if (lines.isEmpty()) {
+        val normalizedLines = normalizeLinesWithNodes(snapshot)
+        if (normalizedLines.isEmpty()) {
             return ScreenParseOutcome(pageKind = ScreenPageKind.UNKNOWN, draft = null)
         }
+        val lines = normalizedLines.map { it.text }
 
         val fieldResult = extractFields(lines)
         val fields = fieldResult.fields
@@ -160,7 +171,13 @@ class ScreenBillParser(
             )
         }
 
-        val resolvedAmount = resolveAmounts(lines, fields, fieldResult.ignoredLineIndices)
+        val resolvedAmount = resolveAmounts(
+            lines = lines,
+            normalizedLines = normalizedLines,
+            fields = fields,
+            ignoredLineIndices = fieldResult.ignoredLineIndices,
+            screenHeightPx = snapshot.screenHeightPx
+        )
         if (resolvedAmount == null || resolvedAmount.origAmountMicros <= 0L) {
             return ScreenParseOutcome(
                 pageKind = pageKind,
@@ -175,10 +192,10 @@ class ScreenBillParser(
 
         val txType = inferTransactionType(lines, fields, resolvedAmount.dominantSign)
         val timestamp = extractTransactionTimestamp(fields, lines, snapshot.capturedAtMillis)
-        val paymentMethodText = extractFirstFieldValue(fields, FieldKey.PAYMENT_METHOD)
+        val paymentMethodText = sanitizePaymentMethodText(extractFirstFieldValue(fields, FieldKey.PAYMENT_METHOD))
         val accountHint = extractAccountHint(paymentMethodText, summaryText)
         val merchant = resolveMerchant(lines, fields, txType)
-        val goodsDesc = extractFirstFieldValue(fields, FieldKey.GOODS)
+        val goodsDesc = extractGoods(fields)
 
         val activeAccounts = accounts.filter { !it.archived }.ifEmpty { accounts }
         val routingCurrency = if (resolvedAmount.cnySettlementMicros != null) {
@@ -261,56 +278,145 @@ class ScreenBillParser(
         )
     }
 
-    private fun normalizeLines(texts: List<String>): List<String> {
-        val raw = texts.mapNotNull { line ->
-            val cleaned = line
-                .replace('\u00A0', ' ')
-                .replace("\u200B", "")
-                .replace("\uFEFF", "")
-                .replace(WHITESPACE_RUN_REGEX, " ")
-                .trim()
-            cleaned.takeIf { it.isNotEmpty() }
-        }
+    private fun cleanLineText(text: String): String = text
+        .replace('\u00A0', ' ')
+        .replace("\u200B", "")
+        .replace("\uFEFF", "")
+        .replace(WHITESPACE_RUN_REGEX, " ")
+        .trim()
+
+    private fun normalizeLinesWithNodes(snapshot: ScreenSnapshot): List<NormalizedLine> {
+        val raw = buildRawNormalizedLines(snapshot)
         if (raw.isEmpty()) return emptyList()
 
-        val merged = mutableListOf<String>()
+        // Pass 1：合并整数/小数点拆分节点，如 "-26"+".80"、"+15"+".00"、"26."+"80"
+        val decimalMerged = ArrayList<NormalizedLine>(raw.size)
         var i = 0
         while (i < raw.size) {
             val curr = raw[i]
             val next = raw.getOrNull(i + 1)
-            val third = raw.getOrNull(i + 2)
+            if (next != null &&
+                ((SPLIT_INT_PART_REGEX.matches(curr.text) && SPLIT_DOT_DEC_REGEX.matches(next.text)) ||
+                    (SPLIT_INT_DOT_REGEX.matches(curr.text) && SPLIT_DEC_DIGITS_REGEX.matches(next.text)))
+            ) {
+                decimalMerged.add(combineNormalizedLines("${curr.text}${next.text}", listOf(curr, next)))
+                i += 2
+                continue
+            }
+            decimalMerged.add(curr)
+            i++
+        }
+
+        // Pass 2：合并正负号、货币符号与后缀币种单位，并保留几何边界
+        val merged = ArrayList<NormalizedLine>(decimalMerged.size)
+        i = 0
+        while (i < decimalMerged.size) {
+            val curr = decimalMerged[i]
+            val next = decimalMerged.getOrNull(i + 1)
+            val third = decimalMerged.getOrNull(i + 2)
 
             if (next != null && third != null &&
-                (curr == "-" || curr == "+") &&
-                SPLIT_CURRENCY_ONLY_REGEX.matches(next) &&
-                SPLIT_NUMBER_REGEX.matches(third)
+                (curr.text == "-" || curr.text == "+") &&
+                SPLIT_CURRENCY_ONLY_REGEX.matches(next.text) &&
+                SPLIT_NUMBER_REGEX.matches(third.text)
             ) {
-                val combined = if (next.all { it.isLetter() }) "$curr$next $third" else "$curr$next$third"
-                if (merged.lastOrNull() != combined) merged.add(combined)
+                val combined = if (next.text.all { it.isLetter() }) {
+                    "${curr.text}${next.text} ${third.text}"
+                } else {
+                    "${curr.text}${next.text}${third.text}"
+                }
+                addOrCoalesceLine(merged, combineNormalizedLines(combined, listOf(curr, next, third)))
                 i += 3
                 continue
             }
 
-            if (next != null && SPLIT_PREFIX_REGEX.matches(curr) && SPLIT_NUMBER_REGEX.matches(next)) {
-                val combined = if (curr.all { it.isLetter() }) "$curr $next" else "$curr$next"
-                if (merged.lastOrNull() != combined) merged.add(combined)
+            if (next != null && SPLIT_PREFIX_REGEX.matches(curr.text) && SPLIT_NUMBER_REGEX.matches(next.text)) {
+                val combined = if (curr.text.all { it.isLetter() }) {
+                    "${curr.text} ${next.text}"
+                } else {
+                    "${curr.text}${next.text}"
+                }
+                addOrCoalesceLine(merged, combineNormalizedLines(combined, listOf(curr, next)))
                 i += 2
                 continue
             }
 
-            if (next != null && SPLIT_SIGNED_NUMBER_REGEX.matches(curr) && SPLIT_SUFFIX_CURRENCY_REGEX.matches(next)) {
-                val combined = "$curr $next"
-                if (merged.lastOrNull() != combined) merged.add(combined)
+            if (next != null && SPLIT_SIGNED_NUMBER_REGEX.matches(curr.text) && SPLIT_SUFFIX_CURRENCY_REGEX.matches(next.text)) {
+                val combined = "${curr.text} ${next.text}"
+                addOrCoalesceLine(merged, combineNormalizedLines(combined, listOf(curr, next)))
                 i += 2
                 continue
             }
 
-            if (merged.lastOrNull() != curr) {
-                merged.add(curr)
-            }
+            addOrCoalesceLine(merged, curr)
             i++
         }
         return merged
+    }
+
+    private fun buildRawNormalizedLines(snapshot: ScreenSnapshot): List<NormalizedLine> {
+        if (snapshot.texts.isEmpty()) {
+            return snapshot.nodes.mapNotNull { node ->
+                val cleaned = cleanLineText(node.text)
+                cleaned.takeIf { it.isNotEmpty() }?.let {
+                    NormalizedLine(it, node.topPx, node.heightPx, node.isContentDesc)
+                }
+            }
+        }
+        if (snapshot.nodes.isEmpty()) {
+            return snapshot.texts.mapNotNull { text ->
+                val cleaned = cleanLineText(text)
+                cleaned.takeIf { it.isNotEmpty() }?.let { NormalizedLine(it) }
+            }
+        }
+
+        val cleanedNodes = snapshot.nodes.mapNotNull { node ->
+            val cleaned = cleanLineText(node.text)
+            cleaned.takeIf { it.isNotEmpty() }?.let {
+                NormalizedLine(it, node.topPx, node.heightPx, node.isContentDesc)
+            }
+        }
+        var nodeCursor = 0
+        return snapshot.texts.mapNotNull { rawText ->
+            val cleaned = cleanLineText(rawText)
+            if (cleaned.isEmpty()) return@mapNotNull null
+            var matched: NormalizedLine? = null
+            val limit = minOf(nodeCursor + 6, cleanedNodes.size)
+            for (k in nodeCursor until limit) {
+                if (cleanedNodes[k].text == cleaned) {
+                    matched = cleanedNodes[k]
+                    nodeCursor = k + 1
+                    break
+                }
+            }
+            matched ?: NormalizedLine(cleaned)
+        }
+    }
+
+    private fun combineNormalizedLines(text: String, parts: List<NormalizedLine>): NormalizedLine {
+        var minTop = Int.MAX_VALUE
+        var maxHeight = 0
+        var isDesc = false
+        for (part in parts) {
+            if (part.topPx >= 0 && part.topPx < minTop) minTop = part.topPx
+            if (part.heightPx > maxHeight) maxHeight = part.heightPx
+            if (part.isContentDesc) isDesc = true
+        }
+        return NormalizedLine(
+            text = text,
+            topPx = if (minTop == Int.MAX_VALUE) -1 else minTop,
+            heightPx = maxHeight,
+            isContentDesc = isDesc
+        )
+    }
+
+    private fun addOrCoalesceLine(merged: MutableList<NormalizedLine>, item: NormalizedLine) {
+        val last = merged.lastOrNull()
+        if (last != null && last.text == item.text) {
+            merged[merged.lastIndex] = combineNormalizedLines(item.text, listOf(last, item))
+        } else {
+            merged.add(item)
+        }
     }
 
     private fun extractFields(lines: List<String>): FieldExtractionResult {
@@ -330,20 +436,7 @@ class ScreenBillParser(
                         if (inlineVal.isNotEmpty()) {
                             ignoredIndices.add(i)
                             result.add(ExtractedField(key, rawLabel, inlineVal, i, i))
-                            val nextLine = lines.getOrNull(i + 1)
-                            if (!hasDecimalOrSymbolAmount(inlineVal) &&
-                                !isStandaloneAmountLine(inlineVal) &&
-                                nextLine != null &&
-                                !isLikelyFieldLabel(nextLine) &&
-                                !isActionButtonOnly(nextLine) &&
-                                looksLikeDiscountAmountLine(nextLine)
-                            ) {
-                                ignoredIndices.add(i + 1)
-                                result.add(ExtractedField(key, rawLabel, nextLine, i + 1, i))
-                                i += 2
-                                continue
-                            }
-                            i++
+                            i = tryConsumeIgnoredNextLine(lines, i, rawLabel, inlineVal, result, ignoredIndices)
                             continue
                         } else {
                             i = consumeIgnoredTail(lines, i, rawLabel, result, ignoredIndices)
@@ -352,13 +445,19 @@ class ScreenBillParser(
                     }
 
                     if (inlineVal.isNotEmpty()) {
-                        result.add(ExtractedField(key, rawLabel, inlineVal, i, i))
+                        if (!isPlaceholderFieldValue(inlineVal)) {
+                            result.add(ExtractedField(key, rawLabel, inlineVal, i, i))
+                        }
                         i++
                         continue
                     } else {
                         val nextLine = lines.getOrNull(i + 1)
-                        if (nextLine != null && !isLikelyFieldLabel(nextLine) && !isActionButtonOnly(nextLine)) {
-                            result.add(ExtractedField(key, rawLabel, nextLine, i + 1, i))
+                        if (canConsumeNextLineValue(key, nextLine)) {
+                            result.add(ExtractedField(key, rawLabel, nextLine!!, i + 1, i))
+                            i += 2
+                            continue
+                        }
+                        if (nextLine != null && isPlaceholderFieldValue(nextLine)) {
                             i += 2
                             continue
                         }
@@ -373,8 +472,12 @@ class ScreenBillParser(
                     continue
                 }
                 val nextLine = lines.getOrNull(i + 1)
-                if (nextLine != null && !isLikelyFieldLabel(nextLine) && !isActionButtonOnly(nextLine)) {
-                    result.add(ExtractedField(exactKey, line, nextLine, i + 1, i))
+                if (canConsumeNextLineValue(exactKey, nextLine)) {
+                    result.add(ExtractedField(exactKey, line, nextLine!!, i + 1, i))
+                    i += 2
+                    continue
+                }
+                if (nextLine != null && isPlaceholderFieldValue(nextLine)) {
                     i += 2
                     continue
                 }
@@ -383,28 +486,64 @@ class ScreenBillParser(
             val spaceField = matchSpaceSeparatedField(line)
             if (spaceField != null) {
                 val (key, label, value) = spaceField
-                result.add(ExtractedField(key, label, value, i, i))
                 if (key == FieldKey.IGNORED_AMOUNT) {
+                    result.add(ExtractedField(key, label, value, i, i))
                     ignoredIndices.add(i)
-                    val nextLine = lines.getOrNull(i + 1)
-                    if (!hasDecimalOrSymbolAmount(value) &&
-                        !isStandaloneAmountLine(value) &&
-                        nextLine != null &&
-                        !isLikelyFieldLabel(nextLine) &&
-                        !isActionButtonOnly(nextLine) &&
-                        looksLikeDiscountAmountLine(nextLine)
-                    ) {
-                        ignoredIndices.add(i + 1)
-                        result.add(ExtractedField(key, label, nextLine, i + 1, i))
-                        i += 2
-                        continue
-                    }
+                    i = tryConsumeIgnoredNextLine(lines, i, label, value, result, ignoredIndices)
+                    continue
+                } else if (!isPlaceholderFieldValue(value)) {
+                    result.add(ExtractedField(key, label, value, i, i))
                 }
             }
 
             i++
         }
         return FieldExtractionResult(result, ignoredIndices)
+    }
+
+    private fun tryConsumeIgnoredNextLine(
+        lines: List<String>,
+        labelLineIndex: Int,
+        rawLabel: String,
+        inlineVal: String,
+        result: MutableList<ExtractedField>,
+        ignoredIndices: MutableSet<Int>
+    ): Int {
+        val nextLine = lines.getOrNull(labelLineIndex + 1)
+        if (!hasDecimalOrSymbolAmount(inlineVal) &&
+            !isStandaloneAmountLine(inlineVal) &&
+            nextLine != null &&
+            !isStrictFieldLabelLine(nextLine) &&
+            !isActionButtonOnly(nextLine) &&
+            !isPlaceholderFieldValue(nextLine) &&
+            looksLikeDiscountAmountLine(nextLine)
+        ) {
+            ignoredIndices.add(labelLineIndex + 1)
+            result.add(ExtractedField(FieldKey.IGNORED_AMOUNT, rawLabel, nextLine, labelLineIndex + 1, labelLineIndex))
+            return labelLineIndex + 2
+        }
+        return labelLineIndex + 1
+    }
+
+    private fun canConsumeNextLineValue(key: FieldKey, nextLine: String?): Boolean {
+        if (nextLine == null) return false
+        if (isActionButtonOnly(nextLine) || isPlaceholderFieldValue(nextLine)) return false
+        val nextStrictKey = matchStrictFieldKeyInLine(nextLine)
+        return when (key) {
+            // 账户余额/余额/可用余额等在独立行时为忽略余额字段，但作为收付款方式的值时必须正常读取
+            FieldKey.PAYMENT_METHOD -> nextStrictKey == null ||
+                (nextStrictKey == FieldKey.IGNORED_AMOUNT && isValidPaymentMethodAccountName(nextLine))
+            // 商品说明/商户/分类等绝不用模糊优惠正则拒绝正当描述值（如 "收到口令红包"、"美团满30减5"）
+            FieldKey.GOODS,
+            FieldKey.MERCHANT,
+            FieldKey.PAYEE,
+            FieldKey.PAYER,
+            FieldKey.META -> nextStrictKey == null ||
+                (nextStrictKey == FieldKey.IGNORED_AMOUNT &&
+                    findKeySeparatorIndex(nextLine) <= 0 &&
+                    matchSpaceSeparatedField(nextLine) == null)
+            else -> nextStrictKey == null
+        }
     }
 
     private fun consumeIgnoredTail(
@@ -416,7 +555,7 @@ class ScreenBillParser(
     ): Int {
         ignoredIndices.add(labelLineIndex)
         val line1 = lines.getOrNull(labelLineIndex + 1)
-        if (line1 == null || isLikelyFieldLabel(line1) || isActionButtonOnly(line1)) {
+        if (line1 == null || isStrictFieldLabelLine(line1) || isActionButtonOnly(line1) || isPlaceholderFieldValue(line1)) {
             return labelLineIndex + 1
         }
 
@@ -431,8 +570,9 @@ class ScreenBillParser(
         // 第 1 行为子描述（如 "满30减5"、"使用5元立减金"），向后最多再跳 1 行跳过关联金额值（共跳 2 行）
         val line2 = lines.getOrNull(labelLineIndex + 2)
         if (line2 != null &&
-            !isLikelyFieldLabel(line2) &&
+            !isStrictFieldLabelLine(line2) &&
             !isActionButtonOnly(line2) &&
+            !isPlaceholderFieldValue(line2) &&
             looksLikeDiscountAmountLine(line2)
         ) {
             ignoredIndices.add(labelLineIndex + 2)
@@ -474,7 +614,7 @@ class ScreenBillParser(
         }
     }
 
-    private fun matchFieldKey(rawLabel: String): FieldKey? {
+    private fun matchStrictFieldKey(rawLabel: String): FieldKey? {
         val normalized = rawLabel.trim().trimEnd(':', '：').lowercase(Locale.ROOT)
         if (normalized.isEmpty()) return null
         FIELD_KEY_MAP[normalized]?.let { return it }
@@ -497,22 +637,51 @@ class ScreenBillParser(
         if (PRIMARY_AMOUNT_LABEL_HINTS.any { normalizedWithoutUnit.contains(it) }) {
             return FieldKey.AMOUNT
         }
+        return null
+    }
 
+    private fun matchFieldKey(rawLabel: String): FieldKey? {
+        matchStrictFieldKey(rawLabel)?.let { return it }
+        val normalized = rawLabel.trim().trimEnd(':', '：').lowercase(Locale.ROOT)
+        val normalizedWithoutUnit = UNIT_SUFFIX_STRIP_REGEX.replace(normalized, "").trim()
+        if (normalizedWithoutUnit.isEmpty() || normalizedWithoutUnit.length > 24) return null
+        if (LABEL_DISQUALIFIER_REGEX.containsMatchIn(normalizedWithoutUnit)) return null
         if (isIgnoredAmountFieldLabel(normalizedWithoutUnit)) {
             return FieldKey.IGNORED_AMOUNT
         }
         return null
     }
 
+    private fun matchStrictFieldKeyInLine(line: String): FieldKey? {
+        matchStrictFieldKey(line)?.let { return it }
+        val colonIdx = findKeySeparatorIndex(line)
+        if (colonIdx > 0) {
+            matchStrictFieldKey(line.substring(0, colonIdx))?.let { return it }
+        }
+        return matchSpaceSeparatedField(line)?.first
+    }
+
+    private fun isStrictFieldLabel(line: String): Boolean = matchStrictFieldKey(line) != null
+
+    private fun isStrictFieldLabelLine(line: String): Boolean = matchStrictFieldKeyInLine(line) != null
+
     private fun isIgnoredAmountFieldLabel(normalized: String): Boolean {
+        if (normalized.length > 12) return false
+        if (LABEL_SENTENCE_PUNCT_REGEX.containsMatchIn(normalized)) return false
+        if (NON_IGNORED_LABEL_PREFIXES.any { normalized.startsWith(it) }) return false
         if (normalized in NON_IGNORED_LABEL_EXCLUSIONS) return false
+        if (normalized in VALID_ACCOUNT_METHOD_LABELS) return false
         if (normalized in UI_STOP_WORDS || UI_STOP_PREFIXES.any { normalized.startsWith(it) }) return false
         if (PAY_SUCCESS_PHRASES.any { normalized == it } || IGNORED_STATUS_KEYWORDS.any { normalized == it }) return false
         if (CHAT_BUBBLE_MARKERS.any { normalized.contains(it) }) return false
         return IGNORED_FIELD_LABEL_REGEX.containsMatchIn(normalized)
     }
 
-    private fun isLikelyFieldLabel(line: String): Boolean = matchFieldKey(line) != null
+    private fun isValidPaymentMethodAccountName(line: String): Boolean =
+        line.trim().lowercase(Locale.ROOT) in VALID_ACCOUNT_METHOD_LABELS
+
+    private fun isPlaceholderFieldValue(value: String): Boolean =
+        value.trim().lowercase(Locale.ROOT) in PLACEHOLDER_FIELD_VALUES
 
     private fun isActionButtonOnly(line: String): Boolean =
         line.trim().lowercase(Locale.ROOT) in ACTION_ONLY_WORDS
@@ -776,10 +945,21 @@ class ScreenBillParser(
         return null
     }
 
+    private data class StandaloneAmountLineInfo(
+        val index: Int,
+        val cleanedLine: String,
+        val topPx: Int,
+        val heightPx: Int,
+        val hasExplicitSign: Boolean,
+        val hasCurrencyHint: Boolean
+    )
+
     private fun resolveAmounts(
         lines: List<String>,
+        normalizedLines: List<NormalizedLine>,
         fields: List<ExtractedField>,
-        ignoredLineIndices: Set<Int>
+        ignoredLineIndices: Set<Int>,
+        screenHeightPx: Int
     ): ResolvedAmountResult? {
         val candidates = mutableListOf<AmountCandidate>()
         val fieldLinesByIndex = fields.associateBy { it.lineIndex }
@@ -793,55 +973,133 @@ class ScreenBillParser(
                 else -> continue
             }
             val allowBareInteger = role != AmountRole.ORDER_AMOUNT
+            val heightPx = normalizedLines.getOrNull(field.lineIndex)?.heightPx ?: 0
             candidates += extractCandidatesFromText(
                 text = field.value,
                 role = role,
                 lineIndex = field.lineIndex,
                 allowBareDecimal = true,
-                allowBareInteger = allowBareInteger
+                allowBareInteger = allowBareInteger,
+                heightPx = heightPx
             )
         }
 
-        val firstDetailFieldLineIndex = fields
-            .filter { it.key in DETAIL_SIGNAL_KEYS }
+        // 计算有效几何信息与中位文本行高，用于识别上半屏大号主金额 HERO_VISUAL
+        val validHeights = normalizedLines.asSequence()
+            .map { it.heightPx }
+            .filter { it > 0 }
+            .sorted()
+            .toList()
+        val hasValidGeometry = screenHeightPx > 0 && validHeights.isNotEmpty()
+        val medianHeight = if (hasValidGeometry) {
+            val n = validHeights.size
+            if (n % 2 == 1) validHeights[n / 2] else (validHeights[n / 2 - 1] + validHeights[n / 2]) / 2
+        } else {
+            0
+        }
+        val upperHalfLimitPx = (screenHeightPx * 0.50f).toInt()
+
+        val firstAnchorFieldLineIndex = fields
+            .asSequence()
+            .filter {
+                it.key == FieldKey.PAYMENT_METHOD ||
+                    it.key == FieldKey.TIME ||
+                    it.key == FieldKey.ORDER_NO
+            }
             .minOfOrNull { it.labelLineIndex }
             ?: Int.MAX_VALUE
+
+        val standaloneLines = mutableMapOf<Int, StandaloneAmountLineInfo>()
+        val nonStandaloneCandidates = mutableListOf<Pair<Int, String>>()
 
         for ((index, line) in lines.withIndex()) {
             if (index in ignoredLineIndices) continue
             val matchedField = fieldLinesByIndex[index]
             if (matchedField != null) {
                 if (matchedField.key in SKIP_AMOUNT_SCAN_KEYS) continue
-                if (matchedField.key in listOf(
-                        FieldKey.ACTUAL_AMOUNT,
-                        FieldKey.FOREIGN_AMOUNT,
-                        FieldKey.AMOUNT,
-                        FieldKey.ORDER_AMOUNT
-                    )
-                ) {
-                    continue
-                }
+                if (matchedField.key in EXTRACTED_AMOUNT_KEYS) continue
             }
-            if (isLikelyFieldLabel(line)) continue
+            if (matchFieldKey(line) != null) continue
+            if (isMixedPaymentBreakdownLine(line)) continue
 
             val cleanedLine = stripNonAmountClauses(line)
             if (cleanedLine.isBlank()) continue
             if (containsNoiseAmountKeyword(cleanedLine)) continue
 
             val trimmedClean = cleanedLine.trim()
-            val hasExplicitSign = trimmedClean.startsWith("-") || trimmedClean.startsWith("+")
-            val isHeroZone = index < firstDetailFieldLineIndex &&
-                index !in ignoredLineIndices &&
-                !containsNoiseAmountKeyword(cleanedLine) &&
-                isStandaloneAmountLine(cleanedLine) &&
-                (index <= 10 || (hasExplicitSign && index <= 14))
-            val role = if (isHeroZone) AmountRole.HERO else AmountRole.GENERIC
+            if (isStandaloneAmountLine(trimmedClean)) {
+                val node = normalizedLines.getOrNull(index)
+                val hasExplicitSign = trimmedClean.startsWith("-") || trimmedClean.startsWith("+")
+                standaloneLines[index] = StandaloneAmountLineInfo(
+                    index = index,
+                    cleanedLine = trimmedClean,
+                    topPx = node?.topPx ?: -1,
+                    heightPx = node?.heightPx ?: 0,
+                    hasExplicitSign = hasExplicitSign,
+                    hasCurrencyHint = hasExplicitCurrencyHint(trimmedClean)
+                )
+            } else {
+                nonStandaloneCandidates += index to cleanedLine
+            }
+        }
+
+        val firstSignedOrCurrencyStandaloneIndex = standaloneLines.values
+            .asSequence()
+            .filter { it.index < 12 && (it.hasExplicitSign || it.hasCurrencyHint) }
+            .minOfOrNull { it.index }
+            ?: -1
+
+        val upperHalfHeights = if (hasValidGeometry) {
+            standaloneLines.values
+                .filter { it.topPx in 0..upperHalfLimitPx && it.heightPx > 0 }
+                .map { it.heightPx }
+        } else {
+            emptyList()
+        }
+        val maxTopAmountHeight = upperHalfHeights.maxOrNull() ?: 0
+        val secondTopAmountHeight = upperHalfHeights.filter { it < maxTopAmountHeight }.maxOrNull() ?: 0
+
+        for (info in standaloneLines.values) {
+            val isHeroVisual = hasValidGeometry &&
+                info.topPx in 0..upperHalfLimitPx &&
+                info.heightPx > 0 &&
+                (
+                    (medianHeight > 0 &&
+                        info.heightPx >= (medianHeight * 1.35f).toInt() &&
+                        (maxTopAmountHeight <= 0 || info.heightPx >= (maxTopAmountHeight * 0.80f).toInt())) ||
+                        (info.heightPx == maxTopAmountHeight &&
+                            ((secondTopAmountHeight > 0 && info.heightPx >= (secondTopAmountHeight * 1.25f).toInt()) ||
+                                (secondTopAmountHeight == 0 && medianHeight > 0 && info.heightPx > medianHeight)))
+                    )
+
+            val isTextHeroZone = (info.index < 18 && info.index < firstAnchorFieldLineIndex) ||
+                (info.index < 12 && info.index == firstSignedOrCurrencyStandaloneIndex)
+
+            val role = when {
+                isHeroVisual -> AmountRole.HERO_VISUAL
+                isTextHeroZone -> AmountRole.HERO
+                else -> AmountRole.GENERIC
+            }
+            val isHero = role == AmountRole.HERO_VISUAL || role == AmountRole.HERO
+            candidates += extractCandidatesFromText(
+                text = info.cleanedLine,
+                role = role,
+                lineIndex = info.index,
+                allowBareDecimal = isHero,
+                allowBareInteger = isHero && info.hasExplicitSign,
+                heightPx = info.heightPx
+            )
+        }
+
+        for ((index, cleanedLine) in nonStandaloneCandidates) {
+            val heightPx = normalizedLines.getOrNull(index)?.heightPx ?: 0
             candidates += extractCandidatesFromText(
                 text = cleanedLine,
-                role = role,
+                role = AmountRole.GENERIC,
                 lineIndex = index,
-                allowBareDecimal = isHeroZone,
-                allowBareInteger = false
+                allowBareDecimal = false,
+                allowBareInteger = false,
+                heightPx = heightPx
             )
         }
 
@@ -893,24 +1151,33 @@ class ScreenBillParser(
         list.sortedWith { a, b ->
             val roleCmp = b.role.priority.compareTo(a.role.priority)
             if (roleCmp != 0) return@sortedWith roleCmp
-            if (a.role == AmountRole.HERO && b.role == AmountRole.HERO) {
-                val signCmp = (b.signHint != null).compareTo(a.signHint != null)
-                if (signCmp != 0) return@sortedWith signCmp
-                val lineCmp = a.lineIndex.compareTo(b.lineIndex)
-                if (lineCmp != 0) return@sortedWith lineCmp
-                return@sortedWith b.hasExplicitCurrency.compareTo(a.hasExplicitCurrency)
-            }
-            val currencyCmp = b.hasExplicitCurrency.compareTo(a.hasExplicitCurrency)
-            if (currencyCmp != 0) return@sortedWith currencyCmp
-            a.lineIndex.compareTo(b.lineIndex)
+            val signCmp = (b.signHint != null).compareTo(a.signHint != null)
+            if (signCmp != 0) return@sortedWith signCmp
+            val heightCmp = b.heightPx.compareTo(a.heightPx)
+            if (heightCmp != 0) return@sortedWith heightCmp
+            val lineCmp = a.lineIndex.compareTo(b.lineIndex)
+            if (lineCmp != 0) return@sortedWith lineCmp
+            b.hasExplicitCurrency.compareTo(a.hasExplicitCurrency)
         }.firstOrNull()
+
+    private fun hasExplicitCurrencyHint(text: String): Boolean =
+        AMOUNT_TOKEN_REGEX.findAll(text).any { match ->
+            match.groupValues.getOrNull(2).orEmpty().isNotBlank() ||
+                match.groupValues.getOrNull(5).orEmpty().isNotBlank()
+        }
+
+    private fun isMixedPaymentBreakdownLine(line: String): Boolean {
+        if (!line.contains('+')) return false
+        return MIXED_PAYMENT_NOISE_REGEX.containsMatchIn(line)
+    }
 
     private fun extractCandidatesFromText(
         text: String,
         role: AmountRole,
         lineIndex: Int,
         allowBareDecimal: Boolean,
-        allowBareInteger: Boolean
+        allowBareInteger: Boolean,
+        heightPx: Int = 0
     ): List<AmountCandidate> {
         val result = mutableListOf<AmountCandidate>()
         val sanitized = stripNonAmountClauses(text)
@@ -951,7 +1218,8 @@ class ScreenBillParser(
                     hasExplicitCurrency = hasCurrencyToken,
                     role = role,
                     lineIndex = lineIndex,
-                    signHint = sign
+                    signHint = sign,
+                    heightPx = heightPx
                 )
             )
         }
@@ -969,9 +1237,20 @@ class ScreenBillParser(
         .replace(CARD_HINT_STRIP_REGEX, " ")
         .replace(PARENTHESIZED_DISCOUNT_STRIP_REGEX, " ")
         .replace(USAGE_DISCOUNT_STRIP_REGEX, " ")
+        .replace(MIXED_PAYMENT_DISCOUNT_SUFFIX_REGEX, " ")
         .replace(DISCOUNT_BALANCE_STRIP_REGEX, " ")
         .replace(WHITESPACE_RUN_REGEX, " ")
         .trim(' ', '\t', ',', '，', ';', '；', '、', '/', '|')
+        .trimEnd('+', ' ')
+
+    private fun sanitizePaymentMethodText(raw: String): String {
+        if (raw.isBlank()) return ""
+        return raw
+            .replace(PARENTHESIZED_DISCOUNT_STRIP_REGEX, " ")
+            .replace(MIXED_PAYMENT_DISCOUNT_SUFFIX_REGEX, " ")
+            .replace(WHITESPACE_RUN_REGEX, " ")
+            .trim(' ', '\t', ',', '，', ';', '；', '、', '/', '|', '+')
+    }
 
     private fun containsNoiseAmountKeyword(text: String): Boolean =
         NOISE_AMOUNT_LINE_KEYWORDS.any { text.contains(it, ignoreCase = true) } ||
@@ -984,38 +1263,83 @@ class ScreenBillParser(
         fields: List<ExtractedField>,
         dominantSign: String?
     ): String {
-        val statusText = extractFirstFieldValue(fields, FieldKey.STATUS)
-        val headerSlice = lines.take(12).joinToString("\n")
-        val checkSurface = "$statusText\n$headerSlice"
+        // 第 1 优先级（最高）：主金额本身带有明确正负号，绝不被下方优惠返现/二维码收款/退款详情反转
+        if (dominantSign == "-") return TransactionType.EXPENSE
+        if (dominantSign == "+") return TransactionType.INCOME
 
-        // 1. 明确退款到账/已退款 -> INCOME（排除“申请退款”按钮）
+        val hasIncomePaymentField = fields.any {
+            it.key == FieldKey.PAYMENT_METHOD && isIncomePaymentMethodLabel(it.rawLabel)
+        }
+        val hasExpensePaymentField = fields.any {
+            it.key == FieldKey.PAYMENT_METHOD && isExpensePaymentMethodLabel(it.rawLabel)
+        }
+        val hasIncomeTimeField = fields.any {
+            it.key == FieldKey.TIME && isIncomeTimeLabel(it.rawLabel)
+        }
+        val hasExpenseTimeField = fields.any {
+            it.key == FieldKey.TIME && isExpenseTimeLabel(it.rawLabel)
+        }
+
+        val statusText = extractFirstFieldValue(fields, FieldKey.STATUS)
+        val goodsText = extractGoods(fields)
+        val headerSlice = lines.take(12).joinToString("\n")
+        val checkSurface = "$statusText\n$goodsText\n$headerSlice"
         val sanitizedForRefund = REFUND_BUTTON_EXCLUSION_REGEX.replace(checkSurface, " ")
-        if (REFUND_INCOME_KEYWORDS.any { sanitizedForRefund.contains(it, ignoreCase = true) } ||
-            fields.any { it.key == FieldKey.TIME && it.rawLabel.contains("退款") }
-        ) {
+        val isExplicitFullRefundStatus = FULL_REFUND_STATUS_KEYWORDS.any { kw ->
+            statusText.contains(kw, ignoreCase = true) ||
+                lines.take(8).any { line ->
+                    REFUND_BUTTON_EXCLUSION_REGEX.replace(line, " ").contains(kw, ignoreCase = true)
+                }
+        }
+
+        // 第 2 优先级：强方向结构字段（如 "收款方式" -> INCOME，"付款方式" -> EXPENSE）
+        if (hasIncomePaymentField && !hasExpensePaymentField) {
             return TransactionType.INCOME
         }
-
-        // 2. 转账：先区分“对方已收款”（我方支出）与“你已收款/已收款”（我方收入）
-        val hasCounterpartyReceived = COUNTERPARTY_RECEIVED_KEYWORDS.any {
-            checkSurface.contains(it, ignoreCase = true)
+        if (hasExpensePaymentField || hasExpenseTimeField) {
+            return if (isExplicitFullRefundStatus) TransactionType.INCOME else TransactionType.EXPENSE
         }
-        if (hasCounterpartyReceived) {
+
+        // 第 3 优先级：转账对方已收款等我方支出信号
+        if (COUNTERPARTY_RECEIVED_KEYWORDS.any { checkSurface.contains(it, ignoreCase = true) }) {
             return TransactionType.EXPENSE
         }
 
-        // 3. 明确收款 / 到账 / 收入信号 -> INCOME
-        if (INCOME_SCREEN_KEYWORDS.any { checkSurface.contains(it, ignoreCase = true) } ||
-            fields.any { it.key == FieldKey.TIME && it.rawLabel.contains("收款") }
-        ) {
+        if (hasIncomeTimeField) {
             return TransactionType.INCOME
         }
 
-        // 4. 金额前缀正负号
-        if (dominantSign == "+") return TransactionType.INCOME
-        if (dominantSign == "-") return TransactionType.EXPENSE
+        // 第 4 优先级：无正负号且无支出字段时的紧缩收入语义兜底（排除孤立的二维码收款/返现/已到账/退款详情/部分已退）
+        if (INCOME_CONFIRM_REGEX.containsMatchIn(sanitizedForRefund)) {
+            return TransactionType.INCOME
+        }
 
         return TransactionType.EXPENSE
+    }
+
+    private fun isIncomePaymentMethodLabel(rawLabel: String): Boolean {
+        val normalized = normalizeFieldLabelKey(rawLabel)
+        return normalized in INCOME_PAYMENT_METHOD_LABELS
+    }
+
+    private fun isExpensePaymentMethodLabel(rawLabel: String): Boolean {
+        val normalized = normalizeFieldLabelKey(rawLabel)
+        return normalized in EXPENSE_PAYMENT_METHOD_LABELS
+    }
+
+    private fun isIncomeTimeLabel(rawLabel: String): Boolean {
+        val lower = rawLabel.trim().lowercase(Locale.ROOT)
+        return INCOME_TIME_KEYWORDS.any { lower.contains(it) }
+    }
+
+    private fun isExpenseTimeLabel(rawLabel: String): Boolean {
+        val lower = rawLabel.trim().lowercase(Locale.ROOT)
+        return EXPENSE_TIME_KEYWORDS.any { lower.contains(it) }
+    }
+
+    private fun normalizeFieldLabelKey(rawLabel: String): String {
+        val normalized = rawLabel.trim().trimEnd(':', '：').lowercase(Locale.ROOT)
+        return UNIT_SUFFIX_STRIP_REGEX.replace(normalized, "").trim()
     }
 
     private fun extractTransactionTimestamp(
@@ -1273,6 +1597,7 @@ class ScreenBillParser(
 
     private fun isNonMerchantUiText(lower: String): Boolean =
         lower in UI_STOP_WORDS ||
+            lower in PLACEHOLDER_FIELD_VALUES ||
             UI_STOP_PREFIXES.any { lower.startsWith(it) } ||
             PAY_SUCCESS_PHRASES.any { lower == it } ||
             IGNORED_STATUS_KEYWORDS.any { lower == it }
@@ -1280,7 +1605,7 @@ class ScreenBillParser(
     private fun cleanMerchantCandidate(raw: String): String? {
         var s = raw.trim()
         if (s.isEmpty()) return null
-        if (isLikelyFieldLabel(s)) return null
+        if (isStrictFieldLabel(s) || isPlaceholderFieldValue(s)) return null
 
         // 在剥离“向/给/在/付款/转账”等前后缀之前先检查原始文本，避免“在浏览器打开”等系统 UI 文案绕过停用词表
         if (isNonMerchantUiText(s.lowercase(Locale.ROOT))) return null
@@ -1304,6 +1629,17 @@ class ScreenBillParser(
 
     private fun extractFirstFieldValue(fields: List<ExtractedField>, key: FieldKey): String =
         fields.firstOrNull { it.key == key }?.value?.trim().orEmpty()
+
+    private fun extractGoods(fields: List<ExtractedField>): String =
+        fields.asSequence()
+            .filter { it.key == FieldKey.GOODS }
+            .map { it.value.trim() }
+            .firstOrNull { value ->
+                value.isNotEmpty() &&
+                    !isPlaceholderFieldValue(value) &&
+                    value.lowercase(Locale.ROOT) !in CHROME_NOISE_LINES
+            }
+            .orEmpty()
 
     private fun buildSummaryText(lines: List<String>): String {
         val filtered = lines.filterNot { line ->
@@ -1467,6 +1803,23 @@ class ScreenBillParser(
             RegexOption.IGNORE_CASE
         )
 
+        private val SPLIT_INT_PART_REGEX = Regex(
+            "^(?:(?:[+-]?(?:US\\$|HK\\$|NT\\$|S\\$|A\\$|C\\$|JP¥|\\$|€|£|¥|￥|₩)?[+-]?)|(?:[+-]?(?:USD|EUR|GBP|HKD|JPY|SGD|AUD|CAD|CHF|TWD|KRW|CNY|RMB)\\s+))?[0-9]{1,9}(?:,[0-9]{3})*$",
+            RegexOption.IGNORE_CASE
+        )
+        private val SPLIT_DOT_DEC_REGEX = Regex(
+            "^\\.[0-9]{1,2}(?:元|USD|EUR|GBP|HKD|JPY|SGD|AUD|CAD|CHF|TWD|KRW|CNY|RMB)?$",
+            RegexOption.IGNORE_CASE
+        )
+        private val SPLIT_INT_DOT_REGEX = Regex(
+            "^(?:(?:[+-]?(?:US\\$|HK\\$|NT\\$|S\\$|A\\$|C\\$|JP¥|\\$|€|£|¥|￥|₩)?[+-]?)|(?:[+-]?(?:USD|EUR|GBP|HKD|JPY|SGD|AUD|CAD|CHF|TWD|KRW|CNY|RMB)\\s+))?[0-9]{1,9}(?:,[0-9]{3})*\\.$",
+            RegexOption.IGNORE_CASE
+        )
+        private val SPLIT_DEC_DIGITS_REGEX = Regex(
+            "^[0-9]{1,2}(?:元|USD|EUR|GBP|HKD|JPY|SGD|AUD|CAD|CHF|TWD|KRW|CNY|RMB)?$",
+            RegexOption.IGNORE_CASE
+        )
+
         private val SPLIT_NUMBER_REGEX = Regex("^[0-9]+(?:,[0-9]{3})*(?:\\.[0-9]{1,2})?$")
         private val SPLIT_SIGNED_NUMBER_REGEX = Regex("^[+-]?[0-9]+(?:,[0-9]{3})*(?:\\.[0-9]{1,2})?$")
         private val SPLIT_SUFFIX_CURRENCY_REGEX = Regex(
@@ -1547,6 +1900,7 @@ class ScreenBillParser(
             "订单编号" to FieldKey.ORDER_NO,
             "商户单号" to FieldKey.ORDER_NO,
             "商户订单号" to FieldKey.ORDER_NO,
+            "商家订单号" to FieldKey.ORDER_NO,
             "transaction id" to FieldKey.ORDER_NO,
             "transaction no" to FieldKey.ORDER_NO,
             "order id" to FieldKey.ORDER_NO,
@@ -1584,6 +1938,9 @@ class ScreenBillParser(
             "转账说明" to FieldKey.GOODS,
             "交易说明" to FieldKey.GOODS,
             "备注" to FieldKey.GOODS,
+            "备注…" to FieldKey.GOODS,
+            "备注..." to FieldKey.GOODS,
+            "备注信息" to FieldKey.GOODS,
             "红包说明" to FieldKey.GOODS,
             "付款方留言" to FieldKey.GOODS,
             "转账备注" to FieldKey.GOODS,
@@ -1640,6 +1997,7 @@ class ScreenBillParser(
             "汇率" to FieldKey.IGNORED_AMOUNT,
             "参考汇率" to FieldKey.IGNORED_AMOUNT,
             "优惠" to FieldKey.IGNORED_AMOUNT,
+            "优惠信息" to FieldKey.IGNORED_AMOUNT,
             "优惠金额" to FieldKey.IGNORED_AMOUNT,
             "支付优惠" to FieldKey.IGNORED_AMOUNT,
             "优惠说明" to FieldKey.IGNORED_AMOUNT,
@@ -1655,15 +2013,27 @@ class ScreenBillParser(
             "代金券" to FieldKey.IGNORED_AMOUNT,
             "优惠券" to FieldKey.IGNORED_AMOUNT,
             "商家券" to FieldKey.IGNORED_AMOUNT,
+            "消费金" to FieldKey.IGNORED_AMOUNT,
+            "花呗金" to FieldKey.IGNORED_AMOUNT,
+            "体验金" to FieldKey.IGNORED_AMOUNT,
+            "鼓励金" to FieldKey.IGNORED_AMOUNT,
+            "淘金币" to FieldKey.IGNORED_AMOUNT,
             "满减" to FieldKey.IGNORED_AMOUNT,
             "抵扣" to FieldKey.IGNORED_AMOUNT,
+            "抵用" to FieldKey.IGNORED_AMOUNT,
             "红包" to FieldKey.IGNORED_AMOUNT,
             "红包抵扣" to FieldKey.IGNORED_AMOUNT,
             "折扣" to FieldKey.IGNORED_AMOUNT,
             "补贴" to FieldKey.IGNORED_AMOUNT,
             "减免" to FieldKey.IGNORED_AMOUNT,
+            "已减" to FieldKey.IGNORED_AMOUNT,
+            "共减" to FieldKey.IGNORED_AMOUNT,
+            "直降" to FieldKey.IGNORED_AMOUNT,
+            "免单" to FieldKey.IGNORED_AMOUNT,
             "返现" to FieldKey.IGNORED_AMOUNT,
             "省钱" to FieldKey.IGNORED_AMOUNT,
+            "笔笔攒" to FieldKey.IGNORED_AMOUNT,
+            "运费险" to FieldKey.IGNORED_AMOUNT,
             "积分" to FieldKey.IGNORED_AMOUNT,
             "集分宝" to FieldKey.IGNORED_AMOUNT,
             "手续费" to FieldKey.IGNORED_AMOUNT,
@@ -1676,6 +2046,8 @@ class ScreenBillParser(
         )
 
         private val LABEL_DISQUALIFIER_REGEX = Regex("[0-9¥￥$€£₩()（）]")
+        private val LABEL_SENTENCE_PUNCT_REGEX = Regex("[:：，,。.!！?？;；、…\"'“”‘’「」『』]")
+        private val NON_IGNORED_LABEL_PREFIXES = listOf("收到", "领取", "发", "抢", "向", "给", "在", "含")
 
         private val DECIMAL_OR_CURRENCY_SYMBOL_REGEX = Regex("(?:[¥￥$€£₩]|\\d+\\.\\d{1,2})")
 
@@ -1696,14 +2068,23 @@ class ScreenBillParser(
             "消费金额", "交易金额", "账单金额", "退款金额", "退回金额", "收款金额", "转账金额"
         )
 
+        private val VALID_ACCOUNT_METHOD_LABELS = setOf(
+            "账户余额", "余额", "可用余额", "当前余额",
+            "余额宝", "余利宝", "零钱", "零钱通", "支付宝余额", "余额支付", "微信零钱"
+        )
+
+        private val PLACEHOLDER_FIELD_VALUES = setOf(
+            "添加", "去添加", "点击添加", "请选择", "开关", "未设置", "暂无", "去设置"
+        )
+
         private val NON_IGNORED_LABEL_EXCLUSIONS = setOf(
-            "微信红包", "支付宝红包", "qq红包", "企业微信红包",
-            "收到红包", "领取红包", "红包已领取", "发红包", "抢红包",
-            "余额宝", "余利宝", "零钱通", "余额支付", "返现成功", "返现到账"
+            "微信红包", "qq红包", "企业微信红包",
+            "收到红包", "领取红包", "收到口令红包", "红包已领取", "发红包", "抢红包",
+            "余额宝", "余利宝", "零钱", "零钱通", "余额支付", "返现成功", "返现到账"
         )
 
         private val IGNORED_FIELD_LABEL_REGEX = Regex(
-            "(?:优惠|立减|红包|折扣|抵扣|满减|代金券|优惠券|消费券|商家券|补贴|减免|返现|省钱|积分|集分宝|余额|汇率|手续费|服务费|\\bdiscounts?\\b|\\bcoupons?\\b|\\bvouchers?\\b|\\bcashback\\b|\\bbalances?\\b|\\bfees?\\b)",
+            "(?:优惠信息|优惠|立减|红包|折扣|抵扣|抵用|满减|代金券|优惠券|消费券|商家券|消费金|花呗金|体验金|鼓励金|淘金币|补贴|减免|已减|共减|直降|免单|返现|省钱|共省|已省|立省|省了|节省|碰一下|笔笔攒|运费险|组合支付|积分|集分宝|余额|汇率|手续费|服务费|\\bdiscounts?\\b|\\bcoupons?\\b|\\bvouchers?\\b|\\bcashback\\b|\\bbalances?\\b|\\bfees?\\b)",
             RegexOption.IGNORE_CASE
         )
 
@@ -1723,23 +2104,42 @@ class ScreenBillParser(
             "折合人民币" to FieldKey.ACTUAL_AMOUNT,
             "实付" to FieldKey.ACTUAL_AMOUNT,
             "支付优惠" to FieldKey.IGNORED_AMOUNT,
+            "优惠信息" to FieldKey.IGNORED_AMOUNT,
             "优惠说明" to FieldKey.IGNORED_AMOUNT,
             "优惠明细" to FieldKey.IGNORED_AMOUNT,
             "优惠金额" to FieldKey.IGNORED_AMOUNT,
             "商家优惠" to FieldKey.IGNORED_AMOUNT,
             "平台优惠" to FieldKey.IGNORED_AMOUNT,
+            "碰一下立减" to FieldKey.IGNORED_AMOUNT,
             "官方立减" to FieldKey.IGNORED_AMOUNT,
             "微信立减金" to FieldKey.IGNORED_AMOUNT,
             "立减金" to FieldKey.IGNORED_AMOUNT,
+            "支付宝红包" to FieldKey.IGNORED_AMOUNT,
             "红包抵扣" to FieldKey.IGNORED_AMOUNT,
             "消费券" to FieldKey.IGNORED_AMOUNT,
             "代金券" to FieldKey.IGNORED_AMOUNT,
             "优惠券" to FieldKey.IGNORED_AMOUNT,
             "商家券" to FieldKey.IGNORED_AMOUNT,
+            "消费金" to FieldKey.IGNORED_AMOUNT,
+            "花呗金" to FieldKey.IGNORED_AMOUNT,
+            "体验金" to FieldKey.IGNORED_AMOUNT,
+            "鼓励金" to FieldKey.IGNORED_AMOUNT,
+            "淘金币" to FieldKey.IGNORED_AMOUNT,
+            "笔笔攒" to FieldKey.IGNORED_AMOUNT,
+            "运费险" to FieldKey.IGNORED_AMOUNT,
+            "组合支付" to FieldKey.IGNORED_AMOUNT,
             "支付方式" to FieldKey.PAYMENT_METHOD,
             "付款方式" to FieldKey.PAYMENT_METHOD,
+            "收款方式" to FieldKey.PAYMENT_METHOD,
+            "扣款方式" to FieldKey.PAYMENT_METHOD,
+            "存入账户" to FieldKey.PAYMENT_METHOD,
+            "退款去向" to FieldKey.PAYMENT_METHOD,
+            "退回账户" to FieldKey.PAYMENT_METHOD,
+            "提现银行" to FieldKey.PAYMENT_METHOD,
             "交易单号" to FieldKey.ORDER_NO,
             "转账单号" to FieldKey.ORDER_NO,
+            "商家订单号" to FieldKey.ORDER_NO,
+            "商户订单号" to FieldKey.ORDER_NO,
             "订单号" to FieldKey.ORDER_NO,
             "商户单号" to FieldKey.ORDER_NO,
             "支付时间" to FieldKey.TIME,
@@ -1748,7 +2148,10 @@ class ScreenBillParser(
             "收钱时间" to FieldKey.TIME,
             "转账时间" to FieldKey.TIME,
             "提现时间" to FieldKey.TIME,
-            "提现银行" to FieldKey.PAYMENT_METHOD,
+            "红包说明" to FieldKey.GOODS,
+            "商品说明" to FieldKey.GOODS,
+            "转账说明" to FieldKey.GOODS,
+            "账单分类" to FieldKey.META,
             "收单机构" to FieldKey.META,
             "清算机构" to FieldKey.META
         )
@@ -1764,6 +2167,13 @@ class ScreenBillParser(
             FieldKey.ACTUAL_AMOUNT,
             FieldKey.FOREIGN_AMOUNT,
             FieldKey.META
+        )
+
+        private val EXTRACTED_AMOUNT_KEYS = setOf(
+            FieldKey.ACTUAL_AMOUNT,
+            FieldKey.FOREIGN_AMOUNT,
+            FieldKey.AMOUNT,
+            FieldKey.ORDER_AMOUNT
         )
 
         private val SKIP_AMOUNT_SCAN_KEYS = setOf(
@@ -1874,30 +2284,48 @@ class ScreenBillParser(
             "怎么办", "如何", "常见", "帮助", "疑问", "客服"
         )
 
-        private val REFUND_BUTTON_EXCLUSION_REGEX = Regex("(?:申请退款|我要退款|申请售后|退款记录)")
-
-        private val REFUND_INCOME_KEYWORDS = listOf(
-            "退款成功", "已退款", "退款到账", "已退回", "原路退回",
-            "退款金额", "退款详情", "已全额退款", "部分已退", "refunded", "refund successful"
+        private val INCOME_PAYMENT_METHOD_LABELS = setOf(
+            "收款方式", "收款账户", "存入账户", "入账方式", "入账账户", "退款去向", "退回账户", "退回方式"
         )
+
+        private val EXPENSE_PAYMENT_METHOD_LABELS = setOf(
+            "付款方式", "支付方式", "扣款方式", "付款账号", "付款卡号", "扣款银行卡", "扣款账户", "资金来源", "还款银行卡"
+        )
+
+        private val INCOME_TIME_KEYWORDS = listOf("收款", "收钱", "退款", "入账", "收红包", "领取")
+        private val EXPENSE_TIME_KEYWORDS = listOf("支付", "付款", "扣款", "发红包")
+
+        private val FULL_REFUND_STATUS_KEYWORDS = listOf(
+            "退款成功", "已全额退款", "退款到账", "已退款", "refund successful", "refunded"
+        )
+
+        private val REFUND_BUTTON_EXCLUSION_REGEX = Regex("(?:申请退款|我要退款|申请售后|退款记录|退款详情|部分已退)")
 
         private val COUNTERPARTY_RECEIVED_KEYWORDS = listOf(
             "对方已收款", "对方已收钱", "对方已领取", "等待对方收款", "等待对方收钱", "待对方收款", "对方已领"
         )
 
-        private val INCOME_SCREEN_KEYWORDS = listOf(
-            "已收款", "收款成功", "收款金额", "二维码收款", "赞赏码收款",
-            "收到转账", "已存入零钱", "已存入零钱通", "到账成功", "已到账", "入账成功",
-            "工资", "分红", "返现", "收到红包", "红包已领取",
-            "you received", "money received"
+        private val INCOME_CONFIRM_REGEX = Regex(
+            "(?:收到.{0,8}(?:红包|转账|款项|付款)|领到.{0,6}红包|你已收款|已收款|收款成功|已存入零钱通?|退款成功|已全额退款|已退款|退款到账|原路退回|已退回|工资|分红|you\\s+received|money\\s+received|refund\\s+successful)",
+            RegexOption.IGNORE_CASE
         )
 
         private val NOISE_AMOUNT_LINE_KEYWORDS = listOf(
-            "支付优惠", "优惠说明", "优惠明细", "商家优惠", "平台优惠", "官方立减", "立减金",
-            "消费券", "代金券", "优惠券", "商家券", "满减", "抵扣", "已优惠", "优惠了",
+            "支付优惠", "优惠信息", "优惠说明", "优惠明细", "商家优惠", "平台优惠", "官方立减", "立减金",
+            "消费券", "代金券", "优惠券", "商家券", "消费金", "花呗金", "体验金", "鼓励金", "淘金币",
+            "满减", "抵扣", "抵用", "已优惠", "优惠了", "已减", "共减", "直降", "免单",
             "已省", "共省", "省了", "立省", "省钱", "节省", "返现", "补贴", "减免", "集分宝",
+            "碰一下", "笔笔攒", "运费险", "组合支付", "支付宝红包",
             "立减", "优惠", "红包", "折扣", "积分",
             "当前余额", "可用余额", "账户余额", "参考汇率", "汇率", "手续费", "服务费", "费率"
+        )
+
+        private val MIXED_PAYMENT_NOISE_REGEX = Regex(
+            "(?:红包|优惠|立减|满减|代金券|优惠券|消费券|商家券|消费金|花呗金|体验金|鼓励金|淘金币|集分宝|积分|抵扣|抵用|组合支付|补贴|减免|返现|碰一下)"
+        )
+
+        private val MIXED_PAYMENT_DISCOUNT_SUFFIX_REGEX = Regex(
+            "\\s*[+/]\\s*(?:支付宝)?(?:红包|立减金|消费券|优惠券|代金券|商家券|消费金|花呗金|体验金|鼓励金|淘金币|集分宝|积分|抵扣|抵用|优惠|补贴|减免)[^+/]*"
         )
 
         private val SAVINGS_AMOUNT_REGEX = Regex(
@@ -1937,15 +2365,15 @@ class ScreenBillParser(
             RegexOption.IGNORE_CASE
         )
         private val PARENTHESIZED_DISCOUNT_STRIP_REGEX = Regex(
-            "[(（](?=[^()（）]*[0-9])[^()（）]*(?:优惠|立减|红包|折扣|抵扣|满减|满\\s*[0-9.]+\\s*减\\s*[0-9.]+|代金券|优惠券|消费券|商家券|补贴|减免|返现|已省|共省|立省|省了|省钱|省\\s*(?:[¥￥$€£₩]|[0-9]+\\s*(?:元|块))|积分|集分宝|余额|汇率|手续费|服务费|discount|coupon|voucher|cashback|balance|fee)[^()（）]*[)）]",
+            "[(（](?=[^()（）]*[0-9])[^()（）]*(?:优惠信息|优惠|立减|红包|折扣|抵扣|抵用|满减|满\\s*[0-9.]+\\s*减\\s*[0-9.]+|代金券|优惠券|消费券|商家券|消费金|花呗金|体验金|鼓励金|淘金币|补贴|减免|已减|共减|直降|免单|返现|已省|共省|立省|省了|省钱|节省|省\\s*(?:[¥￥$€£₩]|[0-9]+\\s*(?:元|块))|碰一下|笔笔攒|运费险|积分|集分宝|余额|汇率|手续费|服务费|discount|coupon|voucher|cashback|balance|fee)[^()（）]*[)）]",
             RegexOption.IGNORE_CASE
         )
         private val USAGE_DISCOUNT_STRIP_REGEX = Regex(
-            "(?:已?使用|用了|使用|叠加|含|共)?\\s*[+-]?\\s*(?:US\\$|HK\\$|NT\\$|S\\$|A\\$|C\\$|JP¥|USD|EUR|GBP|HKD|JPY|SGD|AUD|CAD|CHF|TWD|KRW|CNY|RMB|[¥￥$€£₩])?\\s*[0-9]+(?:,[0-9]{3})*(?:\\.[0-9]{1,2})?\\s*(?:元|块|USD|EUR|GBP|CNY|RMB)?\\s*(?:的)?(?:立减金|代金券|优惠券|消费券|商家券|红包|集分宝|积分|折扣券)",
+            "(?:已?使用|用了|使用|叠加|含|共)?\\s*[+-]?\\s*(?:US\\$|HK\\$|NT\\$|S\\$|A\\$|C\\$|JP¥|USD|EUR|GBP|HKD|JPY|SGD|AUD|CAD|CHF|TWD|KRW|CNY|RMB|[¥￥$€£₩])?\\s*[0-9]+(?:,[0-9]{3})*(?:\\.[0-9]{1,2})?\\s*(?:元|块|USD|EUR|GBP|CNY|RMB)?\\s*(?:的)?(?:立减金|代金券|优惠券|消费券|商家券|消费金|花呗金|体验金|鼓励金|淘金币|抵用券|红包|集分宝|积分|折扣券)",
             RegexOption.IGNORE_CASE
         )
         private val DISCOUNT_BALANCE_STRIP_REGEX = Regex(
-            "(?:当前余额|可用余额|账户余额|余额|参考汇率|汇率|支付优惠|优惠说明|优惠明细|商家优惠|平台优惠|官方立减|微信立减金|立减金|立减|已优惠|优惠了|优惠金额|优惠|满减|代金券|优惠券|消费券|商家券|折扣|抵扣|补贴|减免|返现|集分宝|积分|手续费|服务费|费率|已省|共省|立省|省了|省钱|(?<![\\u4e00-\\u9fa5])省|discount|coupon|voucher|cashback|balance|service\\s+fee|fee)[:：]?\\s*[+-]?\\s*(?:US\\$|HK\\$|NT\\$|S\\$|A\\$|C\\$|JP¥|USD|EUR|GBP|HKD|JPY|SGD|AUD|CAD|CHF|TWD|KRW|CNY|RMB|[¥￥$€£₩])?\\s*[+-]?\\s*[0-9]+(?:,[0-9]{3})*(?:\\.[0-9]{1,2})?\\s*(?:元|块|USD|EUR|GBP|CNY|RMB)?",
+            "(?:当前余额|可用余额|账户余额|余额|参考汇率|汇率|支付优惠|优惠信息|优惠说明|优惠明细|商家优惠|平台优惠|碰一下立减|碰一下|官方立减|微信立减金|立减金|立减|已优惠|优惠了|优惠金额|优惠|支付宝红包|红包抵扣|红包优惠|满减|代金券|优惠券|消费券|商家券|消费金|花呗金|体验金|鼓励金|淘金币|折扣|抵扣|抵用|补贴|减免|已减|共减|直降|免单|返现|笔笔攒|运费险|组合支付|集分宝|积分|手续费|服务费|费率|已省|共省|立省|省了|省钱|节省|(?<![\\u4e00-\\u9fa5])省|discount|coupon|voucher|cashback|balance|service\\s+fee|fee)[:：]?\\s*[+-]?\\s*(?:US\\$|HK\\$|NT\\$|S\\$|A\\$|C\\$|JP¥|USD|EUR|GBP|HKD|JPY|SGD|AUD|CAD|CHF|TWD|KRW|CNY|RMB|[¥￥$€£₩])?\\s*[+-]?\\s*[0-9]+(?:,[0-9]{3})*(?:\\.[0-9]{1,2})?\\s*(?:元|块|USD|EUR|GBP|CNY|RMB)?",
             RegexOption.IGNORE_CASE
         )
 
@@ -1965,14 +2393,14 @@ class ScreenBillParser(
         private val ORDER_NO_VALID_REGEX = Regex("^[A-Za-z0-9_-]{6,64}$")
 
         private val NOISE_MERCHANT_LINE_REGEX = Regex(
-            "^(?:消费金额|外币金额|原币金额|原始金额|实付|实付款|付款金额|支付金额|折算人民币|折合人民币|支付优惠|优惠说明|优惠明细|商家优惠|平台优惠|官方立减|微信立减金|立减金|已优惠|优惠了|优惠|立减|满减|代金券|优惠券|消费券|商家券|折扣|抵扣|补贴|减免|返现|集分宝|已省|共省|立省|省钱|红包(?!$)|使用\\s*[0-9.]+\\s*元|满\\s*[0-9.]+\\s*减\\s*[0-9.]+|当前余额|可用余额|余额|尾号|卡号)"
+            "^(?:消费金额|外币金额|原币金额|原始金额|实付|实付款|付款金额|支付金额|折算人民币|折合人民币|支付优惠|优惠信息|优惠说明|优惠明细|商家优惠|平台优惠|碰一下立减|碰一下|官方立减|微信立减金|立减金|已优惠|优惠了|优惠|立减|满减|代金券|优惠券|消费券|商家券|消费金|花呗金|体验金|鼓励金|淘金币|折扣|抵扣|抵用|补贴|减免|已减|共减|直降|免单|返现|笔笔攒|运费险|组合支付|集分宝|已省|共省|立省|省了|省钱|节省|支付宝红包|红包(?!$)|使用\\s*[0-9.]+\\s*元|满\\s*[0-9.]+\\s*减\\s*[0-9.]+|当前余额|可用余额|余额|尾号|卡号)"
         )
         private val MERCHANT_ACTION_PREFIX_REGEX = Regex("^(?:向|给|付款给|转账给|转给|在)\\s*")
         private val MERCHANT_ACTION_SUFFIX_REGEX = Regex("\\s*(?:付款|支付|转账|消费|收款)$")
         private val PURE_NUMBER_OR_CARD_REGEX = Regex("^[\\d*xX()（）\\s-]+$")
 
         private val UI_STOP_WORDS = setOf(
-            "账单详情", "交易详情", "收支详情", "转账详情", "收款详情", "退款详情", "订单详情",
+            "账单详情", "账单详情页", "交易详情", "收支详情", "转账详情", "收款详情", "退款详情", "订单详情",
             "交易明细", "账单明细", "电子回单", "支付结果", "付款结果", "交易结果",
             "支付成功", "付款成功", "交易成功", "消费成功", "转账成功", "汇款成功", "收款成功",
             "已收款", "已存入零钱", "退款成功", "已退款", "退款到账", "已退回",
@@ -1983,7 +2411,8 @@ class ScreenBillParser(
             "定位到聊天位置", "查看往来记录", "全部账单", "查看红包详情", "红包详情",
             "复制链接", "在浏览器打开", "在默认浏览器打开", "刷新", "搜索页面内容", "字体大小", "调整字体", "浮窗",
             "发送给朋友", "分享到朋友圈",
-            "更多", "删除账单", "标签和备注", "添加备注", "分类", "计入收支", "不计入收支",
+            "更多", "删除账单", "标签和备注", "添加备注", "备注…", "备注...", "分类", "计入收支", "不计入收支",
+            "添加", "去添加", "点击添加", "请选择", "开关", "未设置", "暂无", "去设置",
             "微信", "微信支付", "微信收款助手", "支付宝", "云闪付", "财付通", "招商银行", "工商银行", "建设银行",
             "农业银行", "中国银行", "交通银行", "平安银行", "wise", "paypal", "revolut",
             "支付", "收款", "转账", "付款", "人民币", "美元", "欧元", "英镑", "done", "ok", "close"
@@ -2000,7 +2429,8 @@ class ScreenBillParser(
 
         private val CHROME_NOISE_LINES = setOf(
             "返回", "复制", "已复制", "copy", "常见问题", "对订单有疑惑", "对此订单有疑问",
-            "在此商户的交易记录", "申请开票", "标签和备注", "添加备注", "删除账单"
+            "在此商户的交易记录", "申请开票", "标签和备注", "添加备注", "备注…", "备注...",
+            "添加", "去添加", "点击添加", "请选择", "开关", "未设置", "暂无", "去设置", "删除账单"
         )
     }
 }
