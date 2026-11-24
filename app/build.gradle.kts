@@ -6,12 +6,22 @@ plugins {
     id("com.google.devtools.ksp")
 }
 
+val releaseStorePath = System.getenv("SIGNING_STORE_FILE")?.takeIf { it.isNotBlank() }
+val releaseStorePassword = System.getenv("SIGNING_STORE_PASSWORD")?.takeIf { it.isNotBlank() }
+val releaseKeyAlias = System.getenv("SIGNING_KEY_ALIAS")?.takeIf { it.isNotBlank() }
+val releaseKeyPassword = System.getenv("SIGNING_KEY_PASSWORD")?.takeIf { it.isNotBlank() }
+val hasReleaseSigning = releaseStorePath != null &&
+    releaseStorePassword != null &&
+    releaseKeyAlias != null &&
+    releaseKeyPassword != null &&
+    file(releaseStorePath).exists()
+
 android {
-    namespace = "com.kairoledger.app"
+    namespace = "com.yubrae.app"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.kairoledger.app"
+        applicationId = "com.yubrae.app"
         minSdk = 26
         targetSdk = 35
         versionCode = 1
@@ -23,10 +33,24 @@ android {
         }
     }
 
+    if (hasReleaseSigning) {
+        signingConfigs {
+            create("release") {
+                storeFile = file(releaseStorePath!!)
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
+            if (hasReleaseSigning) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -104,26 +128,40 @@ dependencies {
     implementation("androidx.datastore:datastore-preferences:1.1.1")
     implementation("androidx.work:work-runtime-ktx:2.10.0")
     implementation("androidx.biometric:biometric:1.1.0")
+    implementation("androidx.fragment:fragment-ktx:1.8.5")
 
     implementation("androidx.glance:glance-appwidget:1.1.1")
     implementation("androidx.glance:glance-material3:1.1.1")
 
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
+    implementation("net.sourceforge.jexcelapi:jxl:2.6.12") {
+        exclude(group = "log4j", module = "log4j")
+    }
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
 }
 
 afterEvaluate {
-    listOf("assembleDebug" to "debug", "assemblePerf" to "perf").forEach { (taskName, variantName) ->
+    listOf(
+        "assembleDebug" to "debug",
+        "assemblePerf" to "perf",
+        "assembleRelease" to "release"
+    ).forEach { (taskName, variantName) ->
         tasks.matching { it.name == taskName }.configureEach {
             doLast {
-                val builtApk = layout.buildDirectory.file("outputs/apk/$variantName/app-$variantName.apk").get().asFile
-                if (builtApk.exists()) {
-                    val mirrorDir = file("${projectDir}/build/outputs/apk/$variantName")
+                val apkPrefix = if (variantName == "release" && !hasReleaseSigning) {
+                    "app-$variantName-unsigned.apk"
+                } else {
+                    "app-$variantName.apk"
+                }
+                val builtApk = layout.buildDirectory.file("outputs/apk/$variantName/$apkPrefix").get().asFile
+                val mirrorDir = file("${projectDir}/build/outputs/apk/$variantName")
+                val mirrorApk = file("${mirrorDir}/$apkPrefix")
+                if (builtApk.exists() && builtApk.canonicalFile != mirrorApk.canonicalFile) {
                     mirrorDir.mkdirs()
-                    builtApk.copyTo(file("${mirrorDir}/app-$variantName.apk"), overwrite = true)
+                    builtApk.copyTo(mirrorApk, overwrite = true)
                 }
             }
         }

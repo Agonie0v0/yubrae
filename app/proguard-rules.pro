@@ -1,18 +1,18 @@
-# KairoLedger ProGuard rules
+# Yubrae ProGuard rules
 -keepattributes *Annotation*,Signature,InnerClasses,EnclosingMethod
--keep class com.kairoledger.app.KairoApplication { *; }
--keep class com.kairoledger.app.MainActivity { *; }
--keep class com.kairoledger.app.ui.viewmodel.KairoMainViewModel { *; }
--keep class com.kairoledger.app.ui.viewmodel.KairoViewModelFactory { *; }
+-keep class com.yubrae.app.KairoApplication { *; }
+-keep class com.yubrae.app.MainActivity { *; }
+-keep class com.yubrae.app.ui.viewmodel.KairoMainViewModel { *; }
+-keep class com.yubrae.app.ui.viewmodel.KairoViewModelFactory { *; }
 -keep class * extends androidx.lifecycle.ViewModel {
     <init>(...);
 }
--keep class com.kairoledger.app.data.** { *; }
--keep class com.kairoledger.app.core.** { *; }
--keep class com.kairoledger.app.sync.** { *; }
--keep class com.kairoledger.app.capture.** { *; }
--keep class com.kairoledger.app.importer.** { *; }
--keep class com.kairoledger.app.widget.** { *; }
+-keep class com.yubrae.app.data.** { *; }
+-keep class com.yubrae.app.core.** { *; }
+-keep class com.yubrae.app.sync.** { *; }
+-keep class com.yubrae.app.capture.** { *; }
+-keep class com.yubrae.app.importer.** { *; }
+-keep class com.yubrae.app.widget.** { *; }
 -keep class androidx.glance.** { *; }
 -keepclassmembers class * {
     @kotlinx.serialization.Serializable <init>(...);
@@ -23,3 +23,6 @@
 -dontwarn org.conscrypt.**
 -dontwarn org.openjsse.**
 -dontwarn javax.annotation.**
+-dontwarn jxl.**
+-dontwarn org.apache.log4j.**
+-keep class jxl.** { *; }

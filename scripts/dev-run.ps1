@@ -1,6 +1,6 @@
-﻿<#
+<#
 .SYNOPSIS
-    棱账 (KairoLedger) 构建、安装并自动重启小米 14 应用的开发脚本（默认构建 R8 优化性能包）。
+    余白 (YUBRAE) 构建、安装并自动重启小米 14 应用的开发脚本（默认构建 R8 优化性能包）。
 .EXAMPLE
     .\scripts\dev-run.ps1
     .\scripts\dev-run.ps1 -Debug
@@ -17,9 +17,9 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
-$PackageName = 'com.kairoledger.app.debug'
-$MainActivity = 'com.kairoledger.app.MainActivity'
-$A11yClass = 'com.kairoledger.app.capture.screen.KairoAccessibilityService'
+$PackageName = 'com.yubrae.app.debug'
+$MainActivity = 'com.yubrae.app.MainActivity'
+$A11yClass = 'com.yubrae.app.capture.screen.KairoAccessibilityService'
 $A11yShortClass = '.capture.screen.KairoAccessibilityService'
 $A11yComponent = "$PackageName/$A11yClass"
 $VariantName = if ($Debug) { 'debug' } else { 'perf' }
@@ -98,20 +98,20 @@ settings put secure accessibility_enabled 1
         Start-Sleep -Milliseconds 1000
         $verifyRaw = (& $AdbExe -s $serial shell settings get secure enabled_accessibility_services 2>$null) -join ''
         if (Test-HasKairoA11y (Get-A11yEntries $verifyRaw)) {
-            Write-Host "[KairoLedger] 已无损保持并启用无障碍页面监听服务。" -ForegroundColor Green
+            Write-Host "[Yubrae] 已无损保持并启用无障碍页面监听服务。" -ForegroundColor Green
             return
         }
         if ($attempt -eq 1) {
-            Write-Host "[KairoLedger] 检测到无障碍列表被系统清除，正在自动重试恢复..." -ForegroundColor Yellow
+            Write-Host "[Yubrae] 检测到无障碍列表被系统清除，正在自动重试恢复..." -ForegroundColor Yellow
         }
     }
-    Write-Host "[KairoLedger] 警告：重试后 enabled_accessibility_services 仍未保留 $A11yComponent。" -ForegroundColor Yellow
+    Write-Host "[Yubrae] 警告：重试后 enabled_accessibility_services 仍未保留 $A11yComponent。" -ForegroundColor Yellow
 }
 
 function Ensure-HyperOsKeepAlive([string]$serial) {
     $suCheck = (& $AdbExe -s $serial shell "su -c id 2>/dev/null" 2>$null) -join ''
     if ($suCheck -notmatch 'uid=0') {
-        Write-Host "[KairoLedger] 设备未授予 ADB Shell Root，跳过 HyperOS 防冻结与 AppOps 自动放行。" -ForegroundColor Yellow
+        Write-Host "[Yubrae] 设备未授予 ADB Shell Root，跳过 HyperOS 防冻结与 AppOps 自动放行。" -ForegroundColor Yellow
         return
     }
 
@@ -184,9 +184,9 @@ echo "__HYPEROS_KEEPALIVE_DONE__"
     $lfSh = ($rawSh -replace '__PKG__', $PackageName) -replace "`r`n", "`n"
     $out = ($lfSh | & $AdbExe -s $serial shell "su -c sh" 2>&1) -join "`n"
     if ($out -match '__HYPEROS_KEEPALIVE_DONE__') {
-        Write-Host "[KairoLedger] 已施加 HyperOS 3 防冻结保护 (noRestrict + immobulus + AppOps + 解冻)。" -ForegroundColor Green
+        Write-Host "[Yubrae] 已施加 HyperOS 3 防冻结保护 (noRestrict + immobulus + AppOps + 解冻)。" -ForegroundColor Green
     } else {
-        Write-Host "[KairoLedger] HyperOS 3 防冻结脚本未确认完成: $out" -ForegroundColor Yellow
+        Write-Host "[Yubrae] HyperOS 3 防冻结脚本未确认完成: $out" -ForegroundColor Yellow
     }
 }
 
@@ -194,32 +194,32 @@ function Invoke-BuildAndRestart {
     Push-Location $ProjectRoot
     try {
         [string[]]$tasks = if ($SkipTests) { @($AssembleTask) } else { @('testDebugUnitTest', $AssembleTask) }
-        Write-Host "[KairoLedger] 正在编译 ($VariantName): $($tasks -join ' ') ..." -ForegroundColor Cyan
+        Write-Host "[Yubrae] 正在编译 ($VariantName): $($tasks -join ' ') ..." -ForegroundColor Cyan
         & (Join-Path $ProjectRoot 'gradlew.bat') $tasks
         if ($LASTEXITCODE -ne 0) {
-            Write-Host "[KairoLedger] 构建失败 (exit=$LASTEXITCODE)" -ForegroundColor Red
+            Write-Host "[Yubrae] 构建失败 (exit=$LASTEXITCODE)" -ForegroundColor Red
             return $false
         }
         if (-not (Test-Path $ApkPath)) {
-            Write-Host "[KairoLedger] 未找到输出 APK: $ApkPath" -ForegroundColor Red
+            Write-Host "[Yubrae] 未找到输出 APK: $ApkPath" -ForegroundColor Red
             return $false
         }
 
         $target = Get-TargetDevice
         if (-not $target) {
-            Write-Host "[KairoLedger] 构建成功！未检测到在线 ADB 设备（请连接小米 14 并开启 USB/无线调试）。" -ForegroundColor Yellow
-            Write-Host "[KairoLedger] APK 路径: $ApkPath" -ForegroundColor Green
+            Write-Host "[Yubrae] 构建成功！未检测到在线 ADB 设备（请连接小米 14 并开启 USB/无线调试）。" -ForegroundColor Yellow
+            Write-Host "[Yubrae] APK 路径: $ApkPath" -ForegroundColor Green
             return $true
         }
 
         $beforeRaw = (& $AdbExe -s $target shell settings get secure enabled_accessibility_services 2>$null) -join ''
         $wasA11yEnabled = Test-HasKairoA11y (Get-A11yEntries $beforeRaw)
 
-        Write-Host "[KairoLedger] 正在安装到设备 $target ..." -ForegroundColor Cyan
+        Write-Host "[Yubrae] 正在安装到设备 $target ..." -ForegroundColor Cyan
         & $AdbExe -s $target install -r -d $ApkPath
         if ($LASTEXITCODE -ne 0) { throw "adb install 失败" }
 
-        Write-Host "[KairoLedger] 正在强停并自动重启 $PackageName ..." -ForegroundColor Cyan
+        Write-Host "[Yubrae] 正在强停并自动重启 $PackageName ..." -ForegroundColor Cyan
         & $AdbExe -s $target shell am force-stop $PackageName | Out-Null
         & $AdbExe -s $target shell am start -n "$PackageName/$MainActivity" | Out-Null
 
@@ -229,7 +229,7 @@ function Invoke-BuildAndRestart {
             Restore-KairoAccessibility $target
         }
 
-        Write-Host "[KairoLedger] 已在设备上重启应用完成！" -ForegroundColor Green
+        Write-Host "[Yubrae] 已在设备上重启应用完成！" -ForegroundColor Green
         return $true
     } finally {
         Pop-Location
@@ -242,7 +242,7 @@ if (-not $Watch) {
     exit 0
 }
 
-Write-Host "`n[KairoLedger] 已进入文件监听自动热重启模式（监听 app/src 与 gradle 文件变化，Ctrl+C 退出）..." -ForegroundColor Magenta
+Write-Host "`n[Yubrae] 已进入文件监听自动热重启模式（监听 app/src 与 gradle 文件变化，Ctrl+C 退出）..." -ForegroundColor Magenta
 $watchRoot = Join-Path $ProjectRoot 'app\src'
 $lastSignature = ''
 while ($true) {
@@ -250,7 +250,7 @@ while ($true) {
     $files = Get-ChildItem -Path $watchRoot -Recurse -File -Include *.kt,*.xml,*.kts -ErrorAction SilentlyContinue
     $sig = ($files | Sort-Object FullName | ForEach-Object { "$($_.FullName):$($_.LastWriteTimeUtc.Ticks)" }) -join '|'
     if ($lastSignature -and $sig -ne $lastSignature) {
-        Write-Host "`n[KairoLedger] 检测到源码修改，触发自动构建与重启..." -ForegroundColor Yellow
+        Write-Host "`n[Yubrae] 检测到源码修改，触发自动构建与重启..." -ForegroundColor Yellow
         Invoke-BuildAndRestart | Out-Null
     }
     $lastSignature = $sig

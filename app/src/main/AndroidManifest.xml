@@ -26,7 +26,7 @@
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
-        android:theme="@style/Theme.KairoLedger"
+        android:theme="@style/Theme.Yubrae"
         tools:targetApi="35">
 
         <activity
@@ -72,7 +72,7 @@
             android:name=".capture.ExternalBillReceiver"
             android:exported="true">
             <intent-filter>
-                <action android:name="com.kairoledger.app.ACTION_ADD_RECORD" />
+                <action android:name="com.yubrae.app.ACTION_ADD_RECORD" />
             </intent-filter>
         </receiver>
 
@@ -81,7 +81,7 @@
             android:name=".capture.CaptureNotificationActionReceiver"
             android:exported="false" />
 
-        <!-- 6. URI Scheme 外部记账入口：kairoledger://addbill?... -->
+        <!-- 6. URI Scheme 外部记账入口：yubrae://addbill?...（向后兼容 kairoledger://） -->
         <activity
             android:name=".capture.AutoAccountingSchemeActivity"
             android:excludeFromRecents="true"
@@ -91,6 +91,12 @@
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:host="addbill"
+                    android:scheme="yubrae" />
+                <data
+                    android:host="record"
+                    android:scheme="yubrae" />
                 <data
                     android:host="addbill"
                     android:scheme="kairoledger" />
@@ -147,7 +153,7 @@
 
         <!-- 9. Jetpack Glance 桌面小组件 -->
         <receiver
-            android:name="com.kairoledger.app.widget.KairoSummaryWidgetReceiver"
+            android:name="com.yubrae.app.widget.KairoSummaryWidgetReceiver"
             android:exported="true"
             android:label="@string/app_name">
             <intent-filter>
@@ -160,7 +166,7 @@
 
         <!-- 10. Jetpack Glance 4x1 极速记账工具条小组件 -->
         <receiver
-            android:name="com.kairoledger.app.widget.KairoQuickRecordWidgetReceiver"
+            android:name="com.yubrae.app.widget.KairoQuickRecordWidgetReceiver"
             android:exported="true"
             android:label="@string/quick_widget_label">
             <intent-filter>

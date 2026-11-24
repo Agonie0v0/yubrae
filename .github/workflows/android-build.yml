@@ -1,0 +1,96 @@
+name: Android CI & APK Build
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Test & Build APKs
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Run unit tests
+        run: ./gradlew testDebugUnitTest --no-parallel --console=plain
+
+      - name: Build Perf (R8) and Debug APKs
+        run: ./gradlew assemblePerf assembleDebug --no-parallel --console=plain
+
+      - name: Build signed Release APK (if signing secrets exist)
+        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' && secrets.SIGNING_STORE_PASSWORD != '' && secrets.SIGNING_KEY_ALIAS != '' && secrets.SIGNING_KEY_PASSWORD != '' }}
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
+          SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
+          SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
+        run: |
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > /tmp/release-signing.jks
+          export SIGNING_STORE_FILE=/tmp/release-signing.jks
+          ./gradlew assembleRelease --no-parallel --console=plain
+          rm -f /tmp/release-signing.jks
+
+      - name: Collect APK artifacts
+        run: |
+          mkdir -p dist
+          VERSION_TAG="${GITHUB_REF_NAME:-main}"
+          SAFE_TAG="${VERSION_TAG//\//-}"
+          if [ -f app/build/outputs/apk/perf/app-perf.apk ]; then
+            cp app/build/outputs/apk/perf/app-perf.apk "dist/yubrae-${SAFE_TAG}-perf.apk"
+          fi
+          if [ -f app/build/outputs/apk/debug/app-debug.apk ]; then
+            cp app/build/outputs/apk/debug/app-debug.apk "dist/yubrae-${SAFE_TAG}-debug.apk"
+          fi
+          if [ -f app/build/outputs/apk/release/app-release.apk ]; then
+            cp app/build/outputs/apk/release/app-release.apk "dist/yubrae-${SAFE_TAG}-release.apk"
+          fi
+          ls -lh dist/
+          (cd dist && sha256sum *.apk > SHA256SUMS.txt)
+
+      - name: Upload unit test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-reports
+          path: app/build/test-results/testDebugUnitTest/
+          if-no-files-found: ignore
+
+      - name: Upload APK artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: yubrae-apks
+          path: dist/
+          retention-days: 30
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.apk
+            dist/SHA256SUMS.txt
+          generate_release_notes: true
