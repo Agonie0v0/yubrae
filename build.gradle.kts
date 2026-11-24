@@ -11,10 +11,9 @@ plugins {
 val isCi = System.getenv("CI")?.equals("true", ignoreCase = true) == true
 val isWindows = System.getProperty("os.name").orEmpty().contains("Windows", ignoreCase = true)
 val hasNonAsciiPath = rootProject.projectDir.absolutePath.any { it.code > 127 }
-val devToolsRoot = file("D:/DevTools")
-if (!isCi && isWindows && hasNonAsciiPath && devToolsRoot.exists()) {
+if (!isCi && isWindows && hasNonAsciiPath && java.io.File("D:/DevTools").exists()) {
     val rootKey = Integer.toHexString(rootProject.projectDir.absolutePath.hashCode())
     allprojects {
-        layout.buildDirectory.set(file("D:/DevTools/yubrae-build/$rootKey/${project.name}"))
+        layout.buildDirectory.set(java.io.File("D:/DevTools/yubrae-build/$rootKey/${project.name}"))
     }
 }
