@@ -42,17 +42,20 @@ jobs:
         run: ./gradlew assemblePerf assembleDebug --no-parallel --console=plain
 
       - name: Build signed Release APK (if signing secrets exist)
-        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' && secrets.SIGNING_STORE_PASSWORD != '' && secrets.SIGNING_KEY_ALIAS != '' && secrets.SIGNING_KEY_PASSWORD != '' }}
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
           SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
           SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
         run: |
-          echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > /tmp/release-signing.jks
-          export SIGNING_STORE_FILE=/tmp/release-signing.jks
-          ./gradlew assembleRelease --no-parallel --console=plain
-          rm -f /tmp/release-signing.jks
+          if [ -n "$ANDROID_KEYSTORE_BASE64" ] && [ -n "$SIGNING_STORE_PASSWORD" ] && [ -n "$SIGNING_KEY_ALIAS" ] && [ -n "$SIGNING_KEY_PASSWORD" ]; then
+            echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > /tmp/release-signing.jks
+            export SIGNING_STORE_FILE=/tmp/release-signing.jks
+            ./gradlew assembleRelease --no-parallel --console=plain
+            rm -f /tmp/release-signing.jks
+          else
+            echo "Skipping signed Release APK (signing secrets not configured)."
+          fi
 
       - name: Collect APK artifacts
         run: |
