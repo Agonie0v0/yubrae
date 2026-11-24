@@ -4,26 +4,32 @@
 .EXAMPLE
     .\scripts\dev-run.ps1
     .\scripts\dev-run.ps1 -Debug
+    .\scripts\dev-run.ps1 -Release
     .\scripts\dev-run.ps1 -Watch
     .\scripts\dev-run.ps1 -Device d05c6533 -SkipTests -EnsureAccessibility
 #>
 param(
     [switch]$Watch,
     [switch]$Debug,
+    [switch]$Release,
     [string]$Device = '',
     [switch]$SkipTests,
     [switch]$EnsureAccessibility
 )
 
 $ErrorActionPreference = 'Stop'
+if ($Debug -and $Release) {
+    throw '不能同时指定 -Debug 与 -Release 参数。'
+}
+
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
-$PackageName = 'com.yubrae.app.debug'
+$PackageName = if ($Release) { 'com.yubrae.app' } else { 'com.yubrae.app.debug' }
 $MainActivity = 'com.yubrae.app.MainActivity'
 $A11yClass = 'com.yubrae.app.capture.screen.KairoAccessibilityService'
 $A11yShortClass = '.capture.screen.KairoAccessibilityService'
 $A11yComponent = "$PackageName/$A11yClass"
-$VariantName = if ($Debug) { 'debug' } else { 'perf' }
-$AssembleTask = if ($Debug) { 'assembleDebug' } else { 'assemblePerf' }
+$VariantName = if ($Release) { 'release' } elseif ($Debug) { 'debug' } else { 'perf' }
+$AssembleTask = if ($Release) { 'assembleRelease' } elseif ($Debug) { 'assembleDebug' } else { 'assemblePerf' }
 $ApkPath = Join-Path $ProjectRoot "app\build\outputs\apk\$VariantName\app-$VariantName.apk"
 
 if (-not $env:JAVA_HOME -and (Test-Path 'D:\DevTools\jdk-21\bin\java.exe')) {

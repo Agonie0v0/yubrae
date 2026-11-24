@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -6,15 +8,25 @@ plugins {
     id("com.google.devtools.ksp")
 }
 
+val localSigningFile = rootProject.file("signing.properties")
+val localSigningProps = Properties().apply {
+    if (localSigningFile.exists()) {
+        localSigningFile.reader(Charsets.UTF_8).use { load(it) }
+    }
+}
 val releaseStorePath = System.getenv("SIGNING_STORE_FILE")?.takeIf { it.isNotBlank() }
+    ?: localSigningProps.getProperty("storeFile")?.trim()?.takeIf { it.isNotBlank() }
 val releaseStorePassword = System.getenv("SIGNING_STORE_PASSWORD")?.takeIf { it.isNotBlank() }
+    ?: localSigningProps.getProperty("storePassword")?.takeIf { it.isNotBlank() }
 val releaseKeyAlias = System.getenv("SIGNING_KEY_ALIAS")?.takeIf { it.isNotBlank() }
+    ?: localSigningProps.getProperty("keyAlias")?.trim()?.takeIf { it.isNotBlank() }
 val releaseKeyPassword = System.getenv("SIGNING_KEY_PASSWORD")?.takeIf { it.isNotBlank() }
-val hasReleaseSigning = releaseStorePath != null &&
+    ?: localSigningProps.getProperty("keyPassword")?.takeIf { it.isNotBlank() }
+val releaseStoreFile = releaseStorePath?.let { file(it) }?.takeIf { it.exists() }
+val hasReleaseSigning = releaseStoreFile != null &&
     releaseStorePassword != null &&
     releaseKeyAlias != null &&
-    releaseKeyPassword != null &&
-    file(releaseStorePath).exists()
+    releaseKeyPassword != null
 
 android {
     namespace = "com.yubrae.app"
@@ -33,10 +45,14 @@ android {
         }
     }
 
-    if (hasReleaseSigning) {
+    if (releaseStoreFile != null &&
+        releaseStorePassword != null &&
+        releaseKeyAlias != null &&
+        releaseKeyPassword != null
+    ) {
         signingConfigs {
             create("release") {
-                storeFile = file(releaseStorePath!!)
+                storeFile = releaseStoreFile
                 storePassword = releaseStorePassword
                 keyAlias = releaseKeyAlias
                 keyPassword = releaseKeyPassword

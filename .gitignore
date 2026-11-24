@@ -21,6 +21,8 @@ captures/
 *.jks
 *.keystore
 *.p12
+signing.properties
+keystore.properties
 
 # Allow Gradle Wrapper jar
 !gradle/wrapper/gradle-wrapper.jar
