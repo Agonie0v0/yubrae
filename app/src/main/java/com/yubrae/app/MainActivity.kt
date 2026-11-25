@@ -1,15 +1,21 @@
 package com.yubrae.app
 
 import android.content.Intent
+import android.os.Build
 import android.os.Bundle
+import android.view.WindowManager
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.fragment.app.FragmentActivity
+import androidx.lifecycle.lifecycleScope
 import com.yubrae.app.core.contract.IntentConstants
 import com.yubrae.app.ui.navigation.KairoAppRoot
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
 
 class MainActivity : FragmentActivity() {
 
@@ -25,6 +31,14 @@ class MainActivity : FragmentActivity() {
         parseLaunchIntent(intent)
 
         val container = (applicationContext as KairoApplication).container
+        lifecycleScope.launch {
+            container.settingsStore.settingsFlow
+                .map { it.hideRecentsPreviewEnabled }
+                .distinctUntilChanged()
+                .collect { enabled ->
+                    applyRecentsPrivacyProtection(enabled)
+                }
+        }
         setContent {
             KairoAppRoot(
                 container = container,
@@ -70,6 +84,17 @@ class MainActivity : FragmentActivity() {
         val receiptPath = intent.getStringExtra(IntentConstants.EXTRA_RECEIPT_IMAGE_PATH)
         if (!receiptPath.isNullOrBlank()) {
             launchReceiptImagePath = receiptPath
+        }
+    }
+
+    private fun applyRecentsPrivacyProtection(enabled: Boolean) {
+        if (enabled) {
+            window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        } else {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            setRecentsScreenshotEnabled(!enabled)
         }
     }
 }

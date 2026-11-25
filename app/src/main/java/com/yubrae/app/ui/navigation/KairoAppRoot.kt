@@ -1,5 +1,6 @@
 package com.yubrae.app.ui.navigation
 
+import android.os.Build
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
@@ -62,6 +63,7 @@ import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -86,6 +88,7 @@ import com.yubrae.app.ui.components.LedgerManageSheet
 import com.yubrae.app.ui.components.LocalPrivacyMasked
 import com.yubrae.app.ui.components.QuickRecordSheet
 import com.yubrae.app.ui.components.SmartInputSheet
+import com.yubrae.app.ui.components.YubraeBrandMark
 import com.yubrae.app.ui.screens.assets.AccountDetailScreen
 import com.yubrae.app.ui.screens.assets.AssetsScreen
 import com.yubrae.app.ui.screens.assets.HiddenAssetsScreen
@@ -186,6 +189,7 @@ fun KairoAppRoot(
     var isAppLocked by rememberSaveable { mutableStateOf(false) }
     var wentBackground by rememberSaveable { mutableStateOf(false) }
     var lockError by remember { mutableStateOf<String?>(null) }
+    var isAppInBackground by remember { mutableStateOf(false) }
     val latestBiometricEnabled by rememberUpdatedState(settings.biometricLockEnabled)
 
     LaunchedEffect(Unit) {
@@ -209,7 +213,11 @@ fun KairoAppRoot(
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
+                Lifecycle.Event.ON_PAUSE -> {
+                    isAppInBackground = true
+                }
                 Lifecycle.Event.ON_STOP -> {
+                    isAppInBackground = true
                     if (latestBiometricEnabled) {
                         wentBackground = true
                     }
@@ -220,6 +228,9 @@ fun KairoAppRoot(
                         lockError = null
                     }
                     wentBackground = false
+                }
+                Lifecycle.Event.ON_RESUME -> {
+                    isAppInBackground = false
                 }
                 else -> Unit
             }
@@ -306,7 +317,22 @@ fun KairoAppRoot(
         greenExpenseMode = settings.greenExpenseMode
     ) {
         CompositionLocalProvider(LocalPrivacyMasked provides settings.privacyMaskEnabled) {
+            val showRecentsPrivacyVeil = settings.hideRecentsPreviewEnabled &&
+                isAppInBackground &&
+                !(isAppLocked && settings.biometricLockEnabled)
+
             Box(modifier = Modifier.fillMaxSize()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .then(
+                            if (showRecentsPrivacyVeil && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                                Modifier.blur(24.dp)
+                            } else {
+                                Modifier
+                            }
+                        )
+                ) {
                 when {
                     hasOverlayScreen -> {
                         when (overlayKind) {
@@ -583,6 +609,38 @@ fun KairoAppRoot(
                         .imePadding()
                         .padding(bottom = if (hasOverlayScreen || isInsideSettingsSubScreen) 16.dp else 68.dp)
                 )
+                }
+
+                // 后台多任务卡片隐私磨砂遮罩
+                if (showRecentsPrivacyVeil) {
+                    Surface(
+                        modifier = Modifier.fillMaxSize(),
+                        color = MaterialTheme.colorScheme.background.copy(
+                            alpha = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) 0.74f else 0.96f
+                        ),
+                        contentColor = MaterialTheme.colorScheme.onBackground
+                    ) {
+                        Column(
+                            modifier = Modifier.fillMaxSize(),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center
+                        ) {
+                            YubraeBrandMark(size = 64.dp)
+                            Spacer(modifier = Modifier.height(14.dp))
+                            Text(
+                                text = "余白 · Yubrae",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "隐私保护中",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
 
                 // 隐私生物识别锁屏遮罩
                 if (isAppLocked && settings.biometricLockEnabled) {

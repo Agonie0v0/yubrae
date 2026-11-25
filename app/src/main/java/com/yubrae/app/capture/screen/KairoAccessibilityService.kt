@@ -9,6 +9,7 @@ import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
 import com.yubrae.app.BuildConfig
 import com.yubrae.app.capture.CaptureRuntimeHelper
+import com.yubrae.app.capture.normalizeMerchantForMatch
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -17,6 +18,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.util.Locale
 
 /**
  * 无障碍屏幕账单页与支付成功页监听服务：
@@ -63,6 +65,7 @@ class KairoAccessibilityService : AccessibilityService() {
     private var lastActivePackage: String = ""
     private var lastActiveDedupKey: String = ""
     private var lastActiveRawKey: String = ""
+    private var lastActiveRawAt: Long = 0L
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -70,6 +73,7 @@ class KairoAccessibilityService : AccessibilityService() {
             lastActivePackage = ""
             lastActiveDedupKey = ""
             lastActiveRawKey = ""
+            lastActiveRawAt = 0L
         }
         activeScanPackage = ""
         dirtyContentWhileScanning = false
@@ -90,24 +94,28 @@ class KairoAccessibilityService : AccessibilityService() {
 
         val pkg = event.packageName?.toString()?.trim().orEmpty()
         if (pkg.isEmpty()) return
-        if (pkg == packageName || !ScreenBillParser.isWatchedPackage(pkg)) {
+        if (pkg == packageName) {
+            return
+        }
+        if (!ScreenBillParser.isWatchedPackage(pkg)) {
             if (eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED &&
                 !pkg.contains("systemui") &&
                 !pkg.contains("inputmethod") &&
                 !pkg.contains("keyboard")
             ) {
                 val cls = event.className?.toString()?.trim().orEmpty()
-                if (pkg != packageName && isWindowClassCandidate(cls)) {
+                if (isWindowClassCandidate(cls)) {
                     latestWindowPackage = ""
                     latestWindowClassName = ""
+                    synchronized(cacheLock) {
+                        lastActivePackage = ""
+                        lastActiveDedupKey = ""
+                        lastActiveRawKey = ""
+                        lastActiveRawAt = 0L
+                    }
+                    activeScanPackage = ""
+                    dirtyContentWhileScanning = false
                 }
-                synchronized(cacheLock) {
-                    lastActivePackage = ""
-                    lastActiveDedupKey = ""
-                    lastActiveRawKey = ""
-                }
-                activeScanPackage = ""
-                dirtyContentWhileScanning = false
             }
             return
         }
@@ -125,6 +133,14 @@ class KairoAccessibilityService : AccessibilityService() {
             if (ScreenBillParser.isBlockedChatOrFeedWindow(pkg, latestWindowClassName)) {
                 debugLog("event=WINDOW_STATE blocked pkg=$pkg cls=$latestWindowClassName")
                 scanJob?.cancel()
+                synchronized(cacheLock) {
+                    if (lastActivePackage == pkg) {
+                        lastActivePackage = ""
+                        lastActiveDedupKey = ""
+                        lastActiveRawKey = ""
+                        lastActiveRawAt = 0L
+                    }
+                }
                 activeScanPackage = ""
                 dirtyContentWhileScanning = false
                 return
@@ -209,6 +225,7 @@ class KairoAccessibilityService : AccessibilityService() {
                     lastActivePackage = ""
                     lastActiveDedupKey = ""
                     lastActiveRawKey = ""
+                    lastActiveRawAt = 0L
                 }
             }
             return ScanAttemptOutcome.NOT_READY_OR_UNKNOWN
@@ -227,8 +244,16 @@ class KairoAccessibilityService : AccessibilityService() {
         }
 
         val rawKey = "${snapshot.packageName}|${quickKind.name}|${snapshot.texts.joinToString("\u0001")}"
+        val rawCooldownMillis = if (quickKind == ScreenPageKind.PAY_SUCCESS) {
+            PAY_SUCCESS_COOLDOWN_MILLIS
+        } else {
+            SAME_PAGE_COOLDOWN_MILLIS
+        }
         synchronized(cacheLock) {
-            if (lastActivePackage == snapshot.packageName && lastActiveRawKey == rawKey) {
+            if (lastActivePackage == snapshot.packageName &&
+                lastActiveRawKey == rawKey &&
+                (snapshot.capturedAtMillis - lastActiveRawAt) < rawCooldownMillis
+            ) {
                 debugLog("attempt=$attempt pkg=${snapshot.packageName} kind=$quickKind -> RAW_CACHED")
                 return ScanAttemptOutcome.DISPATCHED_OR_CACHED
             }
@@ -272,11 +297,14 @@ class KairoAccessibilityService : AccessibilityService() {
             return ScanAttemptOutcome.NOT_READY_OR_UNKNOWN
         }
 
-        val dedupKey = outcome.dedupFingerprint.ifBlank {
-            "${outcome.pageKind.name}|${snapshot.packageName}|${outcome.ignoredReason}|${outcome.summaryText.hashCode()}"
+        val dedupKey = buildServiceDedupKey(snapshot, outcome)
+        val cooldownMillis = if (outcome.pageKind == ScreenPageKind.PAY_SUCCESS) {
+            PAY_SUCCESS_COOLDOWN_MILLIS
+        } else {
+            SAME_PAGE_COOLDOWN_MILLIS
         }
 
-        if (!tryAcquireDispatchSlot(snapshot.packageName, dedupKey, rawKey, snapshot.capturedAtMillis)) {
+        if (!tryAcquireDispatchSlot(snapshot.packageName, dedupKey, rawKey, snapshot.capturedAtMillis, cooldownMillis)) {
             debugLog("attempt=$attempt pkg=${snapshot.packageName} kind=${outcome.pageKind} -> CACHED($dedupKey)")
             return ScanAttemptOutcome.DISPATCHED_OR_CACHED
         }
@@ -481,22 +509,27 @@ class KairoAccessibilityService : AccessibilityService() {
         pkg: String,
         dedupKey: String,
         rawKey: String,
-        nowMillis: Long
+        nowMillis: Long,
+        cooldownMillis: Long
     ): Boolean = synchronized(cacheLock) {
         if (lastActivePackage == pkg && lastActiveDedupKey == dedupKey) {
+            lastActiveRawKey = rawKey
+            lastActiveRawAt = nowMillis
             return false
         }
         val prevAt = recentPageCache[dedupKey]
-        if (prevAt != null && (nowMillis - prevAt) < SAME_PAGE_COOLDOWN_MILLIS) {
+        if (prevAt != null && (nowMillis - prevAt) < cooldownMillis) {
             lastActivePackage = pkg
             lastActiveDedupKey = dedupKey
             lastActiveRawKey = rawKey
+            lastActiveRawAt = nowMillis
             return false
         }
         recentPageCache[dedupKey] = nowMillis
         lastActivePackage = pkg
         lastActiveDedupKey = dedupKey
         lastActiveRawKey = rawKey
+        lastActiveRawAt = nowMillis
         true
     }
 
@@ -506,9 +539,31 @@ class KairoAccessibilityService : AccessibilityService() {
             if (lastActivePackage == pkg && lastActiveDedupKey == dedupKey) {
                 lastActiveDedupKey = ""
                 lastActiveRawKey = ""
+                lastActiveRawAt = 0L
             }
         }
     }
+
+    private fun buildServiceDedupKey(
+        snapshot: ScreenSnapshot,
+        outcome: ScreenParseOutcome
+    ): String {
+        val cleanOrderNo = outcome.orderNo.trim()
+        if (cleanOrderNo.isNotBlank()) {
+            return "ORDER:$cleanOrderNo"
+        }
+        val draft = outcome.draft
+        if (outcome.pageKind == ScreenPageKind.PAY_SUCCESS && draft != null) {
+            val normalizedMerchant = normalizeMerchantForCooldown(draft.merchant)
+            return "PAY_SUCCESS:${snapshot.packageName}:${draft.type}:${draft.origCurrency}:${draft.origAmountMicros}:$normalizedMerchant"
+        }
+        return outcome.dedupFingerprint.ifBlank {
+            "${outcome.pageKind.name}|${snapshot.packageName}|${outcome.ignoredReason}|${outcome.summaryText.hashCode()}"
+        }
+    }
+
+    private fun normalizeMerchantForCooldown(raw: String): String =
+        normalizeMerchantForMatch(raw)
 
     @Suppress("DEPRECATION")
     private fun AccessibilityNodeInfo.safeRecycle() {
@@ -549,5 +604,6 @@ class KairoAccessibilityService : AccessibilityService() {
         private const val MAX_TREE_DEPTH = 48
         private const val MAX_LRU_ENTRIES = 200
         private const val SAME_PAGE_COOLDOWN_MILLIS = 15_000L
+        private const val PAY_SUCCESS_COOLDOWN_MILLIS = 120_000L
     }
 }

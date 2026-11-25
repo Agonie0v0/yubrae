@@ -89,7 +89,8 @@ data class AppSettings(
     val greenExpenseMode: Boolean = false,
     val accessibilityOrderDetailEnabled: Boolean = true,
     val hiddenAssetAccountIds: Set<Long> = emptySet(),
-    val hiddenAssetModules: Set<String> = emptySet()
+    val hiddenAssetModules: Set<String> = emptySet(),
+    val hideRecentsPreviewEnabled: Boolean = false
 )
 
 class SettingsStore(private val context: Context) {
@@ -130,6 +131,7 @@ class SettingsStore(private val context: Context) {
         val ACCESSIBILITY_ORDER_DETAIL = booleanPreferencesKey("accessibility_order_detail")
         val HIDDEN_ASSET_ACCOUNT_IDS = stringPreferencesKey("hidden_asset_account_ids")
         val HIDDEN_ASSET_MODULES = stringPreferencesKey("hidden_asset_modules")
+        val HIDE_RECENTS_PREVIEW = booleanPreferencesKey("hide_recents_preview")
     }
 
     val settingsFlow: Flow<AppSettings> = context.kairoDataStore.data.map { prefs ->
@@ -184,7 +186,8 @@ class SettingsStore(private val context: Context) {
             greenExpenseMode = prefs[Keys.GREEN_EXPENSE_MODE] ?: false,
             accessibilityOrderDetailEnabled = prefs[Keys.ACCESSIBILITY_ORDER_DETAIL] ?: true,
             hiddenAssetAccountIds = hiddenAccountIds,
-            hiddenAssetModules = hiddenModules
+            hiddenAssetModules = hiddenModules,
+            hideRecentsPreviewEnabled = prefs[Keys.HIDE_RECENTS_PREVIEW] ?: false
         )
     }
 
@@ -233,6 +236,7 @@ class SettingsStore(private val context: Context) {
             prefs[Keys.ACCESSIBILITY_ORDER_DETAIL] = settings.accessibilityOrderDetailEnabled
             prefs[Keys.HIDDEN_ASSET_ACCOUNT_IDS] = settings.hiddenAssetAccountIds.sorted().joinToString(",")
             prefs[Keys.HIDDEN_ASSET_MODULES] = settings.hiddenAssetModules.sorted().joinToString(",")
+            prefs[Keys.HIDE_RECENTS_PREVIEW] = settings.hideRecentsPreviewEnabled
         }
     }
 

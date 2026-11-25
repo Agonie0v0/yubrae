@@ -36,11 +36,7 @@ import com.yubrae.app.data.prefs.SettingsStore
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.put
 import okhttp3.OkHttpClient
 import java.util.Locale
@@ -618,28 +614,89 @@ class CaptureOrchestrator(
             }
 
             val isOrderDetail = screenPageKind == ScreenPageKind.ORDER_DETAIL
-            val dedupWindowMillis = if (isOrderDetail) {
-                CaptureDeduplicator.ORDER_DETAIL_WINDOW_MILLIS
-            } else {
-                CaptureDeduplicator.DEFAULT_WINDOW_MILLIS
+            val isPaySuccess = screenPageKind == ScreenPageKind.PAY_SUCCESS
+            val dedupWindowMillis = when {
+                isOrderDetail -> CaptureDeduplicator.ORDER_DETAIL_WINDOW_MILLIS
+                isPaySuccess -> PAY_SUCCESS_DEDUP_WINDOW_MILLIS
+                else -> CaptureDeduplicator.DEFAULT_WINDOW_MILLIS
             }
-            val primaryStart = finalDraft.timestamp - dedupWindowMillis
-            val primaryEnd = finalDraft.timestamp + dedupWindowMillis
+            val queryWindowMillis = if (screenPageKind == ScreenPageKind.BILL_DETAIL && !isHistoricalBillDetail) {
+                maxOf(dedupWindowMillis, PAY_SUCCESS_DEDUP_WINDOW_MILLIS)
+            } else {
+                dedupWindowMillis
+            }
+            val primaryStart = finalDraft.timestamp - queryWindowMillis
+            val primaryEnd = finalDraft.timestamp + queryWindowMillis
             val primaryTxs = transactionDao.getBetween(primaryStart, primaryEnd)
-            val (recentTxs, minWindowStart) = if (isOrderDetail && abs(capturedAtMillis - finalDraft.timestamp) > 0L) {
-                val capStart = capturedAtMillis - dedupWindowMillis
-                val capEnd = capturedAtMillis + dedupWindowMillis
+            val (step3bTxs, minWindowStart) = if (isOrderDetail && abs(capturedAtMillis - finalDraft.timestamp) > 0L) {
+                val capStart = capturedAtMillis - queryWindowMillis
+                val capEnd = capturedAtMillis + queryWindowMillis
                 val capTxs = transactionDao.getBetween(capStart, capEnd)
                 (primaryTxs + capTxs).distinctBy { it.id } to minOf(primaryStart, capStart)
             } else {
                 primaryTxs to primaryStart
             }
+            val recentTxs = if (queryWindowMillis == dedupWindowMillis) {
+                step3bTxs
+            } else {
+                step3bTxs.filter { abs(it.timestamp - finalDraft.timestamp) <= dedupWindowMillis }
+            }
             val recentLogs = rawCaptureLogDao.getSince(minWindowStart - 60_000L)
             val logsByTxId = recentLogs
                 .filter { it.linkedTransactionId != null && it.id != logId }
                 .associateBy { it.linkedTransactionId!! }
+            val logsGroupedByTxId = recentLogs
+                .filter { it.linkedTransactionId != null && it.id != logId }
+                .groupBy { it.linkedTransactionId!! }
 
-            // 3. 跨渠道去重与信息融合（普通渠道 60s，电商/外卖订单详情 10 分钟窗口）
+            // 3b. 同应用支付成功页重复刷新（如底部摇一摇/淘宝闪购广告刷新）或支付成功页后紧接点开账单详情页的实时去重
+            if (channel.equals(CaptureChannel.SCREEN, ignoreCase = true) &&
+                (isPaySuccess || (screenPageKind == ScreenPageKind.BILL_DETAIL && !isHistoricalBillDetail))
+            ) {
+                val existingPaySuccessTx = findRecentScreenPaySuccessMatch(
+                    finalDraft = finalDraft,
+                    sourcePackage = sourcePackage,
+                    incomingOrderNo = effectiveOrderNo,
+                    screenPageKind = screenPageKind,
+                    recentTxs = step3bTxs,
+                    logsGroupedByTxId = logsGroupedByTxId
+                )
+                if (existingPaySuccessTx != null) {
+                    val allowRichEnrichment = screenPageKind == ScreenPageKind.BILL_DETAIL
+                    val enrichedTxId = maybeEnrichPaySuccessTx(
+                        existing = existingPaySuccessTx,
+                        incomingDraft = finalDraft,
+                        orderNo = effectiveOrderNo,
+                        accountsById = accountsById,
+                        allowRichEnrichment = allowRichEnrichment
+                    )
+                    rawCaptureLogDao.update(
+                        initialLog.copy(
+                            id = logId,
+                            parseStatus = ParseStatus.MERGED_DEDUP,
+                            parserUsed = finalDraft.parserUsed,
+                            extractedJson = draftJson,
+                            linkedTransactionId = enrichedTxId,
+                            errorMessage = ""
+                        )
+                    )
+                    val dedupMessage = if (isPaySuccess) {
+                        "同笔支付成功页重复刷新，已合并至交易 #$enrichedTxId"
+                    } else {
+                        "与刚捕获的支付成功页交易 #$enrichedTxId 自动融合"
+                    }
+                    return@withLock CaptureHandleResult(
+                        logId = logId,
+                        status = ParseStatus.MERGED_DEDUP,
+                        transactionId = enrichedTxId,
+                        mergedIntoExisting = true,
+                        draft = finalDraft,
+                        message = dedupMessage
+                    )
+                }
+            }
+
+            // 3. 跨渠道去重与信息融合（普通渠道 60s，支付成功页 120s，电商/外卖订单详情 10 分钟窗口）
             val dedupMatch = deduplicator.findMatchAndMerge(
                 incomingDraft = finalDraft,
                 incomingChannel = channel,
@@ -718,45 +775,19 @@ class CaptureOrchestrator(
                 )
             }
 
-            // 3b. 同应用支付成功页刚落账后用户立即点开“账单详情页”（无单号场景的实时去重融合）
-            if (screenPageKind == ScreenPageKind.BILL_DETAIL && !isHistoricalBillDetail) {
-                val existingPaySuccessTx = findRecentScreenPaySuccessMatch(
-                    finalDraft = finalDraft,
-                    sourcePackage = sourcePackage,
-                    recentTxs = recentTxs,
-                    logsByTxId = logsByTxId
-                )
-                if (existingPaySuccessTx != null) {
-                    val enrichedTxId = maybeEnrichPaySuccessTx(
-                        existing = existingPaySuccessTx,
-                        incomingDraft = finalDraft,
-                        orderNo = effectiveOrderNo,
-                        accountsById = accountsById
-                    )
-                    rawCaptureLogDao.update(
-                        initialLog.copy(
-                            id = logId,
-                            parseStatus = ParseStatus.MERGED_DEDUP,
-                            parserUsed = finalDraft.parserUsed,
-                            extractedJson = draftJson,
-                            linkedTransactionId = enrichedTxId,
-                            errorMessage = ""
-                        )
-                    )
-                    return@withLock CaptureHandleResult(
-                        logId = logId,
-                        status = ParseStatus.MERGED_DEDUP,
-                        transactionId = enrichedTxId,
-                        mergedIntoExisting = true,
-                        draft = finalDraft,
-                        message = "与刚捕获的支付成功页交易 #$enrichedTxId 自动融合"
-                    )
-                }
+            val effectiveDraft = applyHistoricalMerchantCategoryMemory(
+                draft = finalDraft,
+                categoriesById = categoriesById
+            )
+            val effectiveDraftJson = if (effectiveDraft != finalDraft) {
+                draftToJson(effectiveDraft, effectiveOrderNo, screenDedupFingerprint, screenPageKind)
+            } else {
+                draftJson
             }
 
             val shouldPromptFloating = showFloatingPrompt && settings.floatingConfirmEnabled
             val initialTxStatus = if (shouldPromptFloating ||
-                (settings.defaultPendingWhenUncertain && finalDraft.confidence < 0.8f)
+                (settings.defaultPendingWhenUncertain && effectiveDraft.confidence < 0.8f)
             ) {
                 TransactionStatus.PENDING
             } else {
@@ -764,16 +795,16 @@ class CaptureOrchestrator(
             }
 
             val saveReq = RecordTransactionRequest(
-                type = finalDraft.type,
-                timestamp = finalDraft.timestamp,
-                origAmountMicros = finalDraft.origAmountMicros,
-                origCurrency = finalDraft.origCurrency,
+                type = effectiveDraft.type,
+                timestamp = effectiveDraft.timestamp,
+                origAmountMicros = effectiveDraft.origAmountMicros,
+                origCurrency = effectiveDraft.origCurrency,
                 accountId = resolvedAccountId,
-                manualAccountAmountMicros = finalDraft.manualAccountAmountMicros,
-                categoryId = finalDraft.categoryId,
-                merchant = finalDraft.merchant,
+                manualAccountAmountMicros = effectiveDraft.manualAccountAmountMicros,
+                categoryId = effectiveDraft.categoryId,
+                merchant = effectiveDraft.merchant,
                 note = finalNote,
-                tags = finalDraft.tags,
+                tags = effectiveDraft.tags,
                 sourceType = channel,
                 rawEventId = logId,
                 status = initialTxStatus
@@ -786,8 +817,8 @@ class CaptureOrchestrator(
                         initialLog.copy(
                             id = logId,
                             parseStatus = matchedStatus,
-                            parserUsed = finalDraft.parserUsed,
-                            extractedJson = draftJson,
+                            parserUsed = effectiveDraft.parserUsed,
+                            extractedJson = effectiveDraftJson,
                             linkedTransactionId = savedTx.id,
                             errorMessage = ""
                         )
@@ -798,7 +829,7 @@ class CaptureOrchestrator(
                             if (richFloatingPromptLauncher != null) {
                                 richFloatingPromptLauncher.invoke(
                                     savedTx.id,
-                                    finalDraft,
+                                    effectiveDraft,
                                     accountName,
                                     savedTx.accountAmountMicros,
                                     savedTx.accountCurrency,
@@ -806,7 +837,7 @@ class CaptureOrchestrator(
                                     settings
                                 )
                             } else {
-                                floatingPromptLauncher(savedTx.id, finalDraft, accountName, settings)
+                                floatingPromptLauncher(savedTx.id, effectiveDraft, accountName, settings)
                             }
                         }
                     }
@@ -815,7 +846,7 @@ class CaptureOrchestrator(
                         status = matchedStatus,
                         transactionId = savedTx.id,
                         mergedIntoExisting = false,
-                        draft = finalDraft,
+                        draft = effectiveDraft,
                         message = "自动记账成功"
                     )
                 },
@@ -825,15 +856,15 @@ class CaptureOrchestrator(
                         initialLog.copy(
                             id = logId,
                             parseStatus = ParseStatus.FAILED,
-                            parserUsed = finalDraft.parserUsed,
-                            extractedJson = draftJson,
+                            parserUsed = effectiveDraft.parserUsed,
+                            extractedJson = effectiveDraftJson,
                             errorMessage = errMsg
                         )
                     )
                     CaptureHandleResult(
                         logId = logId,
                         status = ParseStatus.FAILED,
-                        draft = finalDraft,
+                        draft = effectiveDraft,
                         message = errMsg
                     )
                 }
@@ -1014,16 +1045,6 @@ class CaptureOrchestrator(
         return orderNo.length >= 8 && log.content.contains(orderNo, ignoreCase = true)
     }
 
-    private fun extractOrderNoFromJson(rawJson: String): String {
-        if (rawJson.isBlank()) return ""
-        return runCatching {
-            val obj = LENIENT_JSON.parseToJsonElement(rawJson) as? JsonObject ?: return ""
-            val primary = (obj["externalOrderNo"] as? JsonPrimitive)?.contentOrNull.orEmpty().trim()
-            if (primary.isNotBlank()) return primary
-            (obj["orderNo"] as? JsonPrimitive)?.contentOrNull.orEmpty().trim()
-        }.getOrDefault("")
-    }
-
     private fun enrichMergedRequest(
         base: RecordTransactionRequest,
         incomingDraft: ParsedBillDraft,
@@ -1043,42 +1064,75 @@ class CaptureOrchestrator(
             base.manualAccountAmountMicros
         }
         val enrichedNote = appendOrderNoIfMissing(base.note, orderNo)
-        val mergedTags = TagTextCodec.merge(base.tags, incomingDraft.tags)
         return base.copy(
             manualAccountAmountMicros = enrichedManualAmount,
-            note = enrichedNote,
-            tags = mergedTags
+            note = enrichedNote
         )
     }
 
     private fun findRecentScreenPaySuccessMatch(
         finalDraft: ParsedBillDraft,
         sourcePackage: String,
+        incomingOrderNo: String,
+        screenPageKind: ScreenPageKind?,
         recentTxs: List<TransactionEntity>,
-        logsByTxId: Map<Long, RawCaptureLogEntity>
+        logsGroupedByTxId: Map<Long, List<RawCaptureLogEntity>>
     ): TransactionEntity? {
-        return recentTxs.firstOrNull { tx ->
-            if (tx.sourceType != CaptureChannel.SCREEN) return@firstOrNull false
-            if (tx.type != finalDraft.type) return@firstOrNull false
-            if (!tx.origCurrency.equals(finalDraft.origCurrency, ignoreCase = true)) return@firstOrNull false
-            if (tx.origAmountMicros != finalDraft.origAmountMicros) return@firstOrNull false
-            val linkedLog = logsByTxId[tx.id] ?: return@firstOrNull false
-            if (!linkedLog.sourcePackage.equals(sourcePackage, ignoreCase = true)) return@firstOrNull false
-            if (!linkedLog.title.contains("支付成功")) return@firstOrNull false
-            val a = tx.merchant.trim().lowercase(Locale.ROOT)
-            val b = finalDraft.merchant.trim().lowercase(Locale.ROOT)
-            a.isBlank() || b.isBlank() || a == b || a.contains(b) || b.contains(a)
-        }
+        val incomingNormMerchant = normalizeMerchantForMatch(finalDraft.merchant)
+        val incomingCleanOrder = incomingOrderNo.trim()
+        return recentTxs
+            .asSequence()
+            .filter { tx ->
+                if (tx.type != finalDraft.type) return@filter false
+                if (!tx.origCurrency.equals(finalDraft.origCurrency, ignoreCase = true)) return@filter false
+                if (tx.origAmountMicros != finalDraft.origAmountMicros) return@filter false
+
+                val txLogs = logsGroupedByTxId[tx.id].orEmpty()
+                val hasMatchingScreenLog = txLogs.any { log ->
+                    (tx.sourceType.equals(CaptureChannel.SCREEN, ignoreCase = true) ||
+                        log.channel.equals(CaptureChannel.SCREEN, ignoreCase = true)) &&
+                        log.sourcePackage.equals(sourcePackage, ignoreCase = true) &&
+                        when (screenPageKind) {
+                            ScreenPageKind.PAY_SUCCESS ->
+                                log.title.contains("支付成功") ||
+                                    log.title.contains("账单详情") ||
+                                    log.parserUsed == "SCREEN_PAY_SUCCESS" ||
+                                    log.parserUsed == "SCREEN_BILL_DETAIL"
+                            else ->
+                                log.title.contains("支付成功") ||
+                                    log.parserUsed == "SCREEN_PAY_SUCCESS"
+                        }
+                }
+                if (!hasMatchingScreenLog) return@filter false
+
+                val existingOrderNo = extractOrderNoFromRecord(tx, txLogs)
+                if (existingOrderNo.isNotBlank() &&
+                    incomingCleanOrder.isNotBlank() &&
+                    !existingOrderNo.equals(incomingCleanOrder, ignoreCase = true)
+                ) {
+                    return@filter false
+                }
+
+                val existingNormMerchant = normalizeMerchantForMatch(tx.merchant)
+                existingNormMerchant.isBlank() ||
+                    incomingNormMerchant.isBlank() ||
+                    existingNormMerchant == incomingNormMerchant ||
+                    existingNormMerchant.contains(incomingNormMerchant) ||
+                    incomingNormMerchant.contains(existingNormMerchant)
+            }
+            .minByOrNull { abs(it.timestamp - finalDraft.timestamp) }
     }
 
     private suspend fun maybeEnrichPaySuccessTx(
         existing: TransactionEntity,
         incomingDraft: ParsedBillDraft,
         orderNo: String,
-        accountsById: Map<Long, AccountEntity>
+        accountsById: Map<Long, AccountEntity>,
+        allowRichEnrichment: Boolean
     ): Long {
         val updatedNote = appendOrderNoIfMissing(existing.note, orderNo)
-        val newAccountId = if (incomingDraft.accountHint.isNotBlank() &&
+        val newAccountId = if (allowRichEnrichment &&
+            incomingDraft.accountHint.isNotBlank() &&
             incomingDraft.accountId != null &&
             !existing.note.contains(incomingDraft.accountHint)
         ) {
@@ -1087,7 +1141,7 @@ class CaptureOrchestrator(
             existing.accountId
         }
         val targetAccCurrency = accountsById[newAccountId]?.currencyCode ?: existing.accountCurrency
-        val newManualAccountAmount = if (
+        val newManualAccountAmount = if (allowRichEnrichment &&
             incomingDraft.manualAccountAmountMicros != null &&
             incomingDraft.manualAccountAmountMicros > 0L &&
             !targetAccCurrency.equals(existing.origCurrency, ignoreCase = true)
@@ -1096,17 +1150,23 @@ class CaptureOrchestrator(
         } else {
             null
         }
-        val betterMerchant = if (existing.merchant.isBlank() && incomingDraft.merchant.isNotBlank()) {
-            incomingDraft.merchant
+        val betterMerchant = chooseUnmaskedMerchant(existing.merchant, incomingDraft.merchant)
+        val mergedTags = if (allowRichEnrichment) {
+            TagTextCodec.merge(existing.tags, incomingDraft.tags)
         } else {
-            existing.merchant
+            existing.tags
         }
-        val mergedTags = TagTextCodec.merge(existing.tags, incomingDraft.tags)
+        val finalCategoryId = if (allowRichEnrichment) {
+            existing.categoryId ?: incomingDraft.categoryId
+        } else {
+            existing.categoryId
+        }
         val needsUpdate = updatedNote != existing.note ||
             newAccountId != existing.accountId ||
             newManualAccountAmount != null ||
             betterMerchant != existing.merchant ||
-            mergedTags != existing.tags
+            mergedTags != existing.tags ||
+            finalCategoryId != existing.categoryId
         if (!needsUpdate) return existing.id
 
         val req = RecordTransactionRequest(
@@ -1127,7 +1187,7 @@ class CaptureOrchestrator(
             },
             toAccountId = existing.toAccountId,
             manualToAmountMicros = existing.toAmountMicros,
-            categoryId = existing.categoryId ?: incomingDraft.categoryId,
+            categoryId = finalCategoryId,
             merchant = betterMerchant,
             note = updatedNote,
             tags = mergedTags,
@@ -1137,6 +1197,68 @@ class CaptureOrchestrator(
             status = existing.status
         )
         return ledgerService.saveTransaction(req).getOrNull()?.id ?: existing.id
+    }
+
+    private fun chooseUnmaskedMerchant(existingMerchant: String, incomingMerchant: String): String {
+        val existingTrimmed = existingMerchant.trim()
+        val incomingTrimmed = incomingMerchant.trim()
+        if (existingTrimmed.isBlank() && incomingTrimmed.isNotBlank()) return incomingTrimmed
+        if (incomingTrimmed.isBlank()) return existingTrimmed
+        if (hasMaskedMerchantSuffix(existingTrimmed) && !hasMaskedMerchantSuffix(incomingTrimmed)) {
+            val normExisting = normalizeMerchantForMatch(existingTrimmed)
+            val normIncoming = normalizeMerchantForMatch(incomingTrimmed)
+            if (normExisting.isNotBlank() &&
+                (normExisting == normIncoming || normIncoming.contains(normExisting) || normExisting.contains(normIncoming))
+            ) {
+                return incomingTrimmed
+            }
+        }
+        return existingTrimmed
+    }
+
+    private suspend fun applyHistoricalMerchantCategoryMemory(
+        draft: ParsedBillDraft,
+        categoriesById: Map<Long, CategoryEntity>
+    ): ParsedBillDraft {
+        val currentCategoryName = draft.categoryId?.let { categoriesById[it]?.name?.trim() }
+            ?: draft.categoryName.trim()
+        val needsCategoryMemory = draft.categoryId == null ||
+            currentCategoryName.isBlank() ||
+            currentCategoryName in FALLBACK_CATEGORY_NAMES
+        if (!needsCategoryMemory) return draft
+
+        val normMerchant = normalizeMerchantForMatch(draft.merchant)
+        if (normMerchant.length < 2 || isGenericMerchantForMemory(normMerchant)) {
+            return draft
+        }
+
+        val rememberedCategory = transactionDao.getAll()
+            .asSequence()
+            .take(HISTORY_CATEGORY_SCAN_LIMIT)
+            .mapNotNull { tx ->
+                if (tx.status != TransactionStatus.CONFIRMED) return@mapNotNull null
+                if (tx.type != draft.type) return@mapNotNull null
+                val catId = tx.categoryId ?: return@mapNotNull null
+                val cat = categoriesById[catId] ?: return@mapNotNull null
+                if (cat.name.trim() in FALLBACK_CATEGORY_NAMES) return@mapNotNull null
+                if (normalizeMerchantForMatch(tx.merchant) != normMerchant) return@mapNotNull null
+                cat
+            }
+            .firstOrNull()
+            ?: return draft
+
+        return draft.copy(
+            categoryId = rememberedCategory.id,
+            categoryName = rememberedCategory.name
+        )
+    }
+
+    private fun isGenericMerchantForMemory(normMerchant: String): Boolean {
+        if (normMerchant in GENERIC_MERCHANT_MEMORY_EXCLUSIONS) return true
+        return normMerchant.endsWith("平台商户") ||
+            normMerchant.contains("信息技术有限公司") ||
+            normMerchant.contains("网络有限公司") ||
+            normMerchant.startsWith("商户_")
     }
 
     private fun resolveExternalAccount(
@@ -1213,13 +1335,21 @@ class CaptureOrchestrator(
 
     companion object {
         private const val ORDER_DEDUP_SCAN_LIMIT = 500
+        private const val HISTORY_CATEGORY_SCAN_LIMIT = 500
         private const val HISTORICAL_BILL_THRESHOLD_MILLIS = 120_000L
         private const val HISTORICAL_DEDUP_WINDOW_MILLIS = 120_000L
+        private const val PAY_SUCCESS_DEDUP_WINDOW_MILLIS = 120_000L
 
-        private val LENIENT_JSON = Json {
-            ignoreUnknownKeys = true
-            isLenient = true
-        }
+        private val FALLBACK_CATEGORY_NAMES = setOf("其他支出", "其他收入")
+
+        private val GENERIC_MERCHANT_MEMORY_EXCLUSIONS = setOf(
+            "微信支付", "微信红包", "微信转账", "支付宝", "财付通", "银联", "云闪付",
+            "网上消费", "银联消费", "快捷支付", "消费", "刷卡消费", "扫码付款", "二维码收款",
+            "淘宝", "淘宝网", "天猫", "京东", "京东商城", "拼多多", "美团", "美团外卖", "饿了么", "抖音", "抖音商城",
+            "拼多多平台商户", "淘宝平台商户", "天猫平台商户", "京东平台商户", "美团平台商户",
+            "北京三快在线", "三快在线", "上海拉扎斯", "拉扎斯", "合众易宝", "网银在线", "抖音支付",
+            "公交卡", "交通卡", "小米钱包", "华为钱包", "荣耀钱包", "oppo钱包", "vivo钱包"
+        )
 
         private val VALID_ALIAS_TYPES = setOf(
             AliasMatchType.PACKAGE,

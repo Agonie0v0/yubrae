@@ -464,4 +464,61 @@ class CryptoAndBackupTest {
         assertEquals("旅行", restoredTag.name)
         assertEquals("", restoredTag.icon)
     }
+
+    @Test
+    fun backupSerializer_encryptedBackupRoundTripsHideRecentsPreviewEnabled() = runTest {
+        val db = InMemorySyncDatabase()
+        db.settings = AppSettings(
+            hideRecentsPreviewEnabled = true,
+            biometricLockEnabled = true
+        )
+        val serializer = db.createSerializer()
+        val json = serializer.exportToJson()
+        val decoded = serializer.decodeFromJson(json)
+        assertTrue(decoded.settings.hideRecentsPreviewEnabled)
+
+        val passphrase = "RecentsPrivacyBackup#2026"
+        val encrypted = CryptoHelper.encryptString(json, passphrase)
+
+        db.clearAllTables()
+        db.settings = AppSettings(
+            hideRecentsPreviewEnabled = false,
+            biometricLockEnabled = false
+        )
+
+        val decryptedJson = CryptoHelper.decryptToString(encrypted, passphrase)
+        serializer.restoreFromJson(decryptedJson)
+
+        assertTrue(db.settings.hideRecentsPreviewEnabled)
+        assertTrue(db.settings.biometricLockEnabled)
+    }
+
+    @Test
+    fun backupSerializer_legacySnapshotWithoutHideRecentsPreviewDefaultsToFalse() = runTest {
+        val db = InMemorySyncDatabase()
+        db.settings = AppSettings(hideRecentsPreviewEnabled = true)
+        val serializer = db.createSerializer()
+
+        val legacyJson = """
+            {
+              "formatVersion": 3,
+              "exportedAtMillis": 1795280000000,
+              "appName": "Yubrae",
+              "settings": {
+                "baseCurrency": "CNY",
+                "biometricLockEnabled": true
+              }
+            }
+        """.trimIndent()
+
+        val decoded = serializer.decodeFromJson(legacyJson)
+        assertFalse(decoded.settings.hideRecentsPreviewEnabled)
+        assertFalse(
+            decoded.settings.applyOnto(AppSettings(hideRecentsPreviewEnabled = true)).hideRecentsPreviewEnabled
+        )
+
+        serializer.restoreFromJson(legacyJson)
+        assertFalse(db.settings.hideRecentsPreviewEnabled)
+        assertTrue(db.settings.biometricLockEnabled)
+    }
 }

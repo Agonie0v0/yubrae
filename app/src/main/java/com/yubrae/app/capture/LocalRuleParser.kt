@@ -350,11 +350,30 @@ class LocalRuleParser {
         val typedCategories = categories.filter { it.type.equals(type, ignoreCase = true) }
             .ifEmpty { categories }
 
-        val searchHaystack = "$merchant $fullText".lowercase(Locale.ROOT)
         val mappingRules = if (type == TransactionType.INCOME) INCOME_CATEGORY_KEYWORDS else EXPENSE_CATEGORY_KEYWORDS
+        val trimmedMerchant = merchant.trim()
+        val fullHaystack = "$merchant $fullText".lowercase(Locale.ROOT)
+
+        // 商户优先匹配：若商户明确且不属于泛平台/泛渠道壳商户，优先仅基于商户名归类，防止底部广告/杂项词抢占分类
+        if (trimmedMerchant.isNotEmpty() && !isGenericPlatformShellMerchant(trimmedMerchant)) {
+            val merchantLower = trimmedMerchant.lowercase(Locale.ROOT)
+            for ((keywords, candidateCategoryNames) in mappingRules) {
+                if (keywords.any { merchantLower.contains(it) }) {
+                    val matched = findBestCategoryMatch(candidateCategoryNames, typedCategories)
+                    if (matched != null) {
+                        if (type == TransactionType.EXPENSE &&
+                            shouldPreferTakeoutOverMerchantDining(candidateCategoryNames, fullHaystack)
+                        ) {
+                            findBestCategoryMatch(TAKEOUT_CANDIDATE_CATEGORIES, typedCategories)?.let { return it }
+                        }
+                        return matched
+                    }
+                }
+            }
+        }
 
         for ((keywords, candidateCategoryNames) in mappingRules) {
-            if (keywords.any { searchHaystack.contains(it) }) {
+            if (keywords.any { fullHaystack.contains(it) }) {
                 findBestCategoryMatch(candidateCategoryNames, typedCategories)?.let { return it }
             }
         }
@@ -365,6 +384,25 @@ class LocalRuleParser {
 
         val fallbackName = if (type == TransactionType.INCOME) "其他收入" else "其他支出"
         return findBestCategoryMatch(listOf(fallbackName), typedCategories) ?: typedCategories.firstOrNull()
+    }
+
+    private fun isGenericPlatformShellMerchant(merchant: String): Boolean {
+        val trimmed = merchant.trim()
+        if (trimmed.isEmpty()) return true
+        val lower = trimmed.lowercase(Locale.ROOT)
+        if (lower in GENERIC_PLATFORM_SHELL_MERCHANTS) return true
+        if (GENERIC_MERCHANT_PREFIXES.any { lower.startsWith(it) }) return true
+        if (GENERIC_MERCHANT_SUFFIXES.any { lower.endsWith(it) }) return true
+        if (GENERIC_PLATFORM_SHELL_SUBSTRINGS.any { lower.contains(it) }) return true
+        return PLATFORM_STORE_SUFFIX_REGEX.containsMatchIn(lower)
+    }
+
+    private fun shouldPreferTakeoutOverMerchantDining(
+        candidateCategoryNames: List<String>,
+        fullHaystack: String
+    ): Boolean {
+        if (candidateCategoryNames.none { it in DINING_CATEGORY_NAMES }) return false
+        return TAKEOUT_OVERRIDE_KEYWORDS.any { fullHaystack.contains(it) }
     }
 
     private fun findBestCategoryMatch(
@@ -767,6 +805,43 @@ class LocalRuleParser {
             Regex("(?:at|to|from)\\s+([A-Za-z0-9 &._/'-]{2,40}?)(?:\\s+on\\b|\\s+using\\b|\\s+with\\b|[.,;\\n]|$)", RegexOption.IGNORE_CASE)
         )
 
+        private val GENERIC_PLATFORM_SHELL_MERCHANTS = setOf(
+            "淘宝", "淘宝网", "淘宝闪购", "天猫", "天猫超市", "京东", "京东商城", "京东自营",
+            "京东到家", "京东小时达", "京东超市", "拼多多", "多多买菜",
+            "美团", "美团外卖", "美团买菜", "美团优选", "大众点评", "饿了么",
+            "抖音", "抖音商城", "抖音支付", "小红书", "amazon", "亚马逊", "唯品会", "得物",
+            "微信", "微信支付", "微信收款助手", "支付宝", "财付通", "银联", "云闪付", "网银在线",
+            "盒马", "盒马鲜生", "叮咚买菜", "山姆", "山姆会员商店", "costco", "朴朴", "小象超市",
+            "超市", "便利店", "百货"
+        )
+
+        private val GENERIC_MERCHANT_PREFIXES = listOf(
+            "平台商户", "个体户", "商户_"
+        )
+
+        private val GENERIC_MERCHANT_SUFFIXES = listOf(
+            "平台商户", "技术有限公司", "信息技术有限公司", "网络有限公司",
+            "科技有限公司", "科技有限责任公司", "电子商务有限公司", "超市", "便利店"
+        )
+
+        private val GENERIC_PLATFORM_SHELL_SUBSTRINGS = listOf(
+            "平台商户", "信息技术", "技术有限公司", "淘宝闪购", "京东自营"
+        )
+
+        private val PLATFORM_STORE_SUFFIX_REGEX = Regex(
+            "(?:淘宝|天猫|京东|拼多多|抖音|小红书).*(?:旗舰店|专卖店|专营店|官方店|自营|店铺|小店)$"
+        )
+
+        private val TAKEOUT_CANDIDATE_CATEGORIES = listOf("外卖", "餐饮美食", "餐饮")
+
+        private val DINING_CATEGORY_NAMES = setOf(
+            "早餐", "三餐外食", "咖啡茶饮", "零食甜品", "聚餐请客", "餐饮美食", "餐饮"
+        )
+
+        private val TAKEOUT_OVERRIDE_KEYWORDS = listOf(
+            "美团外卖", "饿了么", "外卖", "宅急送", "uber eats", "doordash"
+        )
+
         private val EXPENSE_CATEGORY_KEYWORDS: List<Pair<List<String>, List<String>>> = listOf(
             // 1. 具体商品/垂直领域优先于泛电商平台（如 淘宝买猫粮 -> 宠物食品，Amazon 买书 -> 书籍资料/日用购物）
             listOf(
@@ -975,22 +1050,36 @@ class LocalRuleParser {
                 "水果", "车厘子", "草莓", "西瓜", "芒果", "榴莲", "海鲜", "生鲜"
             ) to listOf("水果生鲜", "餐饮美食", "餐饮"),
             listOf(
-                "买菜", "菜市场", "蔬菜", "猪肉", "牛肉", "鸡肉", "鸡蛋", "大米", "食用油", "调味品"
-            ) to listOf("买菜做饭", "餐饮美食", "餐饮"),
-            listOf(
                 "火锅", "海底捞", "巴奴", "烧烤", "烤肉", "烤鱼", "小龙虾", "酒吧", "清吧", "精酿", "聚餐", "西贝"
             ) to listOf("聚餐请客", "餐饮美食", "餐饮"),
             listOf(
                 "香烟", "卷烟", "茅台", "五粮液", "白酒", "红酒", "啤酒", "茶叶", "普洱", "龙井"
             ) to listOf("烟酒茶", "餐饮美食", "餐饮"),
             listOf(
+                "胡辣汤", "豆腐脑", "豆花", "油条", "豆浆", "早点", "早餐", "早饭", "早餐店",
+                "小笼包", "小笼", "水煎包", "生煎", "锅贴", "灌汤包", "汤包", "包子", "馒头",
+                "花卷", "发糕", "油茶", "煎饼", "煎饼果子", "手抓饼", "鸡蛋灌饼", "灌饼", "杂粮煎饼",
+                "肉夹馍", "烧饼", "肠粉", "粥铺", "米粥", "白粥", "皮蛋瘦肉粥", "八宝粥",
+                "糯米饭", "糯米鸡", "饭团", "粢饭团", "热干面", "馄饨", "云吞", "抄手",
+                "巴比", "永和大王", "庆丰", "嘉和一品", "吉祥馄饨", "袁记云饺"
+            ) to listOf("早餐", "三餐外食", "餐饮美食", "餐饮"),
+            listOf(
                 "肯德基", "kfc", "麦当劳", "mcdonald", "汉堡王", "必胜客", "萨莉亚", "塔斯汀",
                 "老乡鸡", "乡村基", "大米先生", "米村拌饭", "麻辣烫", "杨国福", "张亮",
-                "沙县", "兰州拉面", "黄焖鸡", "餐饮", "饭店", "餐厅", "食堂",
-                "面馆", "拉面", "米线", "酸辣粉", "嗨客多", "饺子", "包子", "煎饼",
-                "炸鸡", "汉堡", "披萨", "快餐", "便当", "早饭", "午饭", "晚饭", "夜宵",
-                "早餐", "午餐", "晚餐", "吃饭", "restaurant", "sainsbury"
+                "沙县", "兰州拉面", "黄焖鸡", "牛肉面", "烩面", "板面", "刀削面", "炸酱面",
+                "螺蛳粉", "米粉", "凉皮", "牛肉汤", "羊肉汤", "粉丝汤", "鸭血粉丝", "瓦罐汤",
+                "砂锅", "盖浇饭", "盖饭", "煲仔饭", "猪脚饭", "木桶饭", "烤冷面", "炸串",
+                "卤味", "熟食", "冒菜", "串串", "钵钵鸡", "锅盔", "鸡排",
+                "面庄", "粉馆", "汤馆", "小吃", "美食", "小馆", "小厨", "食府", "茶餐厅", "大排档",
+                "真功夫", "和府捞面", "遇见小面", "华莱士", "德克士",
+                "餐饮", "饭店", "餐厅", "食堂", "面馆", "拉面", "米线", "酸辣粉", "嗨客多",
+                "饺子", "水饺", "小面", "牛肉粉", "羊肉粉",
+                "炸鸡", "汉堡", "披萨", "快餐", "便当", "午饭", "晚饭", "夜宵",
+                "午餐", "晚餐", "吃饭", "restaurant", "sainsbury"
             ) to listOf("三餐外食", "餐饮美食", "餐饮"),
+            listOf(
+                "买菜", "菜市场", "蔬菜", "猪肉", "牛肉", "鸡肉", "鸡蛋", "大米", "食用油", "调味品"
+            ) to listOf("买菜做饭", "餐饮美食", "餐饮"),
             listOf(
                 "美团", "大众点评"
             ) to listOf("三餐外食", "餐饮美食", "餐饮"),

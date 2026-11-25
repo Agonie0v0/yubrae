@@ -80,7 +80,8 @@ data class SettingsSnapshotDto(
     val greenExpenseMode: Boolean = false,
     val accessibilityOrderDetailEnabled: Boolean = true,
     val hiddenAssetAccountIds: List<Long> = emptyList(),
-    val hiddenAssetModules: List<String> = emptyList()
+    val hiddenAssetModules: List<String> = emptyList(),
+    val hideRecentsPreviewEnabled: Boolean = false
 )
 
 @Serializable
@@ -315,7 +316,8 @@ internal fun AppSettings.toSnapshotDto(): SettingsSnapshotDto = SettingsSnapshot
     greenExpenseMode = greenExpenseMode,
     accessibilityOrderDetailEnabled = accessibilityOrderDetailEnabled,
     hiddenAssetAccountIds = hiddenAssetAccountIds.sorted(),
-    hiddenAssetModules = hiddenAssetModules.sorted()
+    hiddenAssetModules = hiddenAssetModules.sorted(),
+    hideRecentsPreviewEnabled = hideRecentsPreviewEnabled
 )
 
 internal fun SettingsSnapshotDto.applyOnto(current: AppSettings): AppSettings = current.copy(
@@ -343,7 +345,8 @@ internal fun SettingsSnapshotDto.applyOnto(current: AppSettings): AppSettings = 
     greenExpenseMode = greenExpenseMode,
     accessibilityOrderDetailEnabled = accessibilityOrderDetailEnabled,
     hiddenAssetAccountIds = hiddenAssetAccountIds.toSet(),
-    hiddenAssetModules = hiddenAssetModules.map { it.trim() }.filter { it.isNotEmpty() }.toSet()
+    hiddenAssetModules = hiddenAssetModules.map { it.trim() }.filter { it.isNotEmpty() }.toSet(),
+    hideRecentsPreviewEnabled = hideRecentsPreviewEnabled
 )
 
 internal fun AccountEntity.toDto() = AccountDto(

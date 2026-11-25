@@ -4,13 +4,17 @@ import com.yubrae.app.capture.screen.ScreenBillParser
 import com.yubrae.app.capture.screen.ScreenPageKind
 import com.yubrae.app.capture.screen.ScreenSnapshot
 import com.yubrae.app.core.contract.CaptureInput
+import com.yubrae.app.core.contract.ParsedBillDraft
 import com.yubrae.app.core.model.MoneyAmount
 import com.yubrae.app.data.db.AliasMatchType
 import com.yubrae.app.data.db.CaptureChannel
 import com.yubrae.app.data.db.DefaultSeedData
 import com.yubrae.app.data.db.ParseStatus
+import com.yubrae.app.data.db.RawCaptureLogEntity
 import com.yubrae.app.data.db.TagTextCodec
+import com.yubrae.app.data.db.TransactionEntity
 import com.yubrae.app.data.db.TransactionStatus
+import com.yubrae.app.data.db.TransactionType
 import com.yubrae.app.data.prefs.AppSettings
 import com.yubrae.app.testutil.TestHttpServer
 import kotlinx.coroutines.test.runTest
@@ -18,6 +22,7 @@ import okhttp3.OkHttpClient
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -409,5 +414,231 @@ class CaptureDeduplicatorTest {
         val disabledResult = orchestrator.handleScreenCapture(outsideOrderSnapshot, outsideOutcome)
         assertEquals(ParseStatus.IGNORED, disabledResult.status)
         assertEquals(2, transactionDao.getAll().size)
+    }
+
+    @Test
+    fun deduplicatesSamePackageWeChatPaySuccessAdRefreshAt17SecondsWithoutPollutingTagsOrCategory() = runTest {
+        DefaultSeedData.ensurePresetCategories(categoryDao)
+        val categoriesById = categoryDao.getAll().associateBy { it.id }
+        val accountsById = accountDao.getAll().associateBy { it.id }
+        val wechatWallet = accountDao.getByName("微信零钱")!!
+        val threeMeals = categoryDao.findByNameAndType("三餐外食", TransactionType.EXPENSE)!!
+        val onlineShopping = categoryDao.findByNameAndType("网购百货", TransactionType.EXPENSE)!!
+        val deduplicator = CaptureDeduplicator()
+        val baseTime = 1_732_500_000_370L
+
+        val existingTx = TransactionEntity(
+            id = 101L,
+            type = TransactionType.EXPENSE,
+            timestamp = baseTime,
+            origAmountMicros = 5_500_000L,
+            origCurrency = "CNY",
+            accountId = wechatWallet.id,
+            accountAmountMicros = 5_500_000L,
+            accountCurrency = "CNY",
+            categoryId = threeMeals.id,
+            merchant = "逍遥优质胡辣汤（**华）",
+            note = "零钱",
+            tags = "早餐",
+            sourceType = CaptureChannel.SCREEN,
+            status = TransactionStatus.PENDING
+        )
+        val existingLog = RawCaptureLogEntity(
+            id = 1L,
+            channel = CaptureChannel.SCREEN,
+            sourcePackage = "com.tencent.mm",
+            title = "微信支付成功页",
+            content = "支付成功\n逍遥优质胡辣汤（**华）\n¥5.50\n稍等一下...",
+            capturedAt = baseTime,
+            parseStatus = ParseStatus.MATCHED_LOCAL,
+            parserUsed = "SCREEN_PAY_SUCCESS",
+            linkedTransactionId = existingTx.id
+        )
+
+        val adRefreshDraft = ParsedBillDraft(
+            type = TransactionType.EXPENSE,
+            origAmountMicros = 5_500_000L,
+            origCurrency = "CNY",
+            accountId = wechatWallet.id,
+            categoryId = onlineShopping.id,
+            categoryName = onlineShopping.name,
+            merchant = "逍遥优质胡辣汤（**华）",
+            note = "摇一摇有优惠",
+            timestamp = baseTime + 17_281L,
+            parserUsed = "SCREEN_PAY_SUCCESS",
+            tags = "淘宝,网购"
+        )
+
+        val match = deduplicator.findMatchAndMerge(
+            incomingDraft = adRefreshDraft,
+            incomingChannel = CaptureChannel.SCREEN,
+            incomingSourcePackage = "com.tencent.mm",
+            incomingRawText = "微信支付成功页\n支付成功\n逍遥优质胡辣汤（**华）\n¥5.50\n摇一摇有优惠\n淘宝闪购可叠加立减",
+            recentTransactions = listOf(existingTx),
+            recentLogsByTxId = mapOf(existingTx.id to existingLog),
+            accountsById = accountsById,
+            categoriesById = categoriesById,
+            customWindowMillis = 120_000L
+        )
+
+        assertNotNull(match)
+        assertEquals(existingTx.id, match!!.existingTransaction.id)
+        assertEquals(threeMeals.id, match.mergedRequest.categoryId)
+        assertEquals("早餐", match.mergedRequest.tags)
+        assertEquals("零钱", match.mergedRequest.note)
+    }
+
+    @Test
+    fun matchesMaskedAndUnmaskedMerchantNamesAndPreservesBranchParentheses() = runTest {
+        assertEquals("逍遥优质胡辣汤", normalizeMerchantForMatch("逍遥优质胡辣汤（**华）"))
+        assertEquals("逍遥优质胡辣汤", normalizeMerchantForMatch("逍遥优质胡辣汤(**华)"))
+        assertEquals("星巴克（中山路店）", normalizeMerchantForMatch("星巴克（中山路店）"))
+
+        DefaultSeedData.ensurePresetCategories(categoryDao)
+        val categoriesById = categoryDao.getAll().associateBy { it.id }
+        val accountsById = accountDao.getAll().associateBy { it.id }
+        val wechatWallet = accountDao.getByName("微信零钱")!!
+        val threeMeals = categoryDao.findByNameAndType("三餐外食", TransactionType.EXPENSE)!!
+        val deduplicator = CaptureDeduplicator()
+        val baseTime = 1_732_500_100_000L
+
+        val maskedScreenTx = TransactionEntity(
+            id = 201L,
+            type = TransactionType.EXPENSE,
+            timestamp = baseTime,
+            origAmountMicros = 5_500_000L,
+            origCurrency = "CNY",
+            accountId = wechatWallet.id,
+            accountAmountMicros = 5_500_000L,
+            accountCurrency = "CNY",
+            categoryId = threeMeals.id,
+            merchant = "逍遥优质胡辣汤（**华）",
+            note = "零钱",
+            sourceType = CaptureChannel.SCREEN,
+            status = TransactionStatus.PENDING
+        )
+        val screenLog = RawCaptureLogEntity(
+            id = 11L,
+            channel = CaptureChannel.SCREEN,
+            sourcePackage = "com.tencent.mm",
+            title = "微信支付成功页",
+            content = "支付成功\n逍遥优质胡辣汤（**华）\n¥5.50",
+            capturedAt = baseTime,
+            parseStatus = ParseStatus.MATCHED_LOCAL,
+            parserUsed = "SCREEN_PAY_SUCCESS",
+            linkedTransactionId = maskedScreenTx.id
+        )
+
+        val unmaskedDraft = ParsedBillDraft(
+            type = TransactionType.EXPENSE,
+            origAmountMicros = 5_500_000L,
+            origCurrency = "CNY",
+            accountId = wechatWallet.id,
+            categoryId = threeMeals.id,
+            categoryName = threeMeals.name,
+            merchant = "逍遥优质胡辣汤",
+            note = "微信支付：向逍遥优质胡辣汤付款5.50元",
+            timestamp = baseTime + 5_000L,
+            parserUsed = "LOCAL_RULE"
+        )
+
+        val match = deduplicator.findMatchAndMerge(
+            incomingDraft = unmaskedDraft,
+            incomingChannel = CaptureChannel.NOTIFICATION,
+            incomingSourcePackage = "com.tencent.mm",
+            incomingRawText = "微信支付\n向逍遥优质胡辣汤付款5.50元",
+            recentTransactions = listOf(maskedScreenTx),
+            recentLogsByTxId = mapOf(maskedScreenTx.id to screenLog),
+            accountsById = accountsById,
+            categoriesById = categoriesById
+        )
+
+        assertNotNull(match)
+        assertEquals(maskedScreenTx.id, match!!.existingTransaction.id)
+        assertEquals("逍遥优质胡辣汤", match.mergedRequest.merchant)
+    }
+
+    @Test
+    fun doesNotMergeTransactionsWithDifferentNonEmptyOrderNumbers() = runTest {
+        DefaultSeedData.ensurePresetCategories(categoryDao)
+        val categoriesById = categoryDao.getAll().associateBy { it.id }
+        val accountsById = accountDao.getAll().associateBy { it.id }
+        val wechatWallet = accountDao.getByName("微信零钱")!!
+        val threeMeals = categoryDao.findByNameAndType("三餐外食", TransactionType.EXPENSE)!!
+        val deduplicator = CaptureDeduplicator()
+        val baseTime = 1_732_500_200_000L
+
+        val txWithJsonOrder = TransactionEntity(
+            id = 301L,
+            type = TransactionType.EXPENSE,
+            timestamp = baseTime,
+            origAmountMicros = 5_500_000L,
+            origCurrency = "CNY",
+            accountId = wechatWallet.id,
+            accountAmountMicros = 5_500_000L,
+            accountCurrency = "CNY",
+            categoryId = threeMeals.id,
+            merchant = "逍遥优质胡辣汤",
+            note = "零钱",
+            sourceType = CaptureChannel.SCREEN,
+            status = TransactionStatus.CONFIRMED
+        )
+        val logWithJsonOrder = RawCaptureLogEntity(
+            id = 21L,
+            channel = CaptureChannel.SCREEN,
+            sourcePackage = "com.tencent.mm",
+            title = "微信账单详情页",
+            content = "账单详情\n逍遥优质胡辣汤\n-5.50",
+            capturedAt = baseTime,
+            parseStatus = ParseStatus.MATCHED_LOCAL,
+            parserUsed = "SCREEN_BILL_DETAIL",
+            extractedJson = """{"externalOrderNo":"42000011111111"}""",
+            linkedTransactionId = txWithJsonOrder.id
+        )
+
+        val txWithNoteOrder = txWithJsonOrder.copy(
+            id = 302L,
+            note = "零钱 · 单号:42000033333333",
+            sourceType = CaptureChannel.NOTIFICATION
+        )
+
+        val incomingDraft = ParsedBillDraft(
+            type = TransactionType.EXPENSE,
+            origAmountMicros = 5_500_000L,
+            origCurrency = "CNY",
+            accountId = wechatWallet.id,
+            categoryId = threeMeals.id,
+            categoryName = threeMeals.name,
+            merchant = "逍遥优质胡辣汤",
+            timestamp = baseTime + 10_000L,
+            parserUsed = "SCREEN_PAY_SUCCESS",
+            externalOrderNo = "42000022222222"
+        )
+
+        val matchFromJson = deduplicator.findMatchAndMerge(
+            incomingDraft = incomingDraft,
+            incomingChannel = CaptureChannel.SCREEN,
+            incomingSourcePackage = "com.tencent.mm",
+            incomingRawText = "支付成功\n逍遥优质胡辣汤\n¥5.50",
+            recentTransactions = listOf(txWithJsonOrder),
+            recentLogsByTxId = mapOf(txWithJsonOrder.id to logWithJsonOrder),
+            accountsById = accountsById,
+            categoriesById = categoriesById,
+            customWindowMillis = 120_000L
+        )
+        assertNull(matchFromJson)
+
+        val matchFromNote = deduplicator.findMatchAndMerge(
+            incomingDraft = incomingDraft,
+            incomingChannel = CaptureChannel.SCREEN,
+            incomingSourcePackage = "com.tencent.mm",
+            incomingRawText = "支付成功\n逍遥优质胡辣汤\n¥5.50",
+            recentTransactions = listOf(txWithNoteOrder),
+            recentLogsByTxId = emptyMap(),
+            accountsById = accountsById,
+            categoriesById = categoriesById,
+            customWindowMillis = 120_000L
+        )
+        assertNull(matchFromNote)
     }
 }

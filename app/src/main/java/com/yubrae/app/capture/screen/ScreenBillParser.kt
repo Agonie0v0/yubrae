@@ -265,7 +265,8 @@ class ScreenBillParser(
                 add("地铁公交")
             }
         }
-        val categoryContext = listOf(merchant, goodsDesc, rawGoodsForTags, summaryText, extraCategoryHints.joinToString(" "))
+        val cleanSummary = buildCleanClassificationSummary(lines, pageKind)
+        val categoryContext = listOf(merchant, goodsDesc, rawGoodsForTags, cleanSummary, extraCategoryHints.joinToString(" "))
             .filter { it.isNotBlank() }
             .joinToString(" ")
         val resolvedCategory = localRuleParser.resolveCategory(
@@ -280,7 +281,7 @@ class ScreenBillParser(
         val autoTags = localRuleParser.inferAutoTags(
             sourcePackage = snapshot.packageName,
             merchant = merchant,
-            fullText = listOf(rawGoodsForTags, goodsDesc, summaryText).filter { it.isNotBlank() }.joinToString(" "),
+            fullText = listOf(rawGoodsForTags, goodsDesc, cleanSummary).filter { it.isNotBlank() }.joinToString(" "),
             categoryName = resolvedCategoryName,
             currency = resolvedAmount.origCurrency
         )
@@ -1833,6 +1834,8 @@ class ScreenBillParser(
             .filter { it.key == FieldKey.MERCHANT }
             .mapNotNull { cleanMerchantCandidate(it.value) }
             .firstOrNull { !isGenericChannelMerchant(it) }
+        val qrPayee = extractQrPayeeMerchant(lines, txType)
+            ?.takeIf { !isGenericChannelMerchant(it) }
 
         if (!explicitShort.isNullOrBlank()) {
             // 若商户全称是结算主体（如“商户_王禹睿”、“个体户xxx”、“xx有限公司”），而顶部有更直观的店名（如“哆哆酸辣粉”），优先采用顶部直观店名
@@ -1842,7 +1845,19 @@ class ScreenBillParser(
             ) {
                 return heroMerchant
             }
+            if (!qrPayee.isNullOrBlank() &&
+                looksLikePersonalNicknameOrPhone(explicitShort) &&
+                !looksLikePersonalNicknameOrPhone(qrPayee)
+            ) {
+                return qrPayee
+            }
             return explicitShort
+        }
+
+        if (!qrPayee.isNullOrBlank() &&
+            (heroMerchant.isNullOrBlank() || looksLikePersonalNicknameOrPhone(heroMerchant))
+        ) {
+            return qrPayee
         }
 
         if (!heroMerchant.isNullOrBlank()) {
@@ -1862,6 +1877,33 @@ class ScreenBillParser(
         if (!goods.isNullOrBlank()) return goods
 
         return ""
+    }
+
+    private fun extractQrPayeeMerchant(lines: List<String>, txType: String): String? {
+        val pattern = if (txType == TransactionType.INCOME) {
+            QR_INCOME_PAYER_REGEX
+        } else {
+            QR_EXPENSE_PAYEE_REGEX
+        }
+        for (line in lines) {
+            val match = pattern.find(line) ?: continue
+            val rawCandidate = match.groupValues.getOrNull(1)?.trim().orEmpty()
+            val cleaned = cleanMerchantCandidate(rawCandidate) ?: continue
+            if (cleaned.isNotBlank() && !isGenericChannelMerchant(cleaned)) {
+                return cleaned
+            }
+        }
+        return null
+    }
+
+    private fun looksLikePersonalNicknameOrPhone(name: String): Boolean {
+        val trimmed = name.trim()
+        if (trimmed.isEmpty()) return false
+        if (LONG_DIGIT_RUN_REGEX.containsMatchIn(trimmed)) return true
+        if (MASKED_PHONE_REGEX.containsMatchIn(trimmed)) return true
+        val lower = trimmed.lowercase(Locale.ROOT)
+        if (PERSONAL_NICKNAME_PREFIXES.any { lower.startsWith(it) }) return true
+        return MASKED_PERSONAL_NAME_REGEX.matches(trimmed)
     }
 
     private fun isSettlementEntityName(name: String): Boolean {
@@ -2181,6 +2223,17 @@ class ScreenBillParser(
     private fun buildSummaryText(lines: List<String>): String {
         val filtered = lines.filterNot { line ->
             line.trim().lowercase(Locale.ROOT) in CHROME_NOISE_LINES
+        }
+        val joined = filtered.joinToString("\n")
+        return if (joined.length <= 1200) joined else joined.take(1197) + "..."
+    }
+
+    private fun buildCleanClassificationSummary(lines: List<String>, pageKind: ScreenPageKind): String {
+        val filtered = lines.filterNot { line ->
+            val trimmed = line.trim()
+            val lower = trimmed.lowercase(Locale.ROOT)
+            lower in CHROME_NOISE_LINES ||
+                (pageKind == ScreenPageKind.PAY_SUCCESS && PAY_SUCCESS_PROMO_NOISE_REGEX.containsMatchIn(trimmed))
         }
         val joined = filtered.joinToString("\n")
         return if (joined.length <= 1200) joined else joined.take(1197) + "..."
@@ -3120,11 +3173,35 @@ class ScreenBillParser(
 
         private val UI_STOP_PREFIXES = listOf(
             "对订单有疑", "对此订单有疑", "在此商户的", "联系收款方", "申请开票", "申请退款", "申请售后",
-            "查看", "本服务由", "网页由", "该网页由", "此网页由", "页面由"
+            "查看", "本服务由", "网页由", "该网页由", "此网页由", "页面由", "稍等一下"
         )
 
         private val GENERIC_CHANNEL_MERCHANTS = setOf(
-            "微信支付", "支付宝", "云闪付", "扫码付款", "二维码收款", "转账", "收款", "消费", "支付"
+            "微信支付", "支付宝", "云闪付", "扫二维码付款", "二维码付款", "扫码付款", "二维码收款", "扫码收款",
+            "转账", "收款", "消费", "支付"
+        )
+
+        private val PAY_SUCCESS_PROMO_NOISE_REGEX = Regex(
+            "(?:摇一摇|有优惠|可叠加|立减金|随机立减|最高立减|淘宝闪购|京东秒杀|百亿补贴|优惠券|代金券|领券|立即领取|点击领取|去领取|去看看|去使用|去抽奖|抽奖|支付有礼|支付有优惠|天天领红包|免费领|稍等一下|本服务由财付通提供|猜你喜欢|广告|推广|赞助)",
+            RegexOption.IGNORE_CASE
+        )
+
+        private val QR_EXPENSE_PAYEE_REGEX = Regex(
+            "(?:扫二维码付款|二维码付款|扫码付款|向商户付款|向商家付款)\\s*(?:[-—–:：]\\s*)?给\\s*(.+)"
+        )
+
+        private val QR_INCOME_PAYER_REGEX = Regex(
+            "(?:扫二维码收款|二维码收款|扫码收款|微信收款)\\s*(?:[-—–:：]\\s*)?来自\\s*(.+)"
+        )
+
+        private val LONG_DIGIT_RUN_REGEX = Regex("\\d{7,}")
+
+        private val PERSONAL_NICKNAME_PREFIXES = listOf(
+            "微信用户", "支付宝用户", "qq用户", "抖音用户"
+        )
+
+        private val MASKED_PERSONAL_NAME_REGEX = Regex(
+            "^(?:\\*{1,3}[\\u4e00-\\u9fa5A-Za-z]{1,2}|[\\u4e00-\\u9fa5A-Za-z]\\*{1,3})$"
         )
 
         private val CHROME_NOISE_LINES = setOf(

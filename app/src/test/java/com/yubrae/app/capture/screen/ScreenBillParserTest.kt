@@ -2031,4 +2031,163 @@ class ScreenBillParserTest {
         assertEquals(ScreenPageKind.UNKNOWN, entryOutcome.pageKind)
         assertNull(entryOutcome.draft)
     }
+
+    @Test
+    fun classifiesBreakfastPaySuccessAndIgnoresBottomPromoAdsWithoutTagOrCategoryHijack() = runTest {
+        val fullAccDao = FakeAccountDao()
+        val fullAliasDao = FakeAccountAliasDao()
+        val fullCatDao = FakeCategoryDao()
+        DefaultSeedData.ensureAccountsAndTransitCard(fullAccDao, fullAliasDao)
+        DefaultSeedData.ensurePresetCategories(fullCatDao)
+        val fullAccounts = fullAccDao.getAll()
+        val fullAliases = fullAliasDao.getEnabled()
+        val fullCategories = fullCatDao.getAll()
+
+        // 1. 支付成功页 + 稍等一下过渡占位文案 -> 三餐外食（有自建“早餐”时命中“早餐”），无淘宝/网购标签
+        val loadingPaySuccess = ScreenSnapshot(
+            packageName = "com.tencent.mm",
+            className = "com.tencent.mm.plugin.wallet_core.ui.WalletPaidSuccessUI",
+            texts = listOf(
+                "支付成功",
+                "逍遥优质胡辣汤（**华）",
+                "¥5.50",
+                "稍等一下...",
+                "完成"
+            )
+        )
+        val loadingOutcome = parser.parse(loadingPaySuccess, fullAliases, fullAccounts, fullCategories)
+        assertEquals(ScreenPageKind.PAY_SUCCESS, loadingOutcome.pageKind)
+        val loadingDraft = loadingOutcome.draft!!
+        assertEquals("逍遥优质胡辣汤（**华）", loadingDraft.merchant)
+        assertEquals(MoneyAmount.parseToMicros("5.50"), loadingDraft.origAmountMicros)
+        assertEquals("三餐外食", loadingDraft.categoryName)
+        assertFalse(TagTextCodec.parse(loadingDraft.tags).contains("淘宝"))
+        assertFalse(TagTextCodec.parse(loadingDraft.tags).contains("网购"))
+
+        val categoriesWithBreakfast = fullCategories + CategoryEntity(
+            id = 9999L,
+            name = "早餐",
+            type = TransactionType.EXPENSE
+        )
+        val customBreakfastOutcome = parser.parse(loadingPaySuccess, fullAliases, fullAccounts, categoriesWithBreakfast)
+        assertEquals("早餐", customBreakfastOutcome.draft!!.categoryName)
+
+        // 2. 支付成功页 + 底部摇一摇/淘宝闪购可叠加立减广告 -> 依然命中三餐外食，且 tags 不含淘宝/网购
+        val promoHijackAttempt = ScreenSnapshot(
+            packageName = "com.tencent.mm",
+            className = "com.tencent.mm.plugin.wallet_core.ui.WalletPaidSuccessUI",
+            texts = listOf(
+                "支付成功",
+                "逍遥优质胡辣汤（**华）",
+                "¥5.50",
+                "摇一摇有优惠",
+                "淘宝闪购可叠加立减",
+                "摇一摇有优惠,淘宝闪购可叠加立减,查看",
+                "完成"
+            )
+        )
+        val cleanOutcome = parser.parse(promoHijackAttempt, fullAliases, fullAccounts, fullCategories)
+        assertEquals(ScreenPageKind.PAY_SUCCESS, cleanOutcome.pageKind)
+        val cleanDraft = cleanOutcome.draft!!
+        assertEquals("逍遥优质胡辣汤（**华）", cleanDraft.merchant)
+        assertEquals("三餐外食", cleanDraft.categoryName)
+        assertFalse(TagTextCodec.parse(cleanDraft.tags).contains("淘宝"))
+        assertFalse(TagTextCodec.parse(cleanDraft.tags).contains("网购"))
+
+        // 无餐饮字眼店名 + 相同淘宝闪购广告 -> 不被劫持为网购百货，tags 为空
+        val neutralShopWithPromo = ScreenSnapshot(
+            packageName = "com.tencent.mm",
+            className = "com.tencent.mm.plugin.wallet_core.ui.WalletPaidSuccessUI",
+            texts = listOf(
+                "支付成功",
+                "张记小铺（**张）",
+                "¥12.00",
+                "摇一摇有优惠",
+                "淘宝闪购可叠加立减",
+                "摇一摇有优惠,淘宝闪购可叠加立减,查看",
+                "完成"
+            )
+        )
+        val neutralOutcome = parser.parse(neutralShopWithPromo, fullAliases, fullAccounts, fullCategories)
+        assertEquals(ScreenPageKind.PAY_SUCCESS, neutralOutcome.pageKind)
+        val neutralDraft = neutralOutcome.draft!!
+        assertEquals("张记小铺（**张）", neutralDraft.merchant)
+        assertEquals("其他支出", neutralDraft.categoryName)
+        assertEquals("", neutralDraft.tags)
+    }
+
+    @Test
+    fun extractsRealMerchantFromWeChatPersonalQrBillDetailInsteadOfNicknameAndPhone() = runTest {
+        val fullAccDao = FakeAccountDao()
+        val fullAliasDao = FakeAccountAliasDao()
+        val fullCatDao = FakeCategoryDao()
+        DefaultSeedData.ensureAccountsAndTransitCard(fullAccDao, fullAliasDao)
+        DefaultSeedData.ensurePresetCategories(fullCatDao)
+        val fullAccounts = fullAccDao.getAll()
+        val fullAliases = fullAliasDao.getEnabled()
+        val fullCategories = fullCatDao.getAll()
+
+        // 3. 微信个人码账单详情：顶部为个人昵称+手机号，正文为扫二维码付款-给逍遥优质胡辣汤
+        val qrBillDetail = ScreenSnapshot(
+            packageName = "com.tencent.mm",
+            className = "com.tencent.mm.plugin.webview.ui.tools.MMWebViewUI",
+            texts = listOf(
+                "账单详情",
+                "静涵18238949916",
+                "-5.50",
+                "当前状态", "支付成功",
+                "支付时间", "2026-11-24 08:15:20",
+                "商品", "扫二维码付款-给逍遥优质胡辣汤",
+                "支付方式", "零钱",
+                "交易单号", "42000021562026112412345678",
+                "账单服务", "在此商户的交易",
+                "本服务由财付通提供",
+                "全部账单"
+            )
+        )
+        val outcome = parser.parse(qrBillDetail, fullAliases, fullAccounts, fullCategories)
+        assertEquals(ScreenPageKind.BILL_DETAIL, outcome.pageKind)
+        val draft = outcome.draft!!
+        assertEquals(TransactionType.EXPENSE, draft.type)
+        assertEquals(MoneyAmount.parseToMicros("5.50"), draft.origAmountMicros)
+        assertEquals("逍遥优质胡辣汤", draft.merchant)
+        assertEquals("三餐外食", draft.categoryName)
+
+        // 兼容“向商户付款-给XXX”及微信用户泛昵称、以及收款“二维码收款-来自XXX”
+        val qrVariantDetail = ScreenSnapshot(
+            packageName = "com.tencent.mm",
+            className = "com.tencent.mm.plugin.webview.ui.tools.MMWebViewUI",
+            texts = listOf(
+                "账单详情",
+                "微信用户",
+                "-12.00",
+                "当前状态", "支付成功",
+                "商品", "向商户付款-给永和大王",
+                "支付方式", "零钱",
+                "交易单号", "42000021562026112412345679",
+                "本服务由财付通提供"
+            )
+        )
+        val variantOutcome = parser.parse(qrVariantDetail, fullAliases, fullAccounts, fullCategories)
+        assertEquals("永和大王", variantOutcome.draft!!.merchant)
+        assertEquals("三餐外食", variantOutcome.draft!!.categoryName)
+
+        val qrIncomeDetail = ScreenSnapshot(
+            packageName = "com.tencent.mm",
+            className = "com.tencent.mm.plugin.webview.ui.tools.MMWebViewUI",
+            texts = listOf(
+                "账单详情",
+                "微信用户",
+                "+50.00",
+                "当前状态", "已收款",
+                "商品", "二维码收款-来自张三",
+                "收款方式", "零钱",
+                "交易单号", "42000021562026112412345680",
+                "本服务由财付通提供"
+            )
+        )
+        val incomeOutcome = parser.parse(qrIncomeDetail, fullAliases, fullAccounts, fullCategories)
+        assertEquals(TransactionType.INCOME, incomeOutcome.draft!!.type)
+        assertEquals("张三", incomeOutcome.draft!!.merchant)
+    }
 }

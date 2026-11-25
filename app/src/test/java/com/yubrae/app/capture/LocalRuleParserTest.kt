@@ -367,4 +367,91 @@ class LocalRuleParserTest {
         assertEquals("书籍资料", bookDraft!!.categoryName)
         assertTrue(TagTextCodec.parse(bookDraft.tags).contains("跨境"))
     }
+
+    @Test
+    fun resolvesChineseBreakfastAndDiningMerchantFirstWithoutGroceryOrPlatformHijack() = runTest {
+        val fullAccDao = FakeAccountDao()
+        val fullAliasDao = FakeAccountAliasDao()
+        val fullCatDao = FakeCategoryDao()
+        val fullRuleDao = FakeParseRuleDao()
+        DefaultSeedData.ensureAccountsAndTransitCard(fullAccDao, fullAliasDao)
+        DefaultSeedData.ensurePresetCategories(fullCatDao)
+        DefaultSeedData.ensurePresetParseRules(fullRuleDao)
+
+        val fullAccounts = fullAccDao.getAll()
+        val fullAliases = fullAliasDao.getEnabled()
+        val fullCategories = fullCatDao.getAll()
+        val fullRules = fullRuleDao.getEnabled()
+
+        val diningCases = listOf(
+            "逍遥优质胡辣汤（**华）" to "三餐外食",
+            "兰州牛肉面" to "三餐外食",
+            "淮南牛肉汤" to "三餐外食",
+            "鸡蛋灌饼" to "三餐外食",
+            "永和大王" to "三餐外食",
+            "生煎锅贴" to "三餐外食",
+            "大米先生" to "三餐外食",
+            "美团买菜 蔬菜鸡蛋" to "买菜做饭"
+        )
+        diningCases.forEach { (merchantText, expectedCategory) ->
+            val draft = parser.parse(
+                CaptureInput(
+                    channel = CaptureChannel.NOTIFICATION,
+                    sourcePackage = "com.tencent.mm",
+                    title = "微信支付",
+                    content = "微信支付：向${merchantText}付款15.00元"
+                ),
+                fullRules, fullAliases, fullAccounts, fullCategories
+            )
+            assertNotNull("Expected draft for $merchantText", draft)
+            assertEquals("Unexpected category for $merchantText", expectedCategory, draft!!.categoryName)
+        }
+
+        // 商户优先匹配：即使 fullText 含淘宝/买菜等干扰词，具体餐馆商户名依然优先锁定餐饮
+        val merchantFirstCategory = parser.resolveCategory(
+            type = TransactionType.EXPENSE,
+            merchant = "逍遥优质胡辣汤（**华）",
+            fullText = "逍遥优质胡辣汤（**华） 淘宝闪购可叠加立减 买菜",
+            ruleDefaultCategoryName = "其他支出",
+            categories = fullCategories
+        )
+        assertEquals("三餐外食", merchantFirstCategory?.name)
+
+        // 泛平台壳商户仍保留商品关键词匹配（如“淘宝买猫粮 -> 宠物食品”）
+        val taobaoCatFood = parser.parse(
+            CaptureInput(
+                channel = CaptureChannel.NOTIFICATION,
+                sourcePackage = "com.tencent.mm",
+                title = "微信支付",
+                content = "微信支付：向淘宝付款68.00元，购买皇家猫粮2kg"
+            ),
+            fullRules, fullAliases, fullAccounts, fullCategories
+        )
+        assertEquals("宠物食品", taobaoCatFood!!.categoryName)
+
+        // 当用户自建了“早餐”分类时，中式早餐词条优先命中“早餐”
+        val categoriesWithBreakfast = fullCategories + CategoryEntity(
+            id = 9999L,
+            name = "早餐",
+            type = TransactionType.EXPENSE
+        )
+        listOf("逍遥优质胡辣汤（**华）", "鸡蛋灌饼", "永和大王", "生煎锅贴").forEach { breakfastMerchant ->
+            val cat = parser.resolveCategory(
+                type = TransactionType.EXPENSE,
+                merchant = breakfastMerchant,
+                fullText = breakfastMerchant,
+                ruleDefaultCategoryName = "其他支出",
+                categories = categoriesWithBreakfast
+            )
+            assertEquals("Expected custom 早餐 for $breakfastMerchant", "早餐", cat?.name)
+        }
+        val noodleCat = parser.resolveCategory(
+            type = TransactionType.EXPENSE,
+            merchant = "兰州牛肉面",
+            fullText = "兰州牛肉面",
+            ruleDefaultCategoryName = "其他支出",
+            categories = categoriesWithBreakfast
+        )
+        assertEquals("三餐外食", noodleCat?.name)
+    }
 }

@@ -5,12 +5,30 @@ import com.yubrae.app.core.contract.RecordTransactionRequest
 import com.yubrae.app.core.model.CurrencyCatalog
 import com.yubrae.app.core.model.MoneyAmount
 import com.yubrae.app.data.db.AccountEntity
+import com.yubrae.app.data.db.CaptureChannel
 import com.yubrae.app.data.db.CategoryEntity
 import com.yubrae.app.data.db.RawCaptureLogEntity
 import com.yubrae.app.data.db.TagTextCodec
 import com.yubrae.app.data.db.TransactionEntity
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import java.util.Locale
 import kotlin.math.abs
+
+private val TRAILING_MASKED_MERCHANT_SUFFIX_REGEX =
+    Regex("(?:\\s*[（(][^()（）]*[*＊][^()（）]*[）)])+\\s*$")
+
+internal fun hasMaskedMerchantSuffix(raw: String): Boolean =
+    TRAILING_MASKED_MERCHANT_SUFFIX_REGEX.containsMatchIn(raw.trim())
+
+internal fun normalizeMerchantForMatch(raw: String): String {
+    val trimmed = raw.trim()
+    if (trimmed.isEmpty()) return ""
+    val stripped = TRAILING_MASKED_MERCHANT_SUFFIX_REGEX.replace(trimmed, "").trim()
+    return (if (stripped.isNotEmpty()) stripped else trimmed).lowercase(Locale.ROOT)
+}
 
 data class DedupMatch(
     val existingTransaction: TransactionEntity,
@@ -72,6 +90,7 @@ class CaptureDeduplicator(
                 existing = tx,
                 existingLog = existingLog,
                 incomingDraft = incomingDraft,
+                incomingSourcePackage = incomingSourcePackage,
                 accountsById = accountsById,
                 categoriesById = categoriesById
             )
@@ -101,6 +120,10 @@ class CaptureDeduplicator(
         incomingRawText: String,
         allowPlatformShellMerge: Boolean
     ): Boolean {
+        if (hasConflictingOrderNo(existing, existingLog, incomingDraft)) {
+            return false
+        }
+
         val existingPkg = existingLog?.sourcePackage.orEmpty()
         val isDifferentChannel = !existing.sourceType.equals(incomingChannel, ignoreCase = true)
         val isDifferentPackage = existingPkg.isNotBlank() &&
@@ -118,12 +141,52 @@ class CaptureDeduplicator(
             return true
         }
 
-        // 同渠道同包名：仅当通知正文高度一致（系统重复回调同一通知）时判重合并
+        // 同渠道同包名：1）通知正文高度一致（系统重复回调同一通知）；2）同包名支付成功页重复刷新（如底部广告加载导致 rawText 变化）
         val existingRaw = existingLog?.let { "${it.title}\n${it.content}".trim() }.orEmpty()
         if (existingRaw.isNotBlank() && existingRaw == incomingRawText.trim()) {
             return true
         }
+        if (isSamePackagePaySuccessRefresh(existing, existingLog, incomingDraft, incomingChannel, incomingSourcePackage)) {
+            return true
+        }
         return false
+    }
+
+    private fun isSamePackagePaySuccessRefresh(
+        existing: TransactionEntity,
+        existingLog: RawCaptureLogEntity?,
+        incomingDraft: ParsedBillDraft,
+        incomingChannel: String,
+        incomingSourcePackage: String
+    ): Boolean {
+        if (!incomingChannel.equals(CaptureChannel.SCREEN, ignoreCase = true)) return false
+        if (!existing.sourceType.equals(CaptureChannel.SCREEN, ignoreCase = true)) return false
+        val existingPkg = existingLog?.sourcePackage.orEmpty()
+        if (existingPkg.isNotBlank() &&
+            incomingSourcePackage.isNotBlank() &&
+            !existingPkg.equals(incomingSourcePackage, ignoreCase = true)
+        ) {
+            return false
+        }
+        val existingIsPaySuccess = existingLog?.title?.contains("支付成功") == true ||
+            existingLog?.parserUsed == "SCREEN_PAY_SUCCESS"
+        if (!existingIsPaySuccess) return false
+        if (incomingDraft.parserUsed != "SCREEN_PAY_SUCCESS") return false
+        return isMerchantCompatible(existing, incomingDraft, allowPlatformShellMerge = false)
+    }
+
+    private fun hasConflictingOrderNo(
+        existing: TransactionEntity,
+        existingLog: RawCaptureLogEntity?,
+        incomingDraft: ParsedBillDraft
+    ): Boolean {
+        val incomingOrderNo = incomingDraft.externalOrderNo.trim()
+        if (incomingOrderNo.isBlank()) return false
+        val existingOrderNo = extractOrderNoFromRecord(
+            tx = existing,
+            logs = listOfNotNull(existingLog)
+        )
+        return existingOrderNo.isNotBlank() && !existingOrderNo.equals(incomingOrderNo, ignoreCase = true)
     }
 
     private fun isAmountMatching(
@@ -157,12 +220,20 @@ class CaptureDeduplicator(
         existing: TransactionEntity,
         existingLog: RawCaptureLogEntity?,
         incomingDraft: ParsedBillDraft,
+        incomingSourcePackage: String,
         accountsById: Map<Long, AccountEntity>,
         categoriesById: Map<Long, CategoryEntity>
     ): RecordTransactionRequest {
         val existingHasCardHint = existingLog?.let {
             CARD_HINT_REGEX.containsMatchIn("${it.title} ${it.content}")
         } == true
+        val isPaySuccessRefresh = isSamePackagePaySuccessRefresh(
+            existing = existing,
+            existingLog = existingLog,
+            incomingDraft = incomingDraft,
+            incomingChannel = existing.sourceType,
+            incomingSourcePackage = incomingSourcePackage
+        )
 
         // 若新采集报文带有明确卡尾号（如银行短信 尾号6688），升级路由到真实银行卡账户
         val finalAccountId = when {
@@ -212,15 +283,35 @@ class CaptureDeduplicator(
         // 融合商户：优先保留明确、非泛化的商户名
         val finalMerchant = chooseBetterMerchant(existing.merchant, incomingDraft.merchant)
 
-        // 融合分类：用更具体的分类替代泛化分类
-        val finalCategoryId = chooseBetterCategoryId(
-            existingCategoryId = existing.categoryId,
-            incomingCategoryId = incomingDraft.categoryId,
-            categoriesById = categoriesById
-        )
+        // 融合分类：支付成功页重复刷新时绝不用广告误判分类覆盖原有效分类；跨渠道融合则择优升级
+        val finalCategoryId = if (isPaySuccessRefresh) {
+            val existingCategoryName = existing.categoryId?.let { categoriesById[it]?.name?.trim() }
+            when {
+                existing.categoryId == null -> incomingDraft.categoryId
+                existingCategoryName in FALLBACK_CATCHALL_CATEGORY_NAMES &&
+                    incomingDraft.categoryId != null &&
+                    categorySpecificityTier(categoriesById[incomingDraft.categoryId]) > 0 -> incomingDraft.categoryId
+                else -> existing.categoryId
+            }
+        } else {
+            chooseBetterCategoryId(
+                existingCategoryId = existing.categoryId,
+                incomingCategoryId = incomingDraft.categoryId,
+                categoriesById = categoriesById
+            )
+        }
 
-        // 融合备注
-        val finalNote = mergeNotes(existing.note, incomingDraft.accountHint, incomingDraft.note)
+        // 融合备注与标签：同包名支付成功页刷新保留原标签与原备注，绝不并入底部推广标签
+        val finalNote = if (isPaySuccessRefresh && existing.note.isNotBlank()) {
+            existing.note
+        } else {
+            mergeNotes(existing.note, incomingDraft.accountHint, incomingDraft.note)
+        }
+        val finalTags = if (isPaySuccessRefresh) {
+            existing.tags
+        } else {
+            TagTextCodec.merge(existing.tags, incomingDraft.tags)
+        }
 
         return RecordTransactionRequest(
             existingId = existing.id,
@@ -235,7 +326,7 @@ class CaptureDeduplicator(
             categoryId = finalCategoryId,
             merchant = finalMerchant,
             note = finalNote,
-            tags = TagTextCodec.merge(existing.tags, incomingDraft.tags),
+            tags = finalTags,
             reimburseStatus = existing.reimburseStatus,
             sourceType = existing.sourceType,
             rawEventId = existing.rawEventId,
@@ -250,6 +341,12 @@ class CaptureDeduplicator(
         if (b.isBlank()) return a
         val aGeneric = GENERIC_MERCHANTS.any { a.contains(it, ignoreCase = true) }
         val bGeneric = GENERIC_MERCHANTS.any { b.contains(it, ignoreCase = true) }
+        if (!aGeneric && !bGeneric && normalizeMerchantForMatch(a) == normalizeMerchantForMatch(b)) {
+            val aMasked = hasMaskedMerchantSuffix(a)
+            val bMasked = hasMaskedMerchantSuffix(b)
+            if (aMasked && !bMasked) return b
+            if (!aMasked && bMasked) return a
+        }
         return when {
             aGeneric && !bGeneric -> b
             !aGeneric && bGeneric -> a
@@ -326,8 +423,8 @@ class CaptureDeduplicator(
         incomingDraft: ParsedBillDraft,
         allowPlatformShellMerge: Boolean
     ): Boolean {
-        val na = existing.merchant.trim().lowercase(Locale.ROOT)
-        val nb = incomingDraft.merchant.trim().lowercase(Locale.ROOT)
+        val na = normalizeMerchantForMatch(existing.merchant)
+        val nb = normalizeMerchantForMatch(incomingDraft.merchant)
         if (na.isBlank() || nb.isBlank()) return true
         if (na == nb || na.contains(nb) || nb.contains(na)) return true
         if (GENERIC_MERCHANTS.any { na.contains(it) || nb.contains(it) }) return true
@@ -393,4 +490,38 @@ class CaptureDeduplicator(
             return MoneyAmount.crossRate(fromToCny, toToCny)
         }
     }
+}
+
+private val DEDUP_LENIENT_JSON = Json {
+    ignoreUnknownKeys = true
+    isLenient = true
+}
+
+private val ORDER_NO_IN_NOTE_REGEX = Regex("单号\\s*[:：]\\s*([A-Za-z0-9_-]+)")
+
+internal fun extractOrderNoFromJson(rawJson: String): String {
+    if (rawJson.isBlank()) return ""
+    return runCatching {
+        val obj = DEDUP_LENIENT_JSON.parseToJsonElement(rawJson) as? JsonObject ?: return ""
+        val primary = (obj["externalOrderNo"] as? JsonPrimitive)?.contentOrNull.orEmpty().trim()
+        if (primary.isNotBlank()) return primary
+        (obj["orderNo"] as? JsonPrimitive)?.contentOrNull.orEmpty().trim()
+    }.getOrDefault("")
+}
+
+internal fun extractOrderNoFromRecord(
+    tx: TransactionEntity,
+    logs: List<RawCaptureLogEntity>
+): String {
+    for (log in logs) {
+        val fromJson = extractOrderNoFromJson(log.extractedJson)
+        if (fromJson.isNotBlank()) return fromJson
+    }
+    val fromNote = ORDER_NO_IN_NOTE_REGEX.find(tx.note)?.groupValues?.getOrNull(1)?.trim().orEmpty()
+    if (fromNote.isNotBlank()) return fromNote
+    for (log in logs) {
+        val fromContent = ORDER_NO_IN_NOTE_REGEX.find(log.content)?.groupValues?.getOrNull(1)?.trim().orEmpty()
+        if (fromContent.isNotBlank()) return fromContent
+    }
+    return ""
 }

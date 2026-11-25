@@ -1117,6 +1117,17 @@ fun AppearanceSecurityScreen(
                                 }
                             }
                         )
+
+                        CompactHairlineDivider(startIndent = 0.dp)
+
+                        CompactSwitchRow(
+                            title = "后台卡片隐私模糊",
+                            detail = "切到后台多任务隐藏界面内容，开启期间防截屏",
+                            checked = settings.hideRecentsPreviewEnabled,
+                            onCheckedChange = { checked ->
+                                viewModel.updateSettings { it.copy(hideRecentsPreviewEnabled = checked) }
+                            }
+                        )
                     }
                 }
             }
