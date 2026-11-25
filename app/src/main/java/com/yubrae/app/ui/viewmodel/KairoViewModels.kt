@@ -1337,6 +1337,17 @@ class KairoMainViewModel(
         }
     }
 
+    fun isVoiceAiFallbackReady(): Boolean {
+        val cur = settings.value
+        return cur.llmEnabled && cur.llmApiKey.isNotBlank() && cur.llmBaseUrl.isNotBlank()
+    }
+
+    suspend fun transcribeVoiceAudio(wavBytes: ByteArray): Result<String> = withContext(Dispatchers.IO) {
+        val curSettings = runCatching { settingsStore.getSnapshot() }
+            .getOrElse { return@withContext Result.failure(it) }
+        llmBillParser.transcribeAudioWav(wavBytes, curSettings)
+    }
+
     fun saveSmartDrafts(
         drafts: List<ParsedBillDraft>,
         ledgerId: Long,

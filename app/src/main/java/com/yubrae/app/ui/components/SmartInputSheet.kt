@@ -4,6 +4,8 @@ import android.Manifest
 import android.app.Activity
 import android.net.Uri
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
@@ -50,6 +52,7 @@ import androidx.compose.material.icons.rounded.Category
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Info
+import androidx.compose.material.icons.rounded.Keyboard
 import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.MicOff
 import androidx.compose.material.icons.rounded.PhotoLibrary
@@ -86,19 +89,25 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.yubrae.app.capture.DeviceRomProfile
+import com.yubrae.app.capture.InAppAudioRecorder
+import com.yubrae.app.capture.SpeechEngineCandidate
 import com.yubrae.app.capture.SpeechEngineInfo
 import com.yubrae.app.capture.SpeechErrorDiagnosis
 import com.yubrae.app.capture.SpeechErrorKind
@@ -112,7 +121,33 @@ import com.yubrae.app.data.db.LedgerEntity
 import com.yubrae.app.data.db.TransactionType
 import com.yubrae.app.ui.theme.KairoTheme
 import com.yubrae.app.ui.theme.tabular
+import java.util.Locale
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+enum class VoiceCaptureMode {
+    SYSTEM_ASR,
+    AI_AUDIO,
+    TRANSCRIBING
+}
+
+private sealed interface SpeechAttemptTarget {
+    val engineInfo: SpeechEngineInfo
+
+    data class ServiceCandidate(val candidate: SpeechEngineCandidate) : SpeechAttemptTarget {
+        override val engineInfo: SpeechEngineInfo = candidate.toEngineInfo()
+    }
+
+    data object OnDevice : SpeechAttemptTarget {
+        override val engineInfo: SpeechEngineInfo = SpeechEngineInfo(
+            packageName = "android.speech.ondevice",
+            label = "设备端离线语音"
+        )
+    }
+}
 
 private data class IndexedDraft(
     val uid: Long,
@@ -138,7 +173,11 @@ fun SmartInputSheet(
     onParseText: suspend (String) -> List<ParsedBillDraft>,
     onParseImage: suspend (String) -> Result<ParsedBillDraft?>,
     onSaveDrafts: (List<ParsedBillDraft>, ledgerId: Long, attachmentPath: String?) -> Unit,
-    onDismiss: () -> Unit
+    onDismiss: () -> Unit,
+    isVoiceAiFallbackReady: Boolean = false,
+    onTranscribeVoiceAudio: suspend (ByteArray) -> Result<String> = {
+        Result.failure(IllegalStateException("未配置 AI 语音转写能力"))
+    }
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val context = LocalContext.current
@@ -174,18 +213,38 @@ fun SmartInputSheet(
     var textParseError by remember { mutableStateOf<String?>(null) }
     var nextDraftUid by remember { mutableLongStateOf(1L) }
     var textDrafts by remember { mutableStateOf<List<IndexedDraft>>(emptyList()) }
+    val inputFocusRequester = remember { FocusRequester() }
+    val keyboardController = LocalSoftwareKeyboardController.current
+    val mainHandler = remember { Handler(Looper.getMainLooper()) }
+    val latestIsVoiceAiFallbackReady by rememberUpdatedState(isVoiceAiFallbackReady)
+    val latestTranscribeVoiceAudio by rememberUpdatedState(onTranscribeVoiceAudio)
+    val latestLlmEnabled by rememberUpdatedState(llmEnabled)
 
-    // 语音识别状态
+    // 语音识别 / AI 录音状态机
     val isXiaomiRom = remember { DeviceRomProfile.detectCurrent().isXiaomiFamily }
     var activeSpeechRecognizer by remember { mutableStateOf<SpeechRecognizer?>(null) }
-    var speechSessionGen by remember { mutableIntStateOf(0) }
+    var activeAudioRecorder by remember { mutableStateOf<InAppAudioRecorder?>(null) }
+    var activeTranscriptionJob by remember { mutableStateOf<Job?>(null) }
+    var voiceSessionGen by remember { mutableIntStateOf(0) }
+    var asrAttemptGen by remember { mutableIntStateOf(0) }
+    var recorderSessionGen by remember { mutableIntStateOf(0) }
+    var transcriptionHandledRecId by remember { mutableIntStateOf(0) }
+
     var isListeningDialogVisible by remember { mutableStateOf(false) }
+    var voiceCaptureMode by remember { mutableStateOf(VoiceCaptureMode.SYSTEM_ASR) }
     var isFinishingSpeech by remember { mutableStateOf(false) }
+    var userClickedFinishAsr by remember { mutableStateOf(false) }
     var listeningRmsDb by remember { mutableFloatStateOf(0f) }
     var listeningPartialText by remember { mutableStateOf("") }
+    var aiElapsedMillis by remember { mutableLongStateOf(0L) }
     var activeSpeechEngine by remember { mutableStateOf<SpeechEngineInfo?>(null) }
+    var lastFailedEngineForSettings by remember { mutableStateOf<SpeechEngineInfo?>(null) }
+    var activeAiTriedEngines by remember { mutableStateOf<List<SpeechEngineInfo>>(emptyList()) }
+    var activeAiLastAsrError by remember { mutableIntStateOf(SpeechRecognizer.ERROR_CLIENT) }
     var speechDiagnosis by remember { mutableStateOf<SpeechErrorDiagnosis?>(null) }
     var canReRequestMicPermission by remember { mutableStateOf(false) }
+    var showKeyboardVoiceHint by remember { mutableStateOf(false) }
+    var pendingKeyboardFocusSeq by remember { mutableIntStateOf(0) }
 
     // Tab 1 状态：小票拍照 / 选图识别
     var currentImagePath by remember(initialImagePath) { mutableStateOf(initialImagePath) }
@@ -230,6 +289,14 @@ fun SmartInputSheet(
         }
     }
 
+    LaunchedEffect(pendingKeyboardFocusSeq) {
+        if (pendingKeyboardFocusSeq > 0) {
+            delay(80L)
+            runCatching { inputFocusRequester.requestFocus() }
+            keyboardController?.show()
+        }
+    }
+
     val appendRecognizedSpeech: (String) -> Unit = { raw ->
         val spoken = raw.trim()
         if (spoken.isNotEmpty()) {
@@ -237,15 +304,16 @@ fun SmartInputSheet(
             textParseError = null
             speechDiagnosis = null
             canReRequestMicPermission = false
+            showKeyboardVoiceHint = false
         }
     }
 
-    val cleanupSpeechRecognizer: (Boolean) -> Unit = { cancelActive ->
-        speechSessionGen++
+    val destroySpeechRecognizerOnly: (Boolean) -> Unit = { cancelActive ->
+        asrAttemptGen++
         val recognizer = activeSpeechRecognizer
         activeSpeechRecognizer = null
-        isListeningDialogVisible = false
         isFinishingSpeech = false
+        userClickedFinishAsr = false
         listeningRmsDb = 0f
         if (recognizer != null) {
             runCatching {
@@ -255,9 +323,42 @@ fun SmartInputSheet(
         }
     }
 
+    val releaseAudioRecorderOnly: () -> Unit = {
+        recorderSessionGen++
+        val recorder = activeAudioRecorder
+        activeAudioRecorder = null
+        aiElapsedMillis = 0L
+        listeningRmsDb = 0f
+        if (recorder != null) {
+            runCatching { recorder.cancel() }
+        }
+    }
+
+    val cleanupAllVoiceResources: (Boolean) -> Unit = { cancelActive ->
+        voiceSessionGen++
+        activeTranscriptionJob?.cancel()
+        activeTranscriptionJob = null
+        destroySpeechRecognizerOnly(cancelActive)
+        releaseAudioRecorderOnly()
+        isListeningDialogVisible = false
+        voiceCaptureMode = VoiceCaptureMode.SYSTEM_ASR
+    }
+
+    val switchToKeyboardVoice: () -> Unit = {
+        cleanupAllVoiceResources(true)
+        speechDiagnosis = null
+        canReRequestMicPermission = false
+        textParseError = null
+        showKeyboardVoiceHint = true
+        if (selectedTab != 0) {
+            selectedTab = 0
+        }
+        pendingKeyboardFocusSeq++
+    }
+
     DisposableEffect(selectedTab) {
         onDispose {
-            cleanupSpeechRecognizer(true)
+            cleanupAllVoiceResources(true)
         }
     }
 
@@ -266,6 +367,7 @@ fun SmartInputSheet(
     ) { result ->
         val engine = SpeechInputHelper.resolveActiveSpeechEngine(context)
         activeSpeechEngine = engine
+        lastFailedEngineForSettings = engine
         if (result.resultCode == Activity.RESULT_OK) {
             val spoken = result.data
                 ?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
@@ -292,11 +394,13 @@ fun SmartInputSheet(
     }
 
     val launchSystemSpeechDialog: () -> Unit = {
-        cleanupSpeechRecognizer(true)
+        cleanupAllVoiceResources(true)
         val engine = SpeechInputHelper.resolveActiveSpeechEngine(context)
         activeSpeechEngine = engine
+        lastFailedEngineForSettings = engine
         speechDiagnosis = null
         canReRequestMicPermission = false
+        showKeyboardVoiceHint = false
         val intent = SpeechInputHelper.buildRecognitionIntent(callingPackage = context.packageName)
         runCatching {
             speechLauncher.launch(intent)
@@ -307,118 +411,372 @@ fun SmartInputSheet(
                 isXiaomiRom = isXiaomiRom
             ).copy(
                 title = "未找到可用的系统语音服务",
-                message = "当前设备未检测到可用的系统语音识别弹窗或服务，请检查语音引擎设置或直接使用输入法语音。",
+                message = "当前设备未检测到可用的系统语音识别弹窗或服务，推荐直接改用键盘语音输入。",
                 showVoiceSettingsAction = true,
                 showSystemDialogFallback = false
             )
         }
     }
 
+    val beginAiTranscription: (ByteArray, Int, List<SpeechEngineInfo>, Int) -> Unit =
+        { wavBytes, sessionId, triedEngines, lastAsrErrorCode ->
+            if (sessionId == voiceSessionGen) {
+                if (wavBytes.isEmpty()) {
+                    cleanupAllVoiceResources(false)
+                    speechDiagnosis = SpeechErrorDiagnosis(
+                        kind = SpeechErrorKind.NO_SPEECH_OR_TIMEOUT,
+                        title = "未采集到有效语音",
+                        message = "本次录音时长过短或未采集到声音，请靠近麦克风重试或改用键盘语音。",
+                        guideSteps = listOf(
+                            "1. 点击「改用键盘语音」，使用系统输入法麦克风快速输入",
+                            "2. 或重新点击「语音输入」并在说出账单后点击「说完了」"
+                        )
+                    )
+                } else {
+                    voiceCaptureMode = VoiceCaptureMode.TRANSCRIBING
+                    activeSpeechEngine = null
+                    activeTranscriptionJob?.cancel()
+                    activeTranscriptionJob = coroutineScope.launch {
+                        val res = runCatching { latestTranscribeVoiceAudio(wavBytes) }
+                            .getOrElse { Result.failure(it) }
+                        if (sessionId != voiceSessionGen) return@launch
+                        activeTranscriptionJob = null
+                        res.onSuccess { rawText ->
+                            val spoken = rawText.trim()
+                            cleanupAllVoiceResources(false)
+                            if (spoken.isNotEmpty()) {
+                                appendRecognizedSpeech(spoken)
+                            } else {
+                                speechDiagnosis = SpeechErrorDiagnosis(
+                                    kind = SpeechErrorKind.NO_SPEECH_OR_TIMEOUT,
+                                    title = "AI 未识别出有效文字",
+                                    message = "本次语音转写结果为空，请靠近麦克风清晰说出金额与用途，或直接改用键盘语音。",
+                                    guideSteps = listOf(
+                                        "1. 试试说：「午饭花了35元，打车18元」",
+                                        "2. 也可以点击下方「改用键盘语音」使用输入法语音输入"
+                                    )
+                                )
+                            }
+                        }.onFailure { err ->
+                            cleanupAllVoiceResources(false)
+                            val detail = err.message?.trim()?.takeIf { it.isNotEmpty() }
+                                ?: "AI 语音转写服务暂不可用"
+                            val baseDiagnosis = SpeechInputHelper.diagnoseAllEnginesFailed(
+                                lastErrorCode = lastAsrErrorCode,
+                                triedEngines = triedEngines,
+                                isXiaomiRom = isXiaomiRom,
+                                llmEnabled = latestLlmEnabled
+                            )
+                            textParseError = null
+                            speechDiagnosis = SpeechErrorDiagnosis(
+                                kind = SpeechErrorKind.NETWORK_OR_UNAVAILABLE,
+                                title = "AI 语音转写失败",
+                                message = detail,
+                                guideSteps = listOf(
+                                    "1. 推荐直接点击「改用键盘语音」，使用系统输入法自带麦克风听写",
+                                    "2. 如需继续使用 AI 语音速记，请检查网络及「我的 → AI 大模型」中的模型是否支持音频/多模态输入"
+                                ),
+                                showAppPermissionAction = false,
+                                showEngineSettingsAction = baseDiagnosis.showEngineSettingsAction,
+                                showVoiceSettingsAction = baseDiagnosis.showVoiceSettingsAction,
+                                showSystemDialogFallback = false
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+    val startAiAudioCapture: (Int, List<SpeechEngineInfo>, Int) -> Unit =
+        { sessionId, triedEngines, lastAsrErrorCode ->
+            if (sessionId == voiceSessionGen) {
+                destroySpeechRecognizerOnly(true)
+                releaseAudioRecorderOnly()
+                activeSpeechEngine = null
+                activeAiTriedEngines = triedEngines
+                activeAiLastAsrError = lastAsrErrorCode
+                lastFailedEngineForSettings = triedEngines
+                    .firstOrNull { it.packageName.isNotBlank() && it.packageName != "android.speech.ondevice" }
+                    ?: triedEngines.firstOrNull()
+                voiceCaptureMode = VoiceCaptureMode.AI_AUDIO
+                aiElapsedMillis = 0L
+                listeningRmsDb = -2f
+                listeningPartialText = ""
+                isListeningDialogVisible = true
+
+                val recId = ++recorderSessionGen
+                val recorder = InAppAudioRecorder(maxDurationMillis = 60_000L)
+                activeAudioRecorder = recorder
+                var syncErrorMessage: String? = null
+
+                val started = runCatching {
+                    recorder.start(
+                        onRmsDb = { rmsDb ->
+                            mainHandler.post {
+                                if (sessionId == voiceSessionGen &&
+                                    recId == recorderSessionGen &&
+                                    voiceCaptureMode == VoiceCaptureMode.AI_AUDIO
+                                ) {
+                                    listeningRmsDb = if (rmsDb.isFinite()) rmsDb else 0f
+                                }
+                            }
+                        },
+                        onElapsedMillis = { elapsed ->
+                            mainHandler.post {
+                                if (sessionId == voiceSessionGen &&
+                                    recId == recorderSessionGen &&
+                                    voiceCaptureMode == VoiceCaptureMode.AI_AUDIO
+                                ) {
+                                    aiElapsedMillis = elapsed
+                                }
+                            }
+                        },
+                        onAutoStopped = { wavBytes ->
+                            mainHandler.post {
+                                if (sessionId != voiceSessionGen || recId != recorderSessionGen) return@post
+                                if (transcriptionHandledRecId == recId) return@post
+                                transcriptionHandledRecId = recId
+                                activeAudioRecorder = null
+                                beginAiTranscription(wavBytes, sessionId, triedEngines, lastAsrErrorCode)
+                            }
+                        },
+                        onError = { msg ->
+                            syncErrorMessage = msg
+                            mainHandler.post {
+                                if (sessionId != voiceSessionGen || recId != recorderSessionGen) return@post
+                                if (transcriptionHandledRecId == recId) return@post
+                                cleanupAllVoiceResources(true)
+                                textParseError = "应用内录音异常：$msg"
+                                speechDiagnosis = SpeechInputHelper.diagnoseAllEnginesFailed(
+                                    lastErrorCode = lastAsrErrorCode,
+                                    triedEngines = triedEngines,
+                                    isXiaomiRom = isXiaomiRom,
+                                    llmEnabled = latestLlmEnabled
+                                )
+                            }
+                        }
+                    )
+                }.onFailure { err ->
+                    syncErrorMessage = err.message
+                }.getOrDefault(false)
+
+                if (!started) {
+                    activeAudioRecorder = null
+                    runCatching { recorder.cancel() }
+                    cleanupAllVoiceResources(false)
+                    textParseError = syncErrorMessage?.trim()?.takeIf { it.isNotEmpty() }
+                        ?.let { "无法启动应用内录音：$it" }
+                    speechDiagnosis = SpeechInputHelper.diagnoseAllEnginesFailed(
+                        lastErrorCode = lastAsrErrorCode,
+                        triedEngines = triedEngines,
+                        isXiaomiRom = isXiaomiRom,
+                        llmEnabled = latestLlmEnabled
+                    )
+                }
+            }
+        }
+
+    fun handleAllAsrEnginesExhausted(
+        sessionId: Int,
+        triedEngines: List<SpeechEngineInfo>,
+        lastErrorCode: Int
+    ) {
+        if (sessionId == voiceSessionGen) {
+            lastFailedEngineForSettings = triedEngines
+                .firstOrNull { it.packageName.isNotBlank() && it.packageName != "android.speech.ondevice" }
+                ?: triedEngines.firstOrNull()
+            if (latestIsVoiceAiFallbackReady) {
+                startAiAudioCapture(sessionId, triedEngines, lastErrorCode)
+            } else {
+                cleanupAllVoiceResources(false)
+                activeSpeechEngine = triedEngines.singleOrNull()
+                speechDiagnosis = SpeechInputHelper.diagnoseAllEnginesFailed(
+                    lastErrorCode = lastErrorCode,
+                    triedEngines = triedEngines,
+                    isXiaomiRom = isXiaomiRom,
+                    llmEnabled = latestLlmEnabled
+                )
+            }
+        }
+    }
+
+    fun startAsrCandidate(
+        sessionId: Int,
+        targets: List<SpeechAttemptTarget>,
+        index: Int,
+        triedEngines: MutableList<SpeechEngineInfo>,
+        lastErrorCode: Int
+    ) {
+        if (sessionId != voiceSessionGen) return
+        if (index >= targets.size) {
+            handleAllAsrEnginesExhausted(sessionId, triedEngines.toList(), lastErrorCode)
+            return
+        }
+
+        val target = targets[index]
+        val engineInfo = target.engineInfo
+        destroySpeechRecognizerOnly(true)
+        activeSpeechEngine = engineInfo
+        listeningPartialText = ""
+        listeningRmsDb = 0f
+        isFinishingSpeech = false
+        userClickedFinishAsr = false
+
+        val attemptId = ++asrAttemptGen
+        val createRes = runCatching {
+            val recognizer = when (target) {
+                is SpeechAttemptTarget.ServiceCandidate ->
+                    SpeechInputHelper.createSpeechRecognizerForCandidate(context, target.candidate)
+                SpeechAttemptTarget.OnDevice ->
+                    SpeechInputHelper.createOnDeviceRecognizer(context)
+                        ?: throw IllegalStateException("设备端离线语音识别不可用")
+            }
+            recognizer.setRecognitionListener(object : RecognitionListener {
+                override fun onReadyForSpeech(params: Bundle?) {}
+
+                override fun onBeginningOfSpeech() {}
+
+                override fun onRmsChanged(rmsdB: Float) {
+                    if (sessionId == voiceSessionGen && attemptId == asrAttemptGen) {
+                        listeningRmsDb = if (rmsdB.isFinite()) rmsdB else 0f
+                    }
+                }
+
+                override fun onBufferReceived(buffer: ByteArray?) {}
+
+                override fun onEndOfSpeech() {
+                    if (sessionId == voiceSessionGen && attemptId == asrAttemptGen) {
+                        isFinishingSpeech = true
+                    }
+                }
+
+                override fun onError(error: Int) {
+                    if (sessionId != voiceSessionGen || attemptId != asrAttemptGen) return
+                    val partialFallback = listeningPartialText.trim()
+                    val shouldRescuePartial = isFinishingSpeech &&
+                        partialFallback.isNotEmpty() &&
+                        (error == SpeechRecognizer.ERROR_NO_MATCH ||
+                            error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT)
+                    val shouldFailover = !userClickedFinishAsr &&
+                        partialFallback.isEmpty() &&
+                        SpeechInputHelper.isRetryableEngineBindingError(error)
+
+                    if (shouldRescuePartial) {
+                        cleanupAllVoiceResources(false)
+                        appendRecognizedSpeech(partialFallback)
+                    } else if (shouldFailover) {
+                        destroySpeechRecognizerOnly(false)
+                        if (triedEngines.none { it == engineInfo }) {
+                            triedEngines.add(engineInfo)
+                        }
+                        startAsrCandidate(sessionId, targets, index + 1, triedEngines, error)
+                    } else {
+                        cleanupAllVoiceResources(false)
+                        lastFailedEngineForSettings = engineInfo
+                        activeSpeechEngine = engineInfo
+                        speechDiagnosis = SpeechInputHelper.diagnoseSpeechRecognizerError(
+                            errorCode = error,
+                            engine = engineInfo,
+                            isXiaomiRom = isXiaomiRom
+                        )
+                    }
+                }
+
+                override fun onResults(results: Bundle?) {
+                    if (sessionId != voiceSessionGen || attemptId != asrAttemptGen) return
+                    val spoken = results
+                        ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                        ?.firstOrNull()
+                        ?.trim()
+                        ?.takeIf { it.isNotEmpty() }
+                        ?: listeningPartialText.trim()
+                    cleanupAllVoiceResources(false)
+                    if (spoken.isNotEmpty()) {
+                        appendRecognizedSpeech(spoken)
+                    } else {
+                        lastFailedEngineForSettings = engineInfo
+                        activeSpeechEngine = engineInfo
+                        speechDiagnosis = SpeechInputHelper.diagnoseSpeechRecognizerError(
+                            errorCode = SpeechRecognizer.ERROR_NO_MATCH,
+                            engine = engineInfo,
+                            isXiaomiRom = isXiaomiRom
+                        )
+                    }
+                }
+
+                override fun onPartialResults(partialResults: Bundle?) {
+                    if (sessionId != voiceSessionGen || attemptId != asrAttemptGen) return
+                    val partial = partialResults
+                        ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                        ?.firstOrNull()
+                        ?.trim()
+                    if (!partial.isNullOrEmpty()) {
+                        listeningPartialText = partial
+                    }
+                }
+
+                override fun onEvent(eventType: Int, params: Bundle?) {}
+            })
+            activeSpeechRecognizer = recognizer
+            recognizer.startListening(
+                SpeechInputHelper.buildRecognitionIntent(
+                    callingPackage = context.packageName,
+                    partialResults = true
+                )
+            )
+        }
+        createRes.onFailure {
+            if (sessionId != voiceSessionGen || attemptId != asrAttemptGen) return@onFailure
+            destroySpeechRecognizerOnly(true)
+            if (triedEngines.none { it == engineInfo }) {
+                triedEngines.add(engineInfo)
+            }
+            startAsrCandidate(
+                sessionId = sessionId,
+                targets = targets,
+                index = index + 1,
+                triedEngines = triedEngines,
+                lastErrorCode = SpeechRecognizer.ERROR_CLIENT
+            )
+        }
+    }
+
     val startInAppSpeechRecognition: () -> Unit = {
-        cleanupSpeechRecognizer(true)
-        val engine = SpeechInputHelper.resolveActiveSpeechEngine(context)
-        activeSpeechEngine = engine
+        cleanupAllVoiceResources(true)
         speechDiagnosis = null
         canReRequestMicPermission = false
+        showKeyboardVoiceHint = false
+        textParseError = null
 
-        if (!SpeechInputHelper.isInAppSpeechAvailable(context)) {
-            launchSystemSpeechDialog()
+        val sessionId = ++voiceSessionGen
+        val candidates = SpeechInputHelper.resolveSpeechEngineCandidates(context, isXiaomiRom)
+        val targets = buildList {
+            candidates.forEach { add(SpeechAttemptTarget.ServiceCandidate(it)) }
+            if (SpeechInputHelper.isOnDeviceSpeechAvailable(context)) {
+                add(SpeechAttemptTarget.OnDevice)
+            }
+        }
+
+        if (targets.isEmpty()) {
+            handleAllAsrEnginesExhausted(
+                sessionId = sessionId,
+                triedEngines = emptyList(),
+                lastErrorCode = SpeechRecognizer.ERROR_CLIENT
+            )
         } else {
-            val sessionId = ++speechSessionGen
+            voiceCaptureMode = VoiceCaptureMode.SYSTEM_ASR
             listeningPartialText = ""
             listeningRmsDb = 0f
             isFinishingSpeech = false
+            userClickedFinishAsr = false
             isListeningDialogVisible = true
-
-            val createRes = runCatching {
-                val recognizer = SpeechRecognizer.createSpeechRecognizer(context)
-                recognizer.setRecognitionListener(object : RecognitionListener {
-                    override fun onReadyForSpeech(params: Bundle?) {}
-
-                    override fun onBeginningOfSpeech() {}
-
-                    override fun onRmsChanged(rmsdB: Float) {
-                        if (sessionId == speechSessionGen) {
-                            listeningRmsDb = rmsdB
-                        }
-                    }
-
-                    override fun onBufferReceived(buffer: ByteArray?) {}
-
-                    override fun onEndOfSpeech() {
-                        if (sessionId == speechSessionGen) {
-                            isFinishingSpeech = true
-                        }
-                    }
-
-                    override fun onError(error: Int) {
-                        if (sessionId != speechSessionGen) return
-                        val partialFallback = listeningPartialText.trim()
-                        val shouldRescuePartial = isFinishingSpeech &&
-                            partialFallback.isNotEmpty() &&
-                            (error == SpeechRecognizer.ERROR_NO_MATCH ||
-                                error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT)
-                        cleanupSpeechRecognizer(false)
-                        if (shouldRescuePartial) {
-                            appendRecognizedSpeech(partialFallback)
-                        } else {
-                            speechDiagnosis = SpeechInputHelper.diagnoseSpeechRecognizerError(
-                                errorCode = error,
-                                engine = engine,
-                                isXiaomiRom = isXiaomiRom
-                            )
-                        }
-                    }
-
-                    override fun onResults(results: Bundle?) {
-                        if (sessionId != speechSessionGen) return
-                        val spoken = results
-                            ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                            ?.firstOrNull()
-                            ?.trim()
-                            ?.takeIf { it.isNotEmpty() }
-                            ?: listeningPartialText.trim()
-                        cleanupSpeechRecognizer(false)
-                        if (spoken.isNotEmpty()) {
-                            appendRecognizedSpeech(spoken)
-                        } else {
-                            speechDiagnosis = SpeechInputHelper.diagnoseSpeechRecognizerError(
-                                errorCode = SpeechRecognizer.ERROR_NO_MATCH,
-                                engine = engine,
-                                isXiaomiRom = isXiaomiRom
-                            )
-                        }
-                    }
-
-                    override fun onPartialResults(partialResults: Bundle?) {
-                        if (sessionId != speechSessionGen) return
-                        val partial = partialResults
-                            ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                            ?.firstOrNull()
-                            ?.trim()
-                        if (!partial.isNullOrEmpty()) {
-                            listeningPartialText = partial
-                        }
-                    }
-
-                    override fun onEvent(eventType: Int, params: Bundle?) {}
-                })
-                activeSpeechRecognizer = recognizer
-                recognizer.startListening(
-                    SpeechInputHelper.buildRecognitionIntent(
-                        callingPackage = context.packageName,
-                        partialResults = true
-                    )
-                )
-            }
-            createRes.onFailure {
-                cleanupSpeechRecognizer(true)
-                speechDiagnosis = SpeechInputHelper.diagnoseSpeechRecognizerError(
-                    errorCode = SpeechRecognizer.ERROR_CLIENT,
-                    engine = engine,
-                    isXiaomiRom = isXiaomiRom
-                )
-            }
+            startAsrCandidate(
+                sessionId = sessionId,
+                targets = targets,
+                index = 0,
+                triedEngines = mutableListOf(),
+                lastErrorCode = SpeechRecognizer.ERROR_CLIENT
+            )
         }
     }
 
@@ -432,14 +790,15 @@ fun SmartInputSheet(
         } else {
             val engine = SpeechInputHelper.resolveActiveSpeechEngine(context)
             activeSpeechEngine = engine
+            lastFailedEngineForSettings = engine
             canReRequestMicPermission = true
             speechDiagnosis = SpeechErrorDiagnosis(
                 kind = SpeechErrorKind.PERMISSION_DENIED,
                 title = "需要麦克风录音权限",
-                message = "未获得录音权限，无法启动语音记账。请允许「余白」访问麦克风后继续。",
+                message = "未获得录音权限，无法启动应用内语音记账。你可以重新授权或直接改用键盘语音输入。",
                 guideSteps = listOf(
                     "1. 点击下方「重新申请」，在系统权限弹窗中选择「仅在使用中允许」",
-                    "2. 若系统已勾选不再询问，请点击「前往应用权限设置」手动开启「麦克风」权限"
+                    "2. 若系统已勾选不再询问，可点击「前往应用权限设置」开启权限，或点击「改用键盘语音」"
                 ),
                 showAppPermissionAction = true,
                 showEngineSettingsAction = false,
@@ -451,6 +810,7 @@ fun SmartInputSheet(
 
     val onVoiceInputClick: () -> Unit = {
         textParseError = null
+        showKeyboardVoiceHint = false
         if (SpeechInputHelper.hasRecordAudioPermission(context)) {
             startInAppSpeechRecognition()
         } else {
@@ -498,7 +858,7 @@ fun SmartInputSheet(
 
     ModalBottomSheet(
         onDismissRequest = {
-            cleanupSpeechRecognizer(true)
+            cleanupAllVoiceResources(true)
             onDismiss()
         },
         sheetState = sheetState,
@@ -556,7 +916,7 @@ fun SmartInputSheet(
                 }
                 IconButton(
                     onClick = {
-                        cleanupSpeechRecognizer(true)
+                        cleanupAllVoiceResources(true)
                         onDismiss()
                     }
                 ) {
@@ -628,6 +988,7 @@ fun SmartInputSheet(
                         placeholder = { Text("如：午饭35、打车18") },
                         minLines = 3,
                         maxLines = 5,
+                        shape = RoundedCornerShape(14.dp),
                         trailingIcon = {
                             if (inputText.isNotEmpty()) {
                                 IconButton(onClick = { inputText = "" }) {
@@ -635,8 +996,54 @@ fun SmartInputSheet(
                                 }
                             }
                         },
-                        modifier = Modifier.fillMaxWidth()
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .focusRequester(inputFocusRequester)
                     )
+
+                    if (showKeyboardVoiceHint) {
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f),
+                            border = BorderStroke(
+                                width = 0.6.dp,
+                                color = MaterialTheme.colorScheme.primary.copy(alpha = 0.25f)
+                            ),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Keyboard,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Text(
+                                    text = "已定位到输入框，请点击键盘工具栏的「麦克风」图标进行语音输入",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                IconButton(
+                                    onClick = { showKeyboardVoiceHint = false },
+                                    modifier = Modifier.size(22.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Close,
+                                        contentDescription = "关闭提示",
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
 
                     if (textDrafts.isEmpty()) {
                         LazyRow(
@@ -685,6 +1092,7 @@ fun SmartInputSheet(
                                     textParseError = "请先输入或语音录入口语账单内容"
                                     return@Button
                                 }
+                                showKeyboardVoiceHint = false
                                 isParsingText = true
                                 textParseError = null
                                 coroutineScope.launch {
@@ -733,6 +1141,7 @@ fun SmartInputSheet(
                                 speechDiagnosis = null
                                 canReRequestMicPermission = false
                             },
+                            onSwitchToKeyboardVoice = switchToKeyboardVoice,
                             onRequestPermission = {
                                 recordAudioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
                             },
@@ -742,7 +1151,8 @@ fun SmartInputSheet(
                             onOpenEngineSettings = {
                                 SpeechInputHelper.openSpeechEngineAppDetails(
                                     context = context,
-                                    packageName = activeSpeechEngine?.packageName
+                                    packageName = lastFailedEngineForSettings?.packageName
+                                        ?: activeSpeechEngine?.packageName
                                 )
                             },
                             onOpenVoiceSettings = {
@@ -987,7 +1397,12 @@ fun SmartInputSheet(
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    TextButton(onClick = onDismiss) {
+                    TextButton(
+                        onClick = {
+                            cleanupAllVoiceResources(true)
+                            onDismiss()
+                        }
+                    ) {
                         Text("取消")
                     }
                     Button(
@@ -996,9 +1411,11 @@ fun SmartInputSheet(
                                 id > 0L && ledgers.any { it.id == id }
                             } ?: fallbackLedgerId
                             if (selectedTab == 0 && validTextDrafts.isNotEmpty()) {
+                                cleanupAllVoiceResources(true)
                                 onSaveDrafts(validTextDrafts, targetLedgerId, null)
                                 onDismiss()
                             } else if (selectedTab == 1 && currentReceiptDraft != null) {
+                                cleanupAllVoiceResources(true)
                                 onSaveDrafts(listOf(currentReceiptDraft), targetLedgerId, currentImagePath)
                                 onDismiss()
                             }
@@ -1025,26 +1442,84 @@ fun SmartInputSheet(
 
     if (isListeningDialogVisible) {
         SpeechListeningDialog(
+            mode = voiceCaptureMode,
             engineLabel = activeSpeechEngine?.label?.takeIf { it.isNotBlank() } ?: "系统语音引擎",
             rmsDb = listeningRmsDb,
             partialText = listeningPartialText,
+            elapsedMillis = aiElapsedMillis,
             isFinishing = isFinishingSpeech,
-            onCancel = { cleanupSpeechRecognizer(true) },
+            onCancel = { cleanupAllVoiceResources(true) },
             onFinish = {
-                val recognizer = activeSpeechRecognizer
-                if (recognizer == null) {
-                    cleanupSpeechRecognizer(false)
-                } else {
-                    isFinishingSpeech = true
-                    runCatching { recognizer.stopListening() }
-                        .onFailure {
-                            val rescued = listeningPartialText.trim()
-                            cleanupSpeechRecognizer(true)
-                            if (rescued.isNotEmpty()) {
-                                appendRecognizedSpeech(rescued)
+                when (voiceCaptureMode) {
+                    VoiceCaptureMode.SYSTEM_ASR -> {
+                        val recognizer = activeSpeechRecognizer
+                        if (recognizer == null) {
+                            cleanupAllVoiceResources(false)
+                        } else {
+                            userClickedFinishAsr = true
+                            isFinishingSpeech = true
+                            runCatching { recognizer.stopListening() }
+                                .onFailure {
+                                    val rescued = listeningPartialText.trim()
+                                    cleanupAllVoiceResources(true)
+                                    if (rescued.isNotEmpty()) {
+                                        appendRecognizedSpeech(rescued)
+                                    }
+                                }
+                        }
+                    }
+                    VoiceCaptureMode.AI_AUDIO -> {
+                        val recorder = activeAudioRecorder
+                        val currentSessionId = voiceSessionGen
+                        val currentRecId = recorderSessionGen
+                        if (recorder == null) {
+                            cleanupAllVoiceResources(false)
+                        } else {
+                            activeAudioRecorder = null
+                            voiceCaptureMode = VoiceCaptureMode.TRANSCRIBING
+                            coroutineScope.launch {
+                                val wavBytes = withContext(Dispatchers.IO) {
+                                    runCatching { recorder.stopAndBuildWav() }.getOrNull()
+                                }
+                                if (currentSessionId != voiceSessionGen || currentRecId != recorderSessionGen) {
+                                    return@launch
+                                }
+                                if (transcriptionHandledRecId == currentRecId) {
+                                    return@launch
+                                }
+                                if (wavBytes != null) {
+                                    transcriptionHandledRecId = currentRecId
+                                    beginAiTranscription(
+                                        wavBytes,
+                                        currentSessionId,
+                                        activeAiTriedEngines,
+                                        activeAiLastAsrError
+                                    )
+                                } else {
+                                    cleanupAllVoiceResources(false)
+                                    speechDiagnosis = SpeechErrorDiagnosis(
+                                        kind = SpeechErrorKind.NO_SPEECH_OR_TIMEOUT,
+                                        title = "未获取到有效录音",
+                                        message = "未能生成有效音频数据，请重试或直接改用键盘语音。",
+                                        guideSteps = listOf(
+                                            "1. 点击「改用键盘语音」，使用系统输入法麦克风快速输入",
+                                            "2. 或再次点击「语音输入」后清晰说出账单"
+                                        )
+                                    )
+                                }
                             }
                         }
+                    }
+                    VoiceCaptureMode.TRANSCRIBING -> Unit
                 }
+            },
+            onSwitchToKeyboardVoice = switchToKeyboardVoice,
+            onDisposeRelease = {
+                voiceSessionGen++
+                activeTranscriptionJob?.cancel()
+                activeTranscriptionJob = null
+                destroySpeechRecognizerOnly(true)
+                releaseAudioRecorderOnly()
             }
         )
     }
@@ -1356,15 +1831,33 @@ private fun DraftEditorCard(
     }
 }
 
+private fun formatElapsedMmSs(elapsedMillis: Long): String {
+    val totalSeconds = elapsedMillis.coerceAtLeast(0L) / 1000L
+    val minutes = totalSeconds / 60L
+    val seconds = totalSeconds % 60L
+    return String.format(Locale.US, "%02d:%02d", minutes, seconds)
+}
+
 @Composable
 private fun SpeechListeningDialog(
+    mode: VoiceCaptureMode,
     engineLabel: String,
     rmsDb: Float,
     partialText: String,
+    elapsedMillis: Long,
     isFinishing: Boolean,
     onCancel: () -> Unit,
-    onFinish: () -> Unit
+    onFinish: () -> Unit,
+    onSwitchToKeyboardVoice: () -> Unit,
+    onDisposeRelease: () -> Unit
 ) {
+    val latestOnDisposeRelease by rememberUpdatedState(onDisposeRelease)
+    DisposableEffect(Unit) {
+        onDispose {
+            latestOnDisposeRelease()
+        }
+    }
+
     val infiniteTransition = rememberInfiniteTransition(label = "voice_pulse")
     val idleBreath by infiniteTransition.animateFloat(
         initialValue = 1.0f,
@@ -1375,7 +1868,8 @@ private fun SpeechListeningDialog(
         ),
         label = "voice_idle_breath"
     )
-    val normalizedRms = ((rmsDb.coerceIn(-2f, 12f) + 2f) / 14f)
+    val safeRms = if (rmsDb.isFinite()) rmsDb else -2f
+    val normalizedRms = ((safeRms.coerceIn(-2f, 12f) + 2f) / 14f)
     val rmsScale by animateFloatAsState(
         targetValue = 1.0f + normalizedRms * 0.42f,
         animationSpec = tween(durationMillis = 120, easing = FastOutSlowInEasing),
@@ -1383,19 +1877,54 @@ private fun SpeechListeningDialog(
     )
     val outerScale = maxOf(idleBreath, rmsScale)
     val innerScale = 1.0f + (outerScale - 1.0f) * 0.55f
+    val formattedElapsed = formatElapsedMmSs(elapsedMillis)
+
+    val dialogTitle = when (mode) {
+        VoiceCaptureMode.SYSTEM_ASR -> "正在聆听语音记账"
+        VoiceCaptureMode.AI_AUDIO -> "AI 语音速记"
+        VoiceCaptureMode.TRANSCRIBING -> "AI 正在转写语音…"
+    }
+    val dialogSubtitle = when (mode) {
+        VoiceCaptureMode.SYSTEM_ASR -> engineLabel
+        VoiceCaptureMode.AI_AUDIO -> "本地语音服务不可用，已切换 AI 语音速记 · 正在录音 $formattedElapsed"
+        VoiceCaptureMode.TRANSCRIBING -> "正在将录音识别为记账文本，请稍候"
+    }
+    val dialogIcon = when (mode) {
+        VoiceCaptureMode.SYSTEM_ASR -> Icons.Rounded.Mic
+        VoiceCaptureMode.AI_AUDIO, VoiceCaptureMode.TRANSCRIBING -> Icons.Rounded.AutoAwesome
+    }
 
     YubraeDialog(
         onDismissRequest = onCancel,
-        title = "正在聆听语音记账",
-        subtitle = engineLabel,
-        icon = Icons.Rounded.Mic,
+        title = dialogTitle,
+        subtitle = dialogSubtitle,
+        icon = dialogIcon,
+        dismissOnBackPress = true,
+        dismissOnClickOutside = false,
         confirmButton = {
             Button(
                 onClick = onFinish,
-                enabled = !isFinishing,
+                enabled = mode != VoiceCaptureMode.TRANSCRIBING &&
+                    !(mode == VoiceCaptureMode.SYSTEM_ASR && isFinishing),
                 shape = RoundedCornerShape(12.dp)
             ) {
-                Text(if (isFinishing) "识别中..." else "说完了")
+                if (mode == VoiceCaptureMode.TRANSCRIBING ||
+                    (mode == VoiceCaptureMode.SYSTEM_ASR && isFinishing)
+                ) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(14.dp),
+                        strokeWidth = 2.dp,
+                        color = MaterialTheme.colorScheme.onPrimary
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                }
+                Text(
+                    when {
+                        mode == VoiceCaptureMode.TRANSCRIBING -> "转写中..."
+                        mode == VoiceCaptureMode.SYSTEM_ASR && isFinishing -> "识别中..."
+                        else -> "说完了"
+                    }
+                )
             }
         },
         dismissButton = {
@@ -1410,80 +1939,182 @@ private fun SpeechListeningDialog(
         Column(
             modifier = Modifier.fillMaxWidth(),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+            verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            Box(
-                modifier = Modifier.size(112.dp),
-                contentAlignment = Alignment.Center
-            ) {
+            if (mode == VoiceCaptureMode.TRANSCRIBING) {
                 Box(
-                    modifier = Modifier
-                        .size(84.dp)
-                        .graphicsLayer {
-                            scaleX = outerScale
-                            scaleY = outerScale
-                        }
-                        .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.14f))
-                )
-                Box(
-                    modifier = Modifier
-                        .size(68.dp)
-                        .graphicsLayer {
-                            scaleX = innerScale
-                            scaleY = innerScale
-                        }
-                        .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.24f))
-                )
-                Surface(
-                    modifier = Modifier.size(54.dp),
-                    shape = CircleShape,
-                    color = MaterialTheme.colorScheme.primary,
-                    shadowElevation = 4.dp
+                    modifier = Modifier.size(112.dp),
+                    contentAlignment = Alignment.Center
                 ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Icon(
-                            imageVector = Icons.Rounded.Mic,
-                            contentDescription = "正在聆听",
-                            tint = MaterialTheme.colorScheme.onPrimary,
-                            modifier = Modifier.size(28.dp)
+                    Surface(
+                        modifier = Modifier.size(72.dp),
+                        shape = CircleShape,
+                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.72f)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(32.dp),
+                                strokeWidth = 3.dp,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
+                }
+
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(14.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerLow,
+                    border = BorderStroke(
+                        width = 0.6.dp,
+                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)
+                    )
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 14.dp, vertical = 14.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Text(
+                            text = "AI 正在转写语音…",
+                            style = MaterialTheme.typography.bodyLarge,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            textAlign = TextAlign.Center
+                        )
+                        Text(
+                            text = "识别完成后将自动填入上方输入框",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center
                         )
                     }
                 }
-            }
+            } else {
+                Box(
+                    modifier = Modifier.size(112.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(84.dp)
+                            .graphicsLayer {
+                                scaleX = outerScale
+                                scaleY = outerScale
+                            }
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.14f))
+                    )
+                    Box(
+                        modifier = Modifier
+                            .size(68.dp)
+                            .graphicsLayer {
+                                scaleX = innerScale
+                                scaleY = innerScale
+                            }
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.24f))
+                    )
+                    Surface(
+                        modifier = Modifier.size(54.dp),
+                        shape = CircleShape,
+                        color = MaterialTheme.colorScheme.primary,
+                        shadowElevation = 4.dp
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = Icons.Rounded.Mic,
+                                contentDescription = "正在聆听",
+                                tint = MaterialTheme.colorScheme.onPrimary,
+                                modifier = Modifier.size(28.dp)
+                            )
+                        }
+                    }
+                }
 
-            Surface(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(14.dp),
-                color = MaterialTheme.colorScheme.surfaceContainerLow,
-                border = BorderStroke(
-                    width = 0.6.dp,
-                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)
-                )
-            ) {
-                val hasText = partialText.isNotBlank()
-                Text(
-                    text = if (hasText) {
-                        partialText
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(14.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerLow,
+                    border = BorderStroke(
+                        width = 0.6.dp,
+                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)
+                    )
+                ) {
+                    if (mode == VoiceCaptureMode.AI_AUDIO) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 14.dp, vertical = 12.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(8.dp)
+                                        .clip(CircleShape)
+                                        .background(MaterialTheme.colorScheme.error)
+                                )
+                                Text(
+                                    text = "正在录音 $formattedElapsed",
+                                    style = MaterialTheme.typography.titleMedium.tabular(),
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                            Text(
+                                text = "说完后点击「说完了」，AI 将自动转写为账单文本",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                textAlign = TextAlign.Center
+                            )
+                        }
                     } else {
-                        "试试说：午饭花了35元，打车18元"
-                    },
-                    style = if (hasText) {
-                        MaterialTheme.typography.bodyLarge
-                    } else {
-                        MaterialTheme.typography.bodyMedium
-                    },
-                    color = if (hasText) {
-                        MaterialTheme.colorScheme.onSurface
-                    } else {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    },
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 14.dp, vertical = 14.dp)
-                )
+                        val hasText = partialText.isNotBlank()
+                        Text(
+                            text = if (hasText) {
+                                partialText
+                            } else {
+                                "试试说：午饭花了35元，打车18元"
+                            },
+                            style = if (hasText) {
+                                MaterialTheme.typography.bodyLarge
+                            } else {
+                                MaterialTheme.typography.bodyMedium
+                            },
+                            color = if (hasText) {
+                                MaterialTheme.colorScheme.onSurface
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            },
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 14.dp, vertical = 14.dp)
+                        )
+                    }
+                }
+
+                OutlinedButton(
+                    onClick = onSwitchToKeyboardVoice,
+                    shape = RoundedCornerShape(12.dp),
+                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
+                    modifier = Modifier.height(34.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Keyboard,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("改用键盘语音", style = MaterialTheme.typography.labelMedium)
+                }
             }
         }
     }
@@ -1496,6 +2127,7 @@ private fun SpeechDiagnosisCard(
     engine: SpeechEngineInfo?,
     showRequestPermission: Boolean,
     onDismiss: () -> Unit,
+    onSwitchToKeyboardVoice: () -> Unit,
     onRequestPermission: () -> Unit,
     onOpenAppPermission: () -> Unit,
     onOpenEngineSettings: () -> Unit,
@@ -1606,66 +2238,79 @@ private fun SpeechDiagnosisCard(
                 }
             }
 
-            val hasActions = showRequestPermission ||
-                diagnosis.showAppPermissionAction ||
-                diagnosis.showEngineSettingsAction ||
-                diagnosis.showVoiceSettingsAction ||
-                diagnosis.showSystemDialogFallback
-
-            if (hasActions) {
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    if (showRequestPermission) {
-                        FilledTonalButton(
-                            onClick = onRequestPermission,
-                            shape = RoundedCornerShape(12.dp),
-                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                            modifier = Modifier.height(34.dp)
-                        ) {
-                            Text("重新申请", style = MaterialTheme.typography.labelMedium)
-                        }
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                if (showRequestPermission) {
+                    FilledTonalButton(
+                        onClick = onRequestPermission,
+                        shape = RoundedCornerShape(12.dp),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                        modifier = Modifier.height(34.dp)
+                    ) {
+                        Text("重新申请", style = MaterialTheme.typography.labelMedium)
                     }
-                    if (diagnosis.showAppPermissionAction) {
-                        OutlinedButton(
-                            onClick = onOpenAppPermission,
-                            shape = RoundedCornerShape(12.dp),
-                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                            modifier = Modifier.height(34.dp)
-                        ) {
-                            Text("前往应用权限设置", style = MaterialTheme.typography.labelMedium)
-                        }
+                    OutlinedButton(
+                        onClick = onSwitchToKeyboardVoice,
+                        shape = RoundedCornerShape(12.dp),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                        modifier = Modifier.height(34.dp)
+                    ) {
+                        Icon(Icons.Rounded.Keyboard, contentDescription = null, modifier = Modifier.size(15.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("改用键盘语音", style = MaterialTheme.typography.labelMedium)
                     }
-                    if (diagnosis.showEngineSettingsAction) {
-                        FilledTonalButton(
-                            onClick = onOpenEngineSettings,
-                            shape = RoundedCornerShape(12.dp),
-                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                            modifier = Modifier.height(34.dp)
-                        ) {
-                            Text("去授权语音引擎", style = MaterialTheme.typography.labelMedium)
-                        }
+                } else {
+                    FilledTonalButton(
+                        onClick = onSwitchToKeyboardVoice,
+                        shape = RoundedCornerShape(12.dp),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                        modifier = Modifier.height(34.dp)
+                    ) {
+                        Icon(Icons.Rounded.Keyboard, contentDescription = null, modifier = Modifier.size(15.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("改用键盘语音", style = MaterialTheme.typography.labelMedium)
                     }
-                    if (diagnosis.showVoiceSettingsAction) {
-                        OutlinedButton(
-                            onClick = onOpenVoiceSettings,
-                            shape = RoundedCornerShape(12.dp),
-                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                            modifier = Modifier.height(34.dp)
-                        ) {
-                            Text("系统语音设置", style = MaterialTheme.typography.labelMedium)
-                        }
+                }
+                if (diagnosis.showAppPermissionAction) {
+                    OutlinedButton(
+                        onClick = onOpenAppPermission,
+                        shape = RoundedCornerShape(12.dp),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                        modifier = Modifier.height(34.dp)
+                    ) {
+                        Text("前往应用权限设置", style = MaterialTheme.typography.labelMedium)
                     }
-                    if (diagnosis.showSystemDialogFallback) {
-                        OutlinedButton(
-                            onClick = onFallbackSystemDialog,
-                            shape = RoundedCornerShape(12.dp),
-                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                            modifier = Modifier.height(34.dp)
-                        ) {
-                            Text("系统语音弹窗", style = MaterialTheme.typography.labelMedium)
-                        }
+                }
+                if (diagnosis.showEngineSettingsAction) {
+                    OutlinedButton(
+                        onClick = onOpenEngineSettings,
+                        shape = RoundedCornerShape(12.dp),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                        modifier = Modifier.height(34.dp)
+                    ) {
+                        Text("去授权语音引擎", style = MaterialTheme.typography.labelMedium)
+                    }
+                }
+                if (diagnosis.showVoiceSettingsAction) {
+                    OutlinedButton(
+                        onClick = onOpenVoiceSettings,
+                        shape = RoundedCornerShape(12.dp),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                        modifier = Modifier.height(34.dp)
+                    ) {
+                        Text("系统语音设置", style = MaterialTheme.typography.labelMedium)
+                    }
+                }
+                if (diagnosis.showSystemDialogFallback) {
+                    OutlinedButton(
+                        onClick = onFallbackSystemDialog,
+                        shape = RoundedCornerShape(12.dp),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                        modifier = Modifier.height(34.dp)
+                    ) {
+                        Text("系统语音弹窗", style = MaterialTheme.typography.labelMedium)
                     }
                 }
             }

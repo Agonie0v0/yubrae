@@ -26,6 +26,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -34,6 +35,7 @@ import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import java.util.Base64
 import java.util.Locale
 
 /**
@@ -217,6 +219,76 @@ class LlmBillParser(private val okHttpClient: OkHttpClient) {
         }
     }
 
+    /**
+     * AI 语音转写（WAV）：优先走 OpenAI 兼容 /audio/transcriptions，
+     * 若接口或模型不支持（HTTP 400/404/405/415/422 或路径/模型不支持）则自动回退至多模态 /chat/completions input_audio。
+     */
+    suspend fun transcribeAudioWav(
+        wavBytes: ByteArray,
+        settings: AppSettings
+    ): Result<String> = withContext(Dispatchers.IO) {
+        runCatching {
+            require(wavBytes.isNotEmpty()) { "录音数据为空，无法进行 AI 语音转写" }
+
+            val transcriptionsEndpoint = buildAudioTranscriptionsUrl(settings.llmBaseUrl)
+            validateSettings(settings, transcriptionsEndpoint)
+
+            val modelName = settings.llmModel.ifBlank { "gpt-4o-mini" }
+            val primaryAttempt = executeMultipartAudioTranscription(
+                endpoint = transcriptionsEndpoint,
+                apiKey = settings.llmApiKey,
+                wavBytes = wavBytes
+            )
+            if (primaryAttempt.text != null) {
+                return@runCatching primaryAttempt.text
+            }
+
+            if (!primaryAttempt.shouldFallback) {
+                throw IllegalStateException(
+                    buildFriendlyAudioErrorMessage(
+                        modelName = modelName,
+                        reason = primaryAttempt.errorDetail,
+                        bothFailed = false
+                    )
+                )
+            }
+
+            val chatEndpoint = buildChatCompletionsUrl(settings.llmBaseUrl)
+            val fallbackText = runCatching {
+                executeChatAudioTranscription(
+                    endpoint = chatEndpoint,
+                    settings = settings,
+                    wavBytes = wavBytes
+                )
+            }.getOrElse { err ->
+                throw IllegalStateException(
+                    buildFriendlyAudioErrorMessage(
+                        modelName = modelName,
+                        reason = err.message ?: primaryAttempt.errorDetail,
+                        bothFailed = true
+                    ),
+                    err
+                )
+            }
+            fallbackText
+        }
+    }
+
+    internal fun buildAudioTranscriptionsUrl(baseUrl: String): String {
+        val trimmed = baseUrl.trim().trimEnd('/')
+        require(trimmed.isNotEmpty()) { "LLM Base URL 不能为空" }
+        if (trimmed.endsWith("/audio/transcriptions", ignoreCase = true)) {
+            return trimmed
+        }
+        val normalizedBase = if (trimmed.endsWith("/chat/completions", ignoreCase = true)) {
+            trimmed.dropLast("/chat/completions".length).trimEnd('/')
+        } else {
+            trimmed
+        }
+        require(normalizedBase.isNotEmpty()) { "LLM Base URL 不能为空" }
+        return "$normalizedBase/audio/transcriptions"
+    }
+
     internal fun buildChatCompletionsUrl(baseUrl: String): String {
         val trimmed = baseUrl.trim().trimEnd('/')
         require(trimmed.isNotEmpty()) { "LLM Base URL 不能为空" }
@@ -254,6 +326,165 @@ class LlmBillParser(private val okHttpClient: OkHttpClient) {
                 throw IllegalStateException("LLM 返回空响应体")
             }
             return rawBody
+        }
+    }
+
+    private data class AudioTranscriptionAttempt(
+        val text: String?,
+        val shouldFallback: Boolean,
+        val errorDetail: String
+    )
+
+    private fun executeMultipartAudioTranscription(
+        endpoint: String,
+        apiKey: String,
+        wavBytes: ByteArray
+    ): AudioTranscriptionAttempt {
+        val multipartBody = MultipartBody.Builder()
+            .setType(MultipartBody.FORM)
+            .addFormDataPart(
+                "file",
+                "speech.wav",
+                wavBytes.toRequestBody(WAV_MEDIA_TYPE)
+            )
+            .addFormDataPart("model", "whisper-1")
+            .build()
+
+        val requestBuilder = Request.Builder()
+            .url(endpoint)
+            .post(multipartBody)
+
+        if (apiKey.isNotBlank()) {
+            requestBuilder.header("Authorization", "Bearer ${apiKey.trim()}")
+        }
+
+        okHttpClient.newCall(requestBuilder.build()).execute().use { response ->
+            val rawBody = response.body?.string().orEmpty()
+            if (!response.isSuccessful) {
+                val detail = extractErrorMessage(rawBody).ifBlank { response.message }
+                val message = "HTTP ${response.code}: $detail"
+                return AudioTranscriptionAttempt(
+                    text = null,
+                    shouldFallback = shouldFallbackToAudioChat(response.code, detail),
+                    errorDetail = message
+                )
+            }
+
+            return parseTranscriptionResponseBody(rawBody)
+        }
+    }
+
+    private fun parseTranscriptionResponseBody(rawBody: String): AudioTranscriptionAttempt {
+        val trimmed = rawBody.trim()
+        if (trimmed.isEmpty()) {
+            return AudioTranscriptionAttempt(
+                text = null,
+                shouldFallback = false,
+                errorDetail = "未识别到清晰语音内容"
+            )
+        }
+
+        if (trimmed.startsWith("{")) {
+            val parsedObj = runCatching { json.parseToJsonElement(trimmed).jsonObject }.getOrNull()
+            if (parsedObj != null) {
+                val errorNode = parsedObj["error"]
+                val textNode = parsedObj["text"] as? JsonPrimitive
+                if (errorNode != null && textNode == null) {
+                    val detail = extractErrorMessage(trimmed).ifBlank { "接口返回异常" }
+                    return AudioTranscriptionAttempt(
+                        text = null,
+                        shouldFallback = shouldFallbackToAudioChat(200, detail),
+                        errorDetail = detail
+                    )
+                }
+                if (textNode != null) {
+                    val transcribed = textNode.contentOrNull?.trim().orEmpty()
+                    return if (transcribed.isNotEmpty()) {
+                        AudioTranscriptionAttempt(text = transcribed, shouldFallback = false, errorDetail = "")
+                    } else {
+                        AudioTranscriptionAttempt(
+                            text = null,
+                            shouldFallback = false,
+                            errorDetail = "未识别到清晰语音内容"
+                        )
+                    }
+                }
+                return AudioTranscriptionAttempt(
+                    text = null,
+                    shouldFallback = true,
+                    errorDetail = "转写响应缺少 text 字段"
+                )
+            }
+        }
+
+        return AudioTranscriptionAttempt(text = trimmed, shouldFallback = false, errorDetail = "")
+    }
+
+    private fun executeChatAudioTranscription(
+        endpoint: String,
+        settings: AppSettings,
+        wavBytes: ByteArray
+    ): String {
+        val base64Audio = Base64.getEncoder().encodeToString(wavBytes)
+        val payload = buildJsonObject {
+            put("model", settings.llmModel.ifBlank { "gpt-4o-mini" })
+            put("temperature", 0.0)
+            put("messages", buildJsonArray {
+                add(buildJsonObject {
+                    put("role", "system")
+                    put(
+                        "content",
+                        "你是精准的中文记账语音转写助手。请将音频原样转写为纯文本，保留金额数字、时间词和商户名称，只输出转写结果本身，不要添加解释或多余说明。"
+                    )
+                })
+                add(buildJsonObject {
+                    put("role", "user")
+                    put("content", buildJsonArray {
+                        add(buildJsonObject {
+                            put("type", "text")
+                            put("text", "请将这段记账语音准确转写为中文纯文本，只输出转写文字：")
+                        })
+                        add(buildJsonObject {
+                            put("type", "input_audio")
+                            put("input_audio", buildJsonObject {
+                                put("data", base64Audio)
+                                put("format", "wav")
+                            })
+                        })
+                    })
+                })
+            })
+        }.toString()
+
+        val responseText = executeChatRequest(endpoint, settings.llmApiKey, payload)
+        val content = extractAssistantContent(responseText).trim()
+        if (content.isEmpty()) {
+            throw IllegalStateException("未识别到清晰语音内容")
+        }
+        return content
+    }
+
+    private fun shouldFallbackToAudioChat(statusCode: Int, detail: String): Boolean {
+        if (statusCode in AUDIO_FALLBACK_STATUS_CODES) return true
+        if (statusCode == 401 || statusCode == 429) return false
+        val lower = detail.lowercase(Locale.ROOT)
+        return AUDIO_UNSUPPORTED_HINTS.any { lower.contains(it) }
+    }
+
+    private fun buildFriendlyAudioErrorMessage(
+        modelName: String,
+        reason: String,
+        bothFailed: Boolean
+    ): String {
+        val cleanReason = reason.trim().ifBlank { "接口暂不支持音频输入" }
+        return if (cleanReason == "未识别到清晰语音内容") {
+            "未识别到清晰语音内容，请靠近麦克风重试或改用键盘语音输入"
+        } else if (cleanReason.startsWith("HTTP 401")) {
+            "AI 语音转写鉴权失败（$cleanReason），请检查 API Key 是否有效，或改用键盘语音输入"
+        } else if (bothFailed) {
+            "AI 语音转写失败：当前模型（$modelName）或接口可能不支持音频输入（$cleanReason）。建议切换支持语音或多模态的模型（如 OpenAI / Gemini），或直接使用键盘语音输入。"
+        } else {
+            "AI 语音转写失败（$cleanReason）。建议切换支持语音或多模态的模型（如 OpenAI / Gemini），或改用键盘语音输入。"
         }
     }
 
@@ -701,5 +932,22 @@ $categoriesDesc
 
     companion object {
         private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
+        private val WAV_MEDIA_TYPE = "audio/wav".toMediaType()
+        private val AUDIO_FALLBACK_STATUS_CODES = setOf(400, 404, 405, 415, 422, 501)
+        private val AUDIO_UNSUPPORTED_HINTS = listOf(
+            "whisper",
+            "transcri",
+            "unsupported",
+            "not support",
+            "not found",
+            "no route",
+            "invalid url",
+            "invalid path",
+            "unknown endpoint",
+            "not implemented",
+            "不支持",
+            "未找到",
+            "模型不存在"
+        )
     }
 }

@@ -250,4 +250,308 @@ class SpeechInputHelperTest {
         assertEquals("请说出要记的账单，可连说多笔", stringExtras[RecognizerIntent.EXTRA_PROMPT])
         assertEquals(true, booleanExtras[RecognizerIntent.EXTRA_PARTIAL_RESULTS])
     }
+
+    @Test
+    fun isExcludedNonAsrService_filtersAutomationMetaAuraAndTrampolineBridges() {
+        assertTrue(
+            SpeechInputHelper.isExcludedNonAsrService(
+                packageName = "com.arlosoft.macrodroid",
+                serviceClassName = "com.arlosoft.macrodroid.voiceservice.RecognitionServiceTrampoline",
+                label = "MacroDroid"
+            )
+        )
+        assertTrue(
+            SpeechInputHelper.isExcludedNonAsrService(
+                packageName = "net.dinglisch.android.taskerm",
+                serviceClassName = "net.dinglisch.android.taskerm.VoiceService"
+            )
+        )
+        assertTrue(
+            SpeechInputHelper.isExcludedNonAsrService(
+                packageName = "com.llamalab.automate",
+                serviceClassName = "com.llamalab.automate.SpeechRecognitionService"
+            )
+        )
+        assertTrue(
+            SpeechInputHelper.isExcludedNonAsrService(
+                packageName = "com.facebook.aura",
+                serviceClassName = "com.facebook.aura.assist.HatchRecognitionService",
+                label = "Aura"
+            )
+        )
+        assertTrue(
+            SpeechInputHelper.isExcludedNonAsrService(
+                packageName = "com.meta.wearable.companion",
+                serviceClassName = "com.meta.wearable.companion.SpeechService"
+            )
+        )
+        assertTrue(
+            SpeechInputHelper.isExcludedNonAsrService(
+                packageName = "com.example.custom",
+                serviceClassName = "com.example.custom.VoiceTRAMPOLINEService"
+            )
+        )
+        assertTrue(
+            SpeechInputHelper.isExcludedNonAsrService(
+                packageName = "com.example.custom",
+                serviceClassName = "com.example.custom.AsrBridgeService"
+            )
+        )
+
+        assertFalse(
+            SpeechInputHelper.isExcludedNonAsrService(
+                packageName = "com.xiaomi.mibrain.speech",
+                serviceClassName = "com.xiaomi.mibrain.speech.asr.AsrService",
+                label = "小爱语音引擎"
+            )
+        )
+        assertFalse(
+            SpeechInputHelper.isExcludedNonAsrService(
+                packageName = "com.google.android.tts",
+                serviceClassName = "com.google.android.apps.speech.tts.googletts.service.GoogleTTSRecognitionService",
+                label = "Google 语音服务"
+            )
+        )
+        assertFalse(
+            SpeechInputHelper.isExcludedNonAsrService(
+                packageName = "com.iflytek.speechcloud",
+                serviceClassName = "com.iflytek.speechcloud.SpeechRecognitionService",
+                label = "讯飞语音+"
+            )
+        )
+        assertFalse(SpeechInputHelper.isExcludedNonAsrService(null, null, null))
+    }
+
+    @Test
+    fun buildSpeechEngineCandidates_filtersXiaomi14RealDeviceListToAsrService() {
+        val raw = listOf(
+            SpeechInputHelper.RawSpeechServiceEntry(
+                packageName = "com.arlosoft.macrodroid",
+                serviceClassName = "com.arlosoft.macrodroid.voiceservice.RecognitionServiceTrampoline",
+                label = "MacroDroid",
+                isSystemApp = false
+            ),
+            SpeechInputHelper.RawSpeechServiceEntry(
+                packageName = "com.xiaomi.mibrain.speech",
+                serviceClassName = "com.xiaomi.mibrain.speech.asr.AsrService",
+                label = "小爱语音引擎",
+                isSystemApp = true
+            ),
+            SpeechInputHelper.RawSpeechServiceEntry(
+                packageName = "com.facebook.aura",
+                serviceClassName = "com.facebook.aura.assist.HatchRecognitionService",
+                label = "Aura",
+                isSystemApp = false
+            )
+        )
+
+        val candidates = SpeechInputHelper.buildSpeechEngineCandidates(
+            rawEntries = raw,
+            isXiaomiRom = true
+        )
+
+        assertEquals(1, candidates.size)
+        val first = candidates.first()
+        assertEquals("com.xiaomi.mibrain.speech", first.packageName)
+        assertEquals("com.xiaomi.mibrain.speech.asr.AsrService", first.serviceClassName)
+        assertEquals("小爱语音引擎", first.label)
+        assertTrue(first.isXiaomiEngine)
+        assertTrue(first.isSystemApp)
+
+        val info = first.toEngineInfo()
+        assertEquals("com.xiaomi.mibrain.speech", info.packageName)
+        assertEquals("小爱语音引擎", info.label)
+        assertEquals("com.xiaomi.mibrain.speech/com.xiaomi.mibrain.speech.asr.AsrService", info.componentName)
+    }
+
+    @Test
+    fun buildSpeechEngineCandidates_ranksByRomDeduplicatesAndHonorsValidSystemDefault() {
+        val raw = listOf(
+            SpeechInputHelper.RawSpeechServiceEntry(
+                packageName = "net.dinglisch.android.taskerm",
+                serviceClassName = "net.dinglisch.android.taskerm.SpeechSvc",
+                label = "Tasker",
+                isSystemApp = false,
+                isSystemDefault = true // 即使系统默认指向被排除服务，也必须被过滤
+            ),
+            SpeechInputHelper.RawSpeechServiceEntry(
+                packageName = "com.example.thirdparty",
+                serviceClassName = "com.example.thirdparty.SpeechSvc",
+                label = "第三方识别",
+                isSystemApp = false
+            ),
+            SpeechInputHelper.RawSpeechServiceEntry(
+                packageName = "com.iflytek.speechcloud",
+                serviceClassName = "com.iflytek.speechcloud.AsrService",
+                label = "讯飞语记",
+                isSystemApp = false
+            ),
+            SpeechInputHelper.RawSpeechServiceEntry(
+                packageName = "com.google.android.tts",
+                serviceClassName = "com.google.android.apps.speech.tts.googletts.service.GoogleTTSRecognitionService",
+                label = "Google 语音服务",
+                isSystemApp = true
+            ),
+            SpeechInputHelper.RawSpeechServiceEntry(
+                packageName = "com.miui.voiceassist",
+                serviceClassName = "com.miui.voiceassist.VoiceService",
+                label = "小爱同学",
+                isSystemApp = true
+            ),
+            SpeechInputHelper.RawSpeechServiceEntry(
+                packageName = "com.xiaomi.mibrain.speech",
+                serviceClassName = ".asr.AsrService",
+                label = "小爱语音引擎",
+                isSystemApp = true
+            ),
+            SpeechInputHelper.RawSpeechServiceEntry(
+                packageName = "com.xiaomi.mibrain.speech",
+                serviceClassName = "com.xiaomi.mibrain.speech.asr.AsrService",
+                label = "com.xiaomi.mibrain.speech",
+                isSystemApp = false
+            ),
+            SpeechInputHelper.RawSpeechServiceEntry(
+                packageName = "com.meta.wearable.audio",
+                serviceClassName = "com.meta.wearable.audio.WearableSpeechService",
+                label = "Meta Wearable",
+                isSystemApp = false
+            )
+        )
+
+        val xiaomiRanked = SpeechInputHelper.buildSpeechEngineCandidates(raw, isXiaomiRom = true)
+        assertEquals(
+            listOf(
+                "com.xiaomi.mibrain.speech",
+                "com.miui.voiceassist",
+                "com.google.android.tts",
+                "com.iflytek.speechcloud",
+                "com.example.thirdparty"
+            ),
+            xiaomiRanked.map { it.packageName }
+        )
+        assertEquals("com.xiaomi.mibrain.speech.asr.AsrService", xiaomiRanked[0].serviceClassName)
+        assertEquals("小爱语音引擎", xiaomiRanked[0].label)
+
+        val nonXiaomiRanked = SpeechInputHelper.buildSpeechEngineCandidates(raw, isXiaomiRom = false)
+        assertEquals(
+            listOf(
+                "com.google.android.tts",
+                "com.miui.voiceassist",
+                "com.xiaomi.mibrain.speech",
+                "com.iflytek.speechcloud",
+                "com.example.thirdparty"
+            ),
+            nonXiaomiRanked.map { it.packageName }
+        )
+
+        val withValidDefault = raw + SpeechInputHelper.RawSpeechServiceEntry(
+            packageName = "com.iflytek.speechcloud",
+            serviceClassName = "com.iflytek.speechcloud.AsrService",
+            label = "讯飞语记",
+            isSystemApp = false,
+            isSystemDefault = true
+        )
+        val defaultFirst = SpeechInputHelper.buildSpeechEngineCandidates(withValidDefault, isXiaomiRom = true)
+        assertEquals("com.iflytek.speechcloud", defaultFirst.first().packageName)
+        assertEquals(5, defaultFirst.size)
+    }
+
+    @Test
+    fun isRetryableEngineBindingError_distinguishesBindingErrorsFromUserSpeechResults() {
+        assertTrue(SpeechInputHelper.isRetryableEngineBindingError(SpeechRecognizer.ERROR_CLIENT))
+        assertTrue(SpeechInputHelper.isRetryableEngineBindingError(SpeechRecognizer.ERROR_SERVER))
+        assertTrue(SpeechInputHelper.isRetryableEngineBindingError(SpeechRecognizer.ERROR_RECOGNIZER_BUSY))
+        assertTrue(SpeechInputHelper.isRetryableEngineBindingError(SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS))
+        assertTrue(SpeechInputHelper.isRetryableEngineBindingError(SpeechRecognizer.ERROR_NETWORK))
+        assertTrue(SpeechInputHelper.isRetryableEngineBindingError(SpeechRecognizer.ERROR_NETWORK_TIMEOUT))
+        assertTrue(SpeechInputHelper.isRetryableEngineBindingError(SpeechRecognizer.ERROR_AUDIO))
+        assertTrue(SpeechInputHelper.isRetryableEngineBindingError(SpeechRecognizer.ERROR_TOO_MANY_REQUESTS))
+        assertTrue(SpeechInputHelper.isRetryableEngineBindingError(SpeechRecognizer.ERROR_SERVER_DISCONNECTED))
+        assertTrue(SpeechInputHelper.isRetryableEngineBindingError(SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED))
+        assertTrue(SpeechInputHelper.isRetryableEngineBindingError(SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE))
+
+        assertFalse(SpeechInputHelper.isRetryableEngineBindingError(SpeechRecognizer.ERROR_SPEECH_TIMEOUT))
+        assertFalse(SpeechInputHelper.isRetryableEngineBindingError(SpeechRecognizer.ERROR_NO_MATCH))
+        assertFalse(SpeechInputHelper.isRetryableEngineBindingError(-1))
+    }
+
+    @Test
+    fun diagnoseAllEnginesFailed_listsLegitimateTriedEnginesAndNeverMentionsExcludedTrampolines() {
+        val triedWithNoise = listOf(
+            SpeechEngineInfo(
+                packageName = "com.arlosoft.macrodroid",
+                label = "MacroDroid",
+                componentName = "com.arlosoft.macrodroid/com.arlosoft.macrodroid.voiceservice.RecognitionServiceTrampoline"
+            ),
+            SpeechEngineInfo(
+                packageName = "com.xiaomi.mibrain.speech",
+                label = "小爱语音引擎",
+                componentName = "com.xiaomi.mibrain.speech/com.xiaomi.mibrain.speech.asr.AsrService"
+            ),
+            SpeechEngineInfo(
+                packageName = "com.iflytek.speechcloud",
+                label = "讯飞语音+",
+                componentName = "com.iflytek.speechcloud/com.iflytek.speechcloud.AsrService"
+            )
+        )
+
+        val multiFailure = SpeechInputHelper.diagnoseAllEnginesFailed(
+            lastErrorCode = SpeechRecognizer.ERROR_CLIENT,
+            triedEngines = triedWithNoise,
+            isXiaomiRom = true,
+            llmEnabled = false
+        )
+        assertEquals(SpeechErrorKind.ENGINE_AUTHORIZATION_OR_SERVICE, multiFailure.kind)
+        assertTrue(multiFailure.title.contains("2"))
+        assertTrue(multiFailure.message.contains("小爱语音引擎"))
+        assertTrue(multiFailure.message.contains("com.xiaomi.mibrain.speech"))
+        assertTrue(multiFailure.message.contains("讯飞语音+"))
+        assertTrue(multiFailure.message.contains("com.iflytek.speechcloud"))
+        assertFalse(multiFailure.message.contains("MacroDroid"))
+        assertFalse(multiFailure.message.contains("com.arlosoft.macrodroid"))
+        assertTrue(multiFailure.guideSteps.any { it.contains("改用键盘语音") })
+        assertTrue(multiFailure.showVoiceSettingsAction)
+        assertTrue(multiFailure.showEngineSettingsAction)
+
+        val onlyExcludedTried = listOf(
+            SpeechEngineInfo(
+                packageName = "com.arlosoft.macrodroid",
+                label = "MacroDroid",
+                componentName = "com.arlosoft.macrodroid/com.arlosoft.macrodroid.voiceservice.RecognitionServiceTrampoline"
+            ),
+            SpeechEngineInfo(
+                packageName = "com.facebook.aura",
+                label = "Aura",
+                componentName = "com.facebook.aura/com.facebook.aura.assist.HatchRecognitionService"
+            )
+        )
+        val noValidEngineDiag = SpeechInputHelper.diagnoseAllEnginesFailed(
+            lastErrorCode = SpeechRecognizer.ERROR_CLIENT,
+            triedEngines = onlyExcludedTried,
+            isXiaomiRom = true,
+            llmEnabled = true
+        )
+        assertEquals(SpeechErrorKind.ENGINE_AUTHORIZATION_OR_SERVICE, noValidEngineDiag.kind)
+        assertEquals("未找到可用的系统语音引擎", noValidEngineDiag.title)
+        assertFalse(noValidEngineDiag.message.contains("MacroDroid"))
+        assertFalse(noValidEngineDiag.message.contains("Aura"))
+        assertTrue(noValidEngineDiag.guideSteps.any { it.contains("改用键盘语音") })
+        assertTrue(noValidEngineDiag.showVoiceSettingsAction)
+
+        val permissionDiag = SpeechInputHelper.diagnoseAllEnginesFailed(
+            lastErrorCode = SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS,
+            triedEngines = listOf(
+                SpeechEngineInfo(
+                    packageName = "com.xiaomi.mibrain.speech",
+                    label = "小爱语音引擎",
+                    componentName = "com.xiaomi.mibrain.speech/com.xiaomi.mibrain.speech.asr.AsrService"
+                )
+            ),
+            isXiaomiRom = true,
+            llmEnabled = true
+        )
+        assertEquals(SpeechErrorKind.PERMISSION_DENIED, permissionDiag.kind)
+        assertTrue(permissionDiag.showAppPermissionAction)
+        assertTrue(permissionDiag.showEngineSettingsAction)
+    }
 }

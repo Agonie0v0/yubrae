@@ -891,7 +891,9 @@ fun KairoAppRoot(
                     onDismiss = {
                         showSmartInput = false
                         smartInputImagePath = null
-                    }
+                    },
+                    isVoiceAiFallbackReady = viewModel.isVoiceAiFallbackReady(),
+                    onTranscribeVoiceAudio = { wavBytes -> viewModel.transcribeVoiceAudio(wavBytes) }
                 )
             }
 

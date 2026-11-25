@@ -8,6 +8,7 @@ import com.yubrae.app.data.db.CaptureChannel
 import com.yubrae.app.data.db.CategoryEntity
 import com.yubrae.app.data.db.TransactionType
 import com.yubrae.app.data.prefs.AppSettings
+import com.yubrae.app.testutil.TestHttpExchange
 import com.yubrae.app.testutil.TestHttpServer
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
@@ -19,6 +20,7 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import okhttp3.OkHttpClient
 import org.junit.After
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -27,8 +29,19 @@ import org.junit.Before
 import org.junit.Test
 import java.net.InetSocketAddress
 import java.nio.charset.StandardCharsets
+import java.util.Base64
 
 class LlmBillParserTest {
+
+    private data class CapturedHttpRequest(
+        val path: String,
+        val authHeader: String,
+        val contentType: String,
+        val rawBytes: ByteArray
+    ) {
+        val bodyText: String
+            get() = rawBytes.toString(StandardCharsets.UTF_8)
+    }
 
     private lateinit var server: TestHttpServer
     private lateinit var parser: LlmBillParser
@@ -37,6 +50,8 @@ class LlmBillParserTest {
     private var lastRequestBody: String = ""
     private var nextStatusCode: Int = 200
     private var nextResponseBody: String = ""
+    private val capturedRequests = mutableListOf<CapturedHttpRequest>()
+    private var routeHandler: ((TestHttpExchange, CapturedHttpRequest) -> Pair<Int, String>)? = null
 
     private val accounts = listOf(
         AccountEntity(id = 1L, name = "微信零钱", groupType = AccountGroup.WALLET, currencyCode = "CNY"),
@@ -52,15 +67,27 @@ class LlmBillParserTest {
     @Before
     fun setup() {
         parser = LlmBillParser(OkHttpClient())
+        capturedRequests.clear()
+        routeHandler = null
         server = TestHttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
         server.createContext("/") { exchange ->
-            lastRequestPath = exchange.requestURI.path
-            lastAuthHeader = exchange.requestHeaders.getFirst("Authorization").orEmpty()
-            lastRequestBody = exchange.requestBody.readBytes().toString(StandardCharsets.UTF_8)
+            val rawBytes = exchange.requestBody.readBytes()
+            val captured = CapturedHttpRequest(
+                path = exchange.requestURI.path,
+                authHeader = exchange.requestHeaders.getFirst("Authorization").orEmpty(),
+                contentType = exchange.requestHeaders.getFirst("Content-Type").orEmpty(),
+                rawBytes = rawBytes
+            )
+            capturedRequests.add(captured)
+            lastRequestPath = captured.path
+            lastAuthHeader = captured.authHeader
+            lastRequestBody = captured.bodyText
 
-            val bytes = nextResponseBody.toByteArray(StandardCharsets.UTF_8)
+            val (status, respBody) = routeHandler?.invoke(exchange, captured)
+                ?: (nextStatusCode to nextResponseBody)
+            val bytes = respBody.toByteArray(StandardCharsets.UTF_8)
             exchange.responseHeaders.add("Content-Type", "application/json; charset=utf-8")
-            exchange.sendResponseHeaders(nextStatusCode, bytes.size.toLong())
+            exchange.sendResponseHeaders(status, bytes.size.toLong())
             exchange.responseBody.use { it.write(bytes) }
         }
         server.start()
@@ -205,5 +232,205 @@ class LlmBillParserTest {
         val errResult = parser.testConnection(okSettings)
         assertTrue(errResult.isFailure)
         assertTrue(errResult.exceptionOrNull()!!.message!!.contains("401"))
+    }
+
+    @Test
+    fun buildAudioTranscriptionsUrl_normalizesOpenAiGeminiAndChatEndpoints() {
+        assertEquals(
+            "https://api.openai.com/v1/audio/transcriptions",
+            parser.buildAudioTranscriptionsUrl("https://api.openai.com/v1")
+        )
+        assertEquals(
+            "https://api.openai.com/v1/audio/transcriptions",
+            parser.buildAudioTranscriptionsUrl("https://api.openai.com/v1/")
+        )
+        assertEquals(
+            "https://api.openai.com/v1/audio/transcriptions",
+            parser.buildAudioTranscriptionsUrl("https://api.openai.com/v1/chat/completions")
+        )
+        assertEquals(
+            "https://api.openai.com/v1/audio/transcriptions",
+            parser.buildAudioTranscriptionsUrl("https://api.openai.com/v1/chat/completions/")
+        )
+        assertEquals(
+            "https://generativelanguage.googleapis.com/v1beta/openai/audio/transcriptions",
+            parser.buildAudioTranscriptionsUrl("https://generativelanguage.googleapis.com/v1beta/openai")
+        )
+        assertEquals(
+            "https://generativelanguage.googleapis.com/v1beta/openai/audio/transcriptions",
+            parser.buildAudioTranscriptionsUrl("https://generativelanguage.googleapis.com/v1beta/openai/")
+        )
+        assertEquals(
+            "https://api.deepseek.com/audio/transcriptions",
+            parser.buildAudioTranscriptionsUrl("https://api.deepseek.com")
+        )
+        assertEquals(
+            "https://custom.example.com/v1/audio/transcriptions",
+            parser.buildAudioTranscriptionsUrl("https://custom.example.com/v1/audio/transcriptions")
+        )
+    }
+
+    @Test
+    fun transcribeAudioWav_validatesEmptyWavAndMissingApiKey() = runTest {
+        val validSettings = AppSettings(
+            llmEnabled = true,
+            llmBaseUrl = baseUrl(trailingSlash = false),
+            llmApiKey = "sk-audio"
+        )
+        val emptyResult = parser.transcribeAudioWav(ByteArray(0), validSettings)
+        assertTrue(emptyResult.isFailure)
+        assertEquals(0, capturedRequests.size)
+
+        val remoteNoKeySettings = AppSettings(
+            llmEnabled = true,
+            llmBaseUrl = "https://api.openai.com/v1",
+            llmApiKey = ""
+        )
+        val wav = InAppAudioRecorder.buildWavBytes(byteArrayOf(0x01, 0x02, 0x03, 0x04))
+        val noKeyResult = parser.transcribeAudioWav(wav, remoteNoKeySettings)
+        assertTrue(noKeyResult.isFailure)
+        assertTrue(noKeyResult.exceptionOrNull()!!.message!!.contains("API Key"))
+    }
+
+    @Test
+    fun transcribeAudioWav_postsMultipartToAudioEndpointAndExtractsJsonOrPlainText() = runTest {
+        val sampleWav = InAppAudioRecorder.buildWavBytes(byteArrayOf(0x10, 0x20, 0x30, 0x40))
+        nextStatusCode = 200
+        nextResponseBody = """{"text": "  午饭花了35元，微信支付  "}"""
+
+        val settings = AppSettings(
+            llmEnabled = true,
+            llmBaseUrl = baseUrl(trailingSlash = true) + "chat/completions",
+            llmApiKey = "sk-whisper-123",
+            llmModel = "gpt-4o-mini"
+        )
+
+        val jsonResult = parser.transcribeAudioWav(sampleWav, settings)
+        assertTrue(jsonResult.isSuccess)
+        assertEquals("午饭花了35元，微信支付", jsonResult.getOrThrow())
+        assertEquals(1, capturedRequests.size)
+        val req = capturedRequests[0]
+        assertEquals("/v1/audio/transcriptions", req.path)
+        assertEquals("Bearer sk-whisper-123", req.authHeader)
+        assertTrue(req.contentType.contains("multipart/form-data"))
+        val bodyStr = req.bodyText
+        assertTrue(bodyStr.contains("name=\"file\"; filename=\"speech.wav\""))
+        assertTrue(bodyStr.contains("Content-Type: audio/wav"))
+        assertTrue(bodyStr.contains("name=\"model\""))
+        assertTrue(bodyStr.contains("whisper-1"))
+        assertTrue(bodyStr.contains("RIFF"))
+
+        // 验证纯文本响应格式兼容
+        capturedRequests.clear()
+        nextResponseBody = "打车18元 支付宝\n"
+        val plainResult = parser.transcribeAudioWav(sampleWav, settings)
+        assertTrue(plainResult.isSuccess)
+        assertEquals("打车18元 支付宝", plainResult.getOrThrow())
+    }
+
+    @Test
+    fun transcribeAudioWav_fallsBackToChatCompletionsInputAudioWhenEndpointUnsupported() = runTest {
+        val sampleWav = InAppAudioRecorder.buildWavBytes(byteArrayOf(0x05, 0x06, 0x07, 0x08))
+        routeHandler = { _, req ->
+            when (req.path) {
+                "/v1beta/openai/audio/transcriptions" ->
+                    404 to """{"error":{"message":"audio/transcriptions not supported"}}"""
+                "/v1beta/openai/chat/completions" ->
+                    200 to wrapAssistantReply("昨天买咖啡花了28元")
+                else ->
+                    500 to "unexpected path ${req.path}"
+            }
+        }
+
+        val port = server.address.port
+        val settings = AppSettings(
+            llmEnabled = true,
+            llmBaseUrl = "http://127.0.0.1:$port/v1beta/openai/",
+            llmApiKey = "sk-gemini-test",
+            llmModel = "gemini-2.5-flash"
+        )
+
+        val result = parser.transcribeAudioWav(sampleWav, settings)
+        assertTrue(result.isSuccess)
+        assertEquals("昨天买咖啡花了28元", result.getOrThrow())
+        assertEquals(2, capturedRequests.size)
+        assertEquals("/v1beta/openai/audio/transcriptions", capturedRequests[0].path)
+        assertEquals("/v1beta/openai/chat/completions", capturedRequests[1].path)
+
+        val chatJson = Json.parseToJsonElement(capturedRequests[1].bodyText).jsonObject
+        assertEquals("gemini-2.5-flash", chatJson["model"]!!.jsonPrimitive.content)
+        val messages = chatJson["messages"]!!.jsonArray
+        val userContent = messages[1].jsonObject["content"]!!.jsonArray
+        val audioPart = userContent[1].jsonObject
+        assertEquals("input_audio", audioPart["type"]!!.jsonPrimitive.content)
+        val inputAudio = audioPart["input_audio"]!!.jsonObject
+        assertEquals("wav", inputAudio["format"]!!.jsonPrimitive.content)
+        val decodedWav = Base64.getDecoder().decode(inputAudio["data"]!!.jsonPrimitive.content)
+        assertArrayEquals(sampleWav, decodedWav)
+    }
+
+    @Test
+    fun transcribeAudioWav_returnsFriendlyChineseMessageWhenBothEndpointsFail() = runTest {
+        val sampleWav = InAppAudioRecorder.buildWavBytes(byteArrayOf(0x11, 0x22))
+        routeHandler = { _, req ->
+            when (req.path) {
+                "/v1/audio/transcriptions" ->
+                    404 to """{"error":{"message":"Not Found"}}"""
+                "/v1/chat/completions" ->
+                    400 to """{"error":{"message":"unknown variant input_audio, expected text"}}"""
+                else ->
+                    500 to "unexpected"
+            }
+        }
+
+        val settings = AppSettings(
+            llmEnabled = true,
+            llmBaseUrl = baseUrl(trailingSlash = false),
+            llmApiKey = "sk-deepseek",
+            llmModel = "deepseek-chat"
+        )
+
+        val result = parser.transcribeAudioWav(sampleWav, settings)
+        assertTrue(result.isFailure)
+        val msg = result.exceptionOrNull()!!.message.orEmpty()
+        assertTrue("Expected model hint in message: $msg", msg.contains("deepseek-chat"))
+        assertTrue("Expected multimodal/provider hint in message: $msg", msg.contains("OpenAI") || msg.contains("Gemini"))
+        assertTrue("Expected keyboard voice hint in message: $msg", msg.contains("键盘语音"))
+    }
+
+    @Test
+    fun transcribeAudioWav_fallsBackOn400_405_415_422_andFailsDirectlyOn401() = runTest {
+        val sampleWav = InAppAudioRecorder.buildWavBytes(byteArrayOf(0x01, 0x02, 0x03, 0x04))
+        val settings = AppSettings(
+            llmEnabled = true,
+            llmBaseUrl = baseUrl(trailingSlash = false),
+            llmApiKey = "sk-test",
+            llmModel = "gpt-4o-audio-preview"
+        )
+
+        for (status in listOf(400, 405, 415, 422)) {
+            capturedRequests.clear()
+            routeHandler = { _, req ->
+                when (req.path) {
+                    "/v1/audio/transcriptions" -> status to """{"error":{"message":"unsupported status $status"}}"""
+                    "/v1/chat/completions" -> 200 to wrapAssistantReply("回退成功$status")
+                    else -> 500 to "unexpected"
+                }
+            }
+            val res = parser.transcribeAudioWav(sampleWav, settings)
+            assertTrue("Status $status should trigger fallback", res.isSuccess)
+            assertEquals("回退成功$status", res.getOrThrow())
+            assertEquals(2, capturedRequests.size)
+        }
+
+        // 401 鉴权失败不应再请求 /chat/completions
+        capturedRequests.clear()
+        routeHandler = { _, _ ->
+            401 to """{"error":{"message":"Invalid API key"}}"""
+        }
+        val unauthRes = parser.transcribeAudioWav(sampleWav, settings)
+        assertTrue(unauthRes.isFailure)
+        assertEquals(1, capturedRequests.size)
+        assertTrue(unauthRes.exceptionOrNull()!!.message!!.contains("401"))
     }
 }

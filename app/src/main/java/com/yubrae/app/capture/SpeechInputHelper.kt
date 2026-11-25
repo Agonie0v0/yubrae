@@ -1,10 +1,13 @@
 package com.yubrae.app.capture
 
 import android.Manifest
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.provider.Settings
 import android.speech.RecognitionService
 import android.speech.RecognizerIntent
@@ -17,6 +20,22 @@ data class SpeechEngineInfo(
     val label: String,
     val componentName: String? = null
 )
+
+data class SpeechEngineCandidate(
+    val packageName: String,
+    val serviceClassName: String,
+    val label: String,
+    val isXiaomiEngine: Boolean,
+    val isSystemApp: Boolean
+) {
+    fun toComponentName(): ComponentName = ComponentName(packageName, serviceClassName)
+
+    fun toEngineInfo(): SpeechEngineInfo = SpeechEngineInfo(
+        packageName = packageName,
+        label = label,
+        componentName = "$packageName/$serviceClassName"
+    )
+}
 
 enum class SpeechErrorKind {
     PERMISSION_DENIED,
@@ -51,16 +70,76 @@ object SpeechInputHelper {
         "com.xiaomi.aiasst.service"
     )
 
-    fun parseComponentPackage(rawComponent: String?): String? {
+    private val EXCLUDED_EXACT_PACKAGES = setOf(
+        "com.arlosoft.macrodroid",
+        "net.dinglisch.android.taskerm",
+        "com.llamalab.automate",
+        "com.facebook.aura",
+        "com.meta.wearable"
+    )
+
+    private val EXCLUDED_PACKAGE_PREFIXES = listOf(
+        "com.arlosoft.macrodroid.",
+        "net.dinglisch.android.taskerm.",
+        "com.llamalab.automate.",
+        "com.facebook.aura.",
+        "com.meta.wearable."
+    )
+
+    private val GOOGLE_SPEECH_PACKAGE_ORDER = listOf(
+        "com.google.android.googlequicksearchbox",
+        "com.google.android.tts",
+        "com.google.android.as"
+    )
+
+    private val KNOWN_DOMESTIC_SPEECH_PACKAGES = setOf(
+        "com.xiaomi.mibrain.speech",
+        "com.miui.voiceassist",
+        "com.xiaomi.voiceassistant",
+        "com.xiaomi.aiasst.service",
+        "com.iflytek.speechcloud",
+        "com.iflytek.inputmethod",
+        "com.baidu.duersdk.opensdk",
+        "com.samsung.android.bixby.agent",
+        "com.hihonor.awareness",
+        "com.huawei.vassistant",
+        "com.heytap.speechassist",
+        "com.vivo.agent"
+    )
+
+    internal data class RawSpeechServiceEntry(
+        val packageName: String,
+        val serviceClassName: String,
+        val label: String,
+        val isSystemApp: Boolean,
+        val isSystemDefault: Boolean = false
+    )
+
+    internal fun parseComponentPair(rawComponent: String?): Pair<String, String>? {
         val raw = rawComponent?.trim().orEmpty()
         if (raw.isEmpty() || raw.equals("null", ignoreCase = true)) return null
         val slashIndex = raw.indexOf('/')
         if (slashIndex <= 0 || slashIndex >= raw.length - 1) return null
         val pkg = raw.substring(0, slashIndex).trim()
-        val cls = raw.substring(slashIndex + 1).trim()
-        if (pkg.isEmpty() || cls.isEmpty() || pkg.equals("null", ignoreCase = true)) return null
-        return pkg
+        val rawCls = raw.substring(slashIndex + 1).trim()
+        if (pkg.isEmpty() ||
+            rawCls.isEmpty() ||
+            pkg.equals("null", ignoreCase = true) ||
+            rawCls.equals("null", ignoreCase = true)
+        ) {
+            return null
+        }
+        return pkg to normalizeServiceClassName(pkg, rawCls)
     }
+
+    internal fun normalizeServiceClassName(packageName: String, rawClassName: String): String {
+        val cls = rawClassName.trim()
+        if (cls.isEmpty()) return ""
+        return if (cls.startsWith(".")) "$packageName$cls" else cls
+    }
+
+    fun parseComponentPackage(rawComponent: String?): String? =
+        parseComponentPair(rawComponent)?.first
 
     fun isXiaomiSpeechPackage(packageName: String?): Boolean {
         val normalized = packageName?.trim()?.lowercase(Locale.ROOT).orEmpty()
@@ -70,6 +149,34 @@ object SpeechInputHelper {
             (normalized.contains("speech") ||
                 normalized.contains("voice") ||
                 normalized.contains("mibrain"))
+    }
+
+    fun isExcludedNonAsrService(
+        packageName: String?,
+        serviceClassName: String?,
+        label: String? = null
+    ): Boolean {
+        val pkg = packageName?.trim()?.lowercase(Locale.ROOT).orEmpty()
+        val cls = serviceClassName?.trim()?.lowercase(Locale.ROOT).orEmpty()
+        val lbl = label?.trim()?.lowercase(Locale.ROOT).orEmpty()
+
+        if (pkg.isNotEmpty() &&
+            (pkg in EXCLUDED_EXACT_PACKAGES || EXCLUDED_PACKAGE_PREFIXES.any { pkg.startsWith(it) })
+        ) {
+            return true
+        }
+        if (cls.contains("trampoline") || cls.contains("bridge")) {
+            return true
+        }
+        if (lbl.contains("macrodroid") ||
+            lbl.contains("meta aura") ||
+            lbl.contains("trampoline") ||
+            lbl == "tasker" ||
+            lbl == "automate"
+        ) {
+            return true
+        }
+        return false
     }
 
     fun diagnoseSpeechRecognizerError(
@@ -443,51 +550,346 @@ object SpeechInputHelper {
         )
     }
 
-    fun hasRecordAudioPermission(context: Context): Boolean =
-        ContextCompat.checkSelfPermission(
-            context.applicationContext,
+    fun hasRecordAudioPermission(context: Context): Boolean {
+        val targetContext = context.applicationContext ?: context
+        return ContextCompat.checkSelfPermission(
+            targetContext,
             Manifest.permission.RECORD_AUDIO
         ) == PackageManager.PERMISSION_GRANTED
+    }
+
+    internal fun buildSpeechEngineCandidates(
+        rawEntries: List<RawSpeechServiceEntry>,
+        isXiaomiRom: Boolean
+    ): List<SpeechEngineCandidate> {
+        data class MergedEntry(
+            val firstIndex: Int,
+            val packageName: String,
+            val serviceClassName: String,
+            val label: String,
+            val isSystemApp: Boolean,
+            val isSystemDefault: Boolean
+        )
+
+        val merged = linkedMapOf<String, MergedEntry>()
+        rawEntries.forEachIndexed { index, raw ->
+            val pkg = raw.packageName.trim()
+            val cls = normalizeServiceClassName(pkg, raw.serviceClassName)
+            if (pkg.isEmpty() || cls.isEmpty()) return@forEachIndexed
+            val lbl = raw.label.trim().ifEmpty { pkg }
+            if (isExcludedNonAsrService(pkg, cls, lbl)) return@forEachIndexed
+
+            val key = "${pkg.lowercase(Locale.ROOT)}/$cls"
+            val existing = merged[key]
+            if (existing == null) {
+                merged[key] = MergedEntry(
+                    firstIndex = index,
+                    packageName = pkg,
+                    serviceClassName = cls,
+                    label = lbl,
+                    isSystemApp = raw.isSystemApp,
+                    isSystemDefault = raw.isSystemDefault
+                )
+            } else {
+                val betterLabel = if (existing.label.equals(existing.packageName, ignoreCase = true) &&
+                    !lbl.equals(pkg, ignoreCase = true)
+                ) {
+                    lbl
+                } else {
+                    existing.label
+                }
+                merged[key] = existing.copy(
+                    label = betterLabel,
+                    isSystemApp = existing.isSystemApp || raw.isSystemApp,
+                    isSystemDefault = existing.isSystemDefault || raw.isSystemDefault
+                )
+            }
+        }
+
+        fun rankTier(entry: MergedEntry): Int {
+            if (entry.isSystemDefault) return 0
+            val pkg = entry.packageName.lowercase(Locale.ROOT)
+            if (isXiaomiRom) {
+                when {
+                    pkg == "com.xiaomi.mibrain.speech" -> return 1
+                    pkg == "com.miui.voiceassist" -> return 2
+                    isXiaomiSpeechPackage(pkg) -> return 3
+                }
+            }
+            return when {
+                pkg in GOOGLE_SPEECH_PACKAGE_ORDER -> 4
+                entry.isSystemApp -> 5
+                pkg in KNOWN_DOMESTIC_SPEECH_PACKAGES || isXiaomiSpeechPackage(pkg) -> 6
+                else -> 7
+            }
+        }
+
+        fun subRank(entry: MergedEntry): Int {
+            val pkg = entry.packageName.lowercase(Locale.ROOT)
+            val googleIdx = GOOGLE_SPEECH_PACKAGE_ORDER.indexOf(pkg)
+            if (googleIdx >= 0) {
+                val sysPenalty = if (entry.isSystemApp) 0 else 10
+                return sysPenalty + googleIdx
+            }
+            val sysPenalty = if (entry.isSystemApp) 0 else 10
+            val knownPenalty = if (pkg in KNOWN_DOMESTIC_SPEECH_PACKAGES) 0 else 5
+            return sysPenalty + knownPenalty
+        }
+
+        return merged.values
+            .sortedWith(
+                compareBy<MergedEntry>(
+                    { rankTier(it) },
+                    { subRank(it) },
+                    { it.firstIndex }
+                )
+            )
+            .map { entry ->
+                SpeechEngineCandidate(
+                    packageName = entry.packageName,
+                    serviceClassName = entry.serviceClassName,
+                    label = entry.label,
+                    isXiaomiEngine = isXiaomiSpeechPackage(entry.packageName),
+                    isSystemApp = entry.isSystemApp
+                )
+            }
+    }
 
     @Suppress("DEPRECATION")
-    fun resolveActiveSpeechEngine(context: Context): SpeechEngineInfo? {
-        val appContext = context.applicationContext
+    fun resolveSpeechEngineCandidates(
+        context: Context,
+        isXiaomiRom: Boolean = false
+    ): List<SpeechEngineCandidate> {
+        val appContext = context.applicationContext ?: context
         val pm = appContext.packageManager
+        val rawEntries = mutableListOf<RawSpeechServiceEntry>()
+
+        val resolvedServices = runCatching {
+            pm.queryIntentServices(Intent(RecognitionService.SERVICE_INTERFACE), 0)
+        }.getOrDefault(emptyList())
+
+        for (resolveInfo in resolvedServices) {
+            val svc = resolveInfo.serviceInfo ?: continue
+            if (!svc.enabled || svc.applicationInfo?.enabled == false) continue
+            val pkg = svc.packageName.orEmpty().trim()
+            val cls = normalizeServiceClassName(pkg, svc.name.orEmpty())
+            if (pkg.isEmpty() || cls.isEmpty()) continue
+            val label = runCatching {
+                resolveInfo.loadLabel(pm)?.toString()?.trim()?.takeIf { it.isNotEmpty() }
+            }.getOrNull() ?: resolveAppLabel(pm, pkg) ?: pkg
+            val appFlags = svc.applicationInfo?.flags ?: 0
+            val isSystemApp = (appFlags and ApplicationInfo.FLAG_SYSTEM) != 0 ||
+                (appFlags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) != 0
+            rawEntries += RawSpeechServiceEntry(
+                packageName = pkg,
+                serviceClassName = cls,
+                label = label,
+                isSystemApp = isSystemApp,
+                isSystemDefault = false
+            )
+        }
 
         val rawSecureComponent = runCatching {
             Settings.Secure.getString(appContext.contentResolver, SECURE_VOICE_RECOGNITION_SERVICE)
         }.getOrNull()
-        val securePackage = parseComponentPackage(rawSecureComponent)
-        if (!securePackage.isNullOrBlank()) {
-            val secureLabel = resolveAppLabel(pm, securePackage)
-            if (secureLabel != null) {
-                return SpeechEngineInfo(
-                    packageName = securePackage,
-                    label = secureLabel,
-                    componentName = rawSecureComponent?.trim()
+        val securePair = parseComponentPair(rawSecureComponent)
+        if (securePair != null) {
+            val (securePkg, secureCls) = securePair
+            val alreadyQueried = rawEntries.any {
+                it.packageName.equals(securePkg, ignoreCase = true) &&
+                    it.serviceClassName == secureCls
+            }
+            if (alreadyQueried) {
+                rawEntries += RawSpeechServiceEntry(
+                    packageName = securePkg,
+                    serviceClassName = secureCls,
+                    label = securePkg,
+                    isSystemApp = false,
+                    isSystemDefault = true
                 )
+            } else {
+                val svcInfo = runCatching {
+                    pm.getServiceInfo(ComponentName(securePkg, secureCls), 0)
+                }.getOrNull()
+                if (svcInfo != null && svcInfo.enabled && svcInfo.applicationInfo?.enabled != false) {
+                    val label = runCatching {
+                        svcInfo.loadLabel(pm)?.toString()?.trim()?.takeIf { it.isNotEmpty() }
+                    }.getOrNull() ?: resolveAppLabel(pm, securePkg) ?: securePkg
+                    val appFlags = svcInfo.applicationInfo?.flags ?: 0
+                    val isSystemApp = (appFlags and ApplicationInfo.FLAG_SYSTEM) != 0 ||
+                        (appFlags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) != 0
+                    rawEntries += RawSpeechServiceEntry(
+                        packageName = securePkg,
+                        serviceClassName = secureCls,
+                        label = label,
+                        isSystemApp = isSystemApp,
+                        isSystemDefault = true
+                    )
+                }
             }
         }
 
-        val serviceResolve = runCatching {
-            pm.queryIntentServices(Intent(RecognitionService.SERVICE_INTERFACE), 0)
-                .firstOrNull { it.serviceInfo != null }
+        val effectiveIsXiaomiRom = isXiaomiRom || isCurrentDeviceXiaomi()
+        return buildSpeechEngineCandidates(rawEntries, effectiveIsXiaomiRom)
+    }
+
+    fun createSpeechRecognizerForCandidate(
+        context: Context,
+        candidate: SpeechEngineCandidate?
+    ): SpeechRecognizer = if (candidate != null) {
+        SpeechRecognizer.createSpeechRecognizer(context, candidate.toComponentName())
+    } else {
+        SpeechRecognizer.createSpeechRecognizer(context)
+    }
+
+    fun isOnDeviceSpeechAvailable(context: Context): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return false
+        val targetContext = context.applicationContext ?: context
+        return runCatching {
+            SpeechRecognizer.isOnDeviceRecognitionAvailable(targetContext)
+        }.getOrDefault(false)
+    }
+
+    fun createOnDeviceRecognizer(context: Context): SpeechRecognizer? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return null
+        val targetContext = context.applicationContext ?: context
+        return runCatching {
+            if (!SpeechRecognizer.isOnDeviceRecognitionAvailable(targetContext)) {
+                null
+            } else {
+                SpeechRecognizer.createOnDeviceSpeechRecognizer(targetContext)
+            }
         }.getOrNull()
-        if (serviceResolve?.serviceInfo != null) {
-            val svc = serviceResolve.serviceInfo
-            val pkg = svc.packageName.orEmpty().trim()
-            if (pkg.isNotEmpty()) {
-                val label = runCatching {
-                    serviceResolve.loadLabel(pm)?.toString()?.trim()?.takeIf { it.isNotEmpty() }
-                }.getOrNull() ?: resolveAppLabel(pm, pkg) ?: pkg
-                return SpeechEngineInfo(
-                    packageName = pkg,
-                    label = label,
-                    componentName = "$pkg/${svc.name}"
-                )
+    }
+
+    fun isRetryableEngineBindingError(errorCode: Int): Boolean = when (errorCode) {
+        SpeechRecognizer.ERROR_SPEECH_TIMEOUT,
+        SpeechRecognizer.ERROR_NO_MATCH -> false
+
+        SpeechRecognizer.ERROR_NETWORK_TIMEOUT,
+        SpeechRecognizer.ERROR_NETWORK,
+        SpeechRecognizer.ERROR_AUDIO,
+        SpeechRecognizer.ERROR_SERVER,
+        SpeechRecognizer.ERROR_CLIENT,
+        SpeechRecognizer.ERROR_RECOGNIZER_BUSY,
+        SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS,
+        SpeechRecognizer.ERROR_TOO_MANY_REQUESTS,
+        SpeechRecognizer.ERROR_SERVER_DISCONNECTED,
+        SpeechRecognizer.ERROR_LANGUAGE_NOT_SUPPORTED,
+        SpeechRecognizer.ERROR_LANGUAGE_UNAVAILABLE,
+        SpeechRecognizer.ERROR_CANNOT_CHECK_SUPPORT,
+        SpeechRecognizer.ERROR_CANNOT_LISTEN_TO_DOWNLOAD_EVENTS -> true
+
+        else -> false
+    }
+
+    fun diagnoseAllEnginesFailed(
+        lastErrorCode: Int,
+        triedEngines: List<SpeechEngineInfo>,
+        isXiaomiRom: Boolean,
+        llmEnabled: Boolean
+    ): SpeechErrorDiagnosis {
+        val validTried = triedEngines
+            .filterNot { info ->
+                val svcClass = info.componentName
+                    ?.substringAfter('/', "")
+                    ?.takeIf { it.isNotBlank() }
+                isExcludedNonAsrService(info.packageName, svcClass, info.label)
+            }
+            .distinctBy { info ->
+                val pkg = info.packageName.trim().lowercase(Locale.ROOT)
+                val comp = info.componentName?.trim().orEmpty()
+                "$pkg|$comp"
+            }
+
+        if (validTried.isEmpty()) {
+            return SpeechErrorDiagnosis(
+                kind = if (isXiaomiRom) {
+                    SpeechErrorKind.ENGINE_AUTHORIZATION_OR_SERVICE
+                } else {
+                    SpeechErrorKind.NETWORK_OR_UNAVAILABLE
+                },
+                title = "未找到可用的系统语音引擎",
+                message = buildString {
+                    append("未检测到可直接调用的合法系统语音识别服务（已自动过滤非语音跳转服务）。")
+                    if (llmEnabled) {
+                        append("若无法启动应用内 AI 语音录音，可先确认麦克风权限或改用键盘语音输入。")
+                    } else {
+                        append("建议直接使用键盘输入法语音，或在「系统语音设置」中启用有效的识别引擎。")
+                    }
+                },
+                guideSteps = buildList {
+                    add("1. 优先点击「改用键盘语音」，使用当前输入法自带的麦克风完成语音输入")
+                    add("2. 点击「系统语音设置」，检查并启用真实语音识别服务（如小爱语音引擎、讯飞或 Google 语音服务）")
+                    if (llmEnabled) {
+                        add("3. 若需使用 AI 语音速记，请确认「余白」的录音权限已允许且所选 AI 模型支持音频转写")
+                    } else {
+                        add("3. 也可在「设置 → AI 解析」配置支持语音的多模态接口（如 OpenAI / Gemini）作为备用")
+                    }
+                },
+                showAppPermissionAction = lastErrorCode == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS ||
+                    lastErrorCode == SpeechRecognizer.ERROR_AUDIO,
+                showEngineSettingsAction = isXiaomiRom,
+                showVoiceSettingsAction = true,
+                showSystemDialogFallback = true
+            )
+        }
+
+        val lastEngine = validTried.last()
+        val effectiveXiaomi = isXiaomiRom || validTried.any { isXiaomiSpeechPackage(it.packageName) }
+        val baseDiagnosis = diagnoseSpeechRecognizerError(
+            errorCode = lastErrorCode,
+            engine = lastEngine,
+            isXiaomiRom = effectiveXiaomi
+        )
+        val triedSummary = validTried.joinToString("、") { engine ->
+            val label = engine.label.trim().ifEmpty { engine.packageName }
+            "$label (${engine.packageName})"
+        }
+        val title = when {
+            baseDiagnosis.kind == SpeechErrorKind.PERMISSION_DENIED -> baseDiagnosis.title
+            validTried.size > 1 -> "全部系统语音引擎均启动失败 (${validTried.size}个)"
+            else -> baseDiagnosis.title
+        }
+        val message = buildString {
+            append("已依次尝试：").append(triedSummary).append("，均未能正常启动")
+            append("（错误码 ").append(lastErrorCode).append("）。")
+            append(baseDiagnosis.message)
+            if (!llmEnabled) {
+                append("你也可以先改用键盘语音输入，或在「AI 设置」中配置支持语音的 AI 接口。")
+            }
+        }
+        val steps = buildList {
+            add("1. 推荐直接点击「改用键盘语音」，通过输入法麦克风快速完成语音输入")
+            baseDiagnosis.guideSteps.forEachIndexed { idx, step ->
+                val cleaned = step.replaceFirst(Regex("^\\d+\\.\\s*"), "")
+                add("${idx + 2}. $cleaned")
+            }
+            if (!llmEnabled) {
+                add("${size + 1}. 如需在无可用系统引擎时自动转写，可在「AI 设置」启用支持音频的模型（如 OpenAI / Gemini）")
             }
         }
 
+        return SpeechErrorDiagnosis(
+            kind = baseDiagnosis.kind,
+            title = title,
+            message = message,
+            guideSteps = steps,
+            showAppPermissionAction = baseDiagnosis.showAppPermissionAction,
+            showEngineSettingsAction = baseDiagnosis.showEngineSettingsAction || effectiveXiaomi,
+            showVoiceSettingsAction = true,
+            showSystemDialogFallback = baseDiagnosis.showSystemDialogFallback
+        )
+    }
+
+    @Suppress("DEPRECATION")
+    fun resolveActiveSpeechEngine(context: Context): SpeechEngineInfo? {
+        resolveSpeechEngineCandidates(context).firstOrNull()?.let { candidate ->
+            return candidate.toEngineInfo()
+        }
+
+        val appContext = context.applicationContext ?: context
+        val pm = appContext.packageManager
         val activityIntent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
         val resolvedActivity = runCatching {
             pm.resolveActivity(activityIntent, PackageManager.MATCH_DEFAULT_ONLY)
@@ -495,13 +897,39 @@ object SpeechInputHelper {
         val chosenActivity = if (resolvedActivity?.activityInfo?.packageName == "android") {
             runCatching {
                 pm.queryIntentActivities(activityIntent, 0)
-                    .firstOrNull { it.activityInfo != null && it.activityInfo.packageName != "android" }
-            }.getOrNull() ?: resolvedActivity
-        } else {
-            resolvedActivity ?: runCatching {
-                pm.queryIntentActivities(activityIntent, 0)
-                    .firstOrNull { it.activityInfo != null }
+                    .firstOrNull { info ->
+                        val act = info.activityInfo ?: return@firstOrNull false
+                        act.packageName != "android" &&
+                            !isExcludedNonAsrService(
+                                act.packageName,
+                                act.name,
+                                runCatching { info.loadLabel(pm)?.toString() }.getOrNull()
+                            )
+                    }
             }.getOrNull()
+        } else {
+            val resolvedAct = resolvedActivity?.activityInfo
+            val resolvedLabel = resolvedActivity?.let {
+                runCatching { it.loadLabel(pm)?.toString() }.getOrNull()
+            }
+            if (resolvedAct != null &&
+                !isExcludedNonAsrService(resolvedAct.packageName, resolvedAct.name, resolvedLabel)
+            ) {
+                resolvedActivity
+            } else {
+                runCatching {
+                    pm.queryIntentActivities(activityIntent, 0)
+                        .firstOrNull { info ->
+                            val act = info.activityInfo ?: return@firstOrNull false
+                            act.packageName != "android" &&
+                                !isExcludedNonAsrService(
+                                    act.packageName,
+                                    act.name,
+                                    runCatching { info.loadLabel(pm)?.toString() }.getOrNull()
+                                )
+                        }
+                }.getOrNull()
+            }
         }
 
         val actInfo = chosenActivity?.activityInfo
@@ -511,32 +939,30 @@ object SpeechInputHelper {
                 val label = runCatching {
                     chosenActivity.loadLabel(pm)?.toString()?.trim()?.takeIf { it.isNotEmpty() }
                 }.getOrNull() ?: resolveAppLabel(pm, pkg) ?: pkg
-                return SpeechEngineInfo(
-                    packageName = pkg,
-                    label = label,
-                    componentName = "$pkg/${actInfo.name}"
-                )
+                if (!isExcludedNonAsrService(pkg, actInfo.name, label)) {
+                    return SpeechEngineInfo(
+                        packageName = pkg,
+                        label = label,
+                        componentName = "$pkg/${actInfo.name}"
+                    )
+                }
             }
         }
 
-        if (!securePackage.isNullOrBlank()) {
-            return SpeechEngineInfo(
-                packageName = securePackage,
-                label = securePackage,
-                componentName = rawSecureComponent?.trim()
-            )
-        }
         return null
     }
 
-    fun isInAppSpeechAvailable(context: Context): Boolean =
-        runCatching {
-            SpeechRecognizer.isRecognitionAvailable(context.applicationContext)
+    fun isInAppSpeechAvailable(context: Context): Boolean {
+        val targetContext = context.applicationContext ?: context
+        return runCatching {
+            SpeechRecognizer.isRecognitionAvailable(targetContext)
         }.getOrDefault(false)
+    }
 
     fun openSpeechEngineAppDetails(context: Context, packageName: String?): Boolean {
-        val targetPackage = packageName?.trim()?.takeIf { it.isNotEmpty() }
-            ?: resolveActiveSpeechEngine(context)?.packageName?.trim()?.takeIf { it.isNotEmpty() }
+        val targetPackage = packageName?.trim()?.takeIf {
+            it.isNotEmpty() && !isExcludedNonAsrService(it, null, null)
+        } ?: resolveActiveSpeechEngine(context)?.packageName?.trim()?.takeIf { it.isNotEmpty() }
         if (targetPackage != null) {
             val detailsIntent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
                 data = Uri.parse("package:$targetPackage")
@@ -562,6 +988,18 @@ object SpeechInputHelper {
             data = Uri.parse("package:${context.packageName}")
         }
         return safeStartActivity(context, intent)
+    }
+
+    private fun isCurrentDeviceXiaomi(): Boolean {
+        val detected = runCatching { DeviceRomProfile.detectCurrent().isXiaomiFamily }.getOrDefault(false)
+        if (detected) return true
+        val combined = listOfNotNull(Build.MANUFACTURER, Build.BRAND)
+            .joinToString(" ")
+            .lowercase(Locale.ROOT)
+        return combined.contains("xiaomi") ||
+            combined.contains("redmi") ||
+            combined.contains("poco") ||
+            combined.contains("blackshark")
     }
 
     private fun resolveAppLabel(pm: PackageManager, packageName: String): String? =

@@ -26,6 +26,19 @@
         <package android:name="com.rifsxd.ksunext" />
         <package android:name="com.sukisu.ultra" />
         <package android:name="org.lsposed.manager" />
+        <package android:name="com.xiaomi.mibrain.speech" />
+        <package android:name="com.miui.voiceassist" />
+        <package android:name="com.google.android.googlequicksearchbox" />
+        <package android:name="com.google.android.tts" />
+        <package android:name="com.google.android.as" />
+        <package android:name="com.iflytek.speechcloud" />
+        <package android:name="com.iflytek.inputmethod" />
+        <package android:name="com.baidu.duersdk.opensdk" />
+        <package android:name="com.samsung.android.bixby.agent" />
+        <package android:name="com.hihonor.awareness" />
+        <package android:name="com.huawei.vassistant" />
+        <package android:name="com.heytap.speechassist" />
+        <package android:name="com.vivo.agent" />
         <intent>
             <action android:name="android.speech.RecognitionService" />
         </intent>
