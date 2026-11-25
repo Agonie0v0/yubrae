@@ -24,6 +24,8 @@ jobs:
       should_release: ${{ steps.resolve.outputs.should_release }}
       release_tag: ${{ steps.resolve.outputs.release_tag }}
       artifact_tag: ${{ steps.resolve.outputs.artifact_tag }}
+      target_version: ${{ steps.resolve.outputs.target_version }}
+      target_build_number: ${{ steps.resolve.outputs.target_build_number }}
 
     steps:
       - name: Checkout repository
@@ -34,53 +36,161 @@ jobs:
       - name: Resolve version and release eligibility
         id: resolve
         run: |
-          set -euo pipefail
-          ANDROID_VER=$(sed -nE 's/^[[:space:]]*versionName[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' app/build.gradle.kts | head -n 1)
-          IOS_VER=$(sed -nE 's/^[[:space:]]*MARKETING_VERSION:[[:space:]]*"([^"]+)".*/\1/p' ios/project.yml | head -n 1)
+          python3 - <<'PY'
+          import os
+          import re
+          import subprocess
+          import sys
+          from pathlib import Path
 
-          if [ -z "${ANDROID_VER}" ] || [ -z "${IOS_VER}" ]; then
-            echo "::error::Failed to parse Android versionName (${ANDROID_VER:-empty}) or iOS MARKETING_VERSION (${IOS_VER:-empty})."
-            exit 1
-          fi
+          def read_text(path_str: str) -> str:
+              return Path(path_str).read_text(encoding="utf-8")
 
-          if [ "${GITHUB_EVENT_NAME:-}" = "pull_request" ]; then
-            SAFE_PR="${GITHUB_REF_NAME:-pr}"
-            SAFE_PR="${SAFE_PR//\//-}"
-            echo "should_release=false" >> "$GITHUB_OUTPUT"
-            echo "release_tag=" >> "$GITHUB_OUTPUT"
-            echo "artifact_tag=pr-${SAFE_PR}" >> "$GITHUB_OUTPUT"
-            echo "Pull request detected; artifact_tag=pr-${SAFE_PR}, release skipped."
-            exit 0
-          fi
+          def fail(msg: str) -> None:
+              print(f"::error::{msg}", file=sys.stderr)
+              sys.exit(1)
 
-          if [ "${GITHUB_REF:-}" = "refs/heads/main" ]; then
-            TAG_NAME="v${ANDROID_VER}"
-            REMOTE_TAG=$(git ls-remote --tags origin "refs/tags/${TAG_NAME}")
+          gradle_text = read_text("app/build.gradle.kts")
+          ios_text = read_text("ios/project.yml")
 
-            if [ -n "${REMOTE_TAG}" ]; then
-              echo "should_release=false" >> "$GITHUB_OUTPUT"
-              echo "release_tag=" >> "$GITHUB_OUTPUT"
-              echo "artifact_tag=main" >> "$GITHUB_OUTPUT"
-              echo "Tag ${TAG_NAME} already exists on origin; running single CI verification only."
-            else
-              if [ "${ANDROID_VER}" != "${IOS_VER}" ]; then
-                echo "::error::Version mismatch for new release: Android versionName=${ANDROID_VER}, iOS MARKETING_VERSION=${IOS_VER}."
-                exit 1
-              fi
-              echo "should_release=true" >> "$GITHUB_OUTPUT"
-              echo "release_tag=${TAG_NAME}" >> "$GITHUB_OUTPUT"
-              echo "artifact_tag=${TAG_NAME}" >> "$GITHUB_OUTPUT"
-              echo "New version detected (${TAG_NAME}); will auto-tag and publish GitHub Release after dual-platform CI succeeds."
-            fi
-            exit 0
-          fi
+          m_android_ver = re.search(r'^\s*versionName\s*=\s*"([^"]+)"', gradle_text, re.MULTILINE)
+          m_android_code = re.search(r'^\s*versionCode\s*=\s*(\d+)', gradle_text, re.MULTILINE)
+          m_ios_ver = re.search(r'^\s*MARKETING_VERSION:\s*"([^"]+)"', ios_text, re.MULTILINE)
+          m_ios_code = re.search(r'^\s*CURRENT_PROJECT_VERSION:\s*"?(\d+)"?', ios_text, re.MULTILINE)
 
-          SAFE_REF="${GITHUB_REF_NAME:-manual}"
-          SAFE_REF="${SAFE_REF//\//-}"
-          echo "should_release=false" >> "$GITHUB_OUTPUT"
-          echo "release_tag=" >> "$GITHUB_OUTPUT"
-          echo "artifact_tag=${SAFE_REF}" >> "$GITHUB_OUTPUT"
-          echo "Non-main ref (${GITHUB_REF:-unknown}); running CI verification only."
+          android_ver = m_android_ver.group(1).strip() if m_android_ver else ""
+          ios_ver = m_ios_ver.group(1).strip() if m_ios_ver else ""
+          android_code = int(m_android_code.group(1)) if m_android_code else 0
+          ios_code = int(m_ios_code.group(1)) if m_ios_code else 0
+
+          if not android_ver or not ios_ver or android_code <= 0 or ios_code <= 0:
+              fail(
+                  f"Failed to parse version metadata: "
+                  f"android_ver={android_ver!r}, android_code={android_code}, "
+                  f"ios_ver={ios_ver!r}, ios_code={ios_code}"
+              )
+
+          if not re.fullmatch(r"\d+\.\d+\.\d+", android_ver):
+              fail(f"Android versionName must be three-part semver (X.Y.Z), got {android_ver!r}")
+
+          event_name = os.environ.get("GITHUB_EVENT_NAME", "")
+          github_ref = os.environ.get("GITHUB_REF", "")
+          github_ref_name = os.environ.get("GITHUB_REF_NAME", "")
+
+          commit_msg = subprocess.check_output(
+              ["git", "log", "-1", "--pretty=%B"], text=True
+          ).strip()
+
+          def write_outputs(outputs: dict[str, str]) -> None:
+              out_path = os.environ.get("GITHUB_OUTPUT", "")
+              if out_path:
+                  with open(out_path, "a", encoding="utf-8") as fh:
+                      for k, v in outputs.items():
+                          fh.write(f"{k}={v}\n")
+              summary_path = os.environ.get("GITHUB_STEP_SUMMARY", "")
+              summary_lines = [
+                  "### Release Metadata",
+                  f"- `should_release`: `{outputs['should_release']}`",
+                  f"- `target_version`: `{outputs['target_version']}`",
+                  f"- `target_build_number`: `{outputs['target_build_number']}`",
+                  f"- `release_tag`: `{outputs['release_tag']}`",
+                  f"- `artifact_tag`: `{outputs['artifact_tag']}`",
+              ]
+              print("\n".join(summary_lines))
+              if summary_path:
+                  with open(summary_path, "a", encoding="utf-8") as fh:
+                      fh.write("\n".join(summary_lines) + "\n")
+
+          def sanitize_ref(raw: str, fallback: str = "manual") -> str:
+              return (raw or fallback).replace("/", "-")
+
+          if event_name == "pull_request":
+              safe_pr = sanitize_ref(github_ref_name, "pr")
+              print(f"Pull request detected; artifact_tag=pr-{safe_pr}, release skipped.")
+              write_outputs({
+                  "should_release": "false",
+                  "release_tag": "",
+                  "artifact_tag": f"pr-{safe_pr}",
+                  "target_version": android_ver,
+                  "target_build_number": str(android_code),
+              })
+              sys.exit(0)
+
+          if github_ref != "refs/heads/main":
+              safe_ref = sanitize_ref(github_ref_name, "manual")
+              print(f"Non-main ref ({github_ref or 'unknown'}); running CI verification only.")
+              write_outputs({
+                  "should_release": "false",
+                  "release_tag": "",
+                  "artifact_tag": safe_ref,
+                  "target_version": android_ver,
+                  "target_build_number": str(android_code),
+              })
+              sys.exit(0)
+
+          if event_name == "push" and "[skip release]" in commit_msg.lower():
+              print("Commit message contains [skip release]; running CI verification only.")
+              write_outputs({
+                  "should_release": "false",
+                  "release_tag": "",
+                  "artifact_tag": "main",
+                  "target_version": android_ver,
+                  "target_build_number": str(android_code),
+              })
+              sys.exit(0)
+
+          if android_ver != ios_ver:
+              fail(
+                  f"Version mismatch for release baseline: "
+                  f"Android versionName={android_ver}, iOS MARKETING_VERSION={ios_ver}."
+              )
+
+          base_tuple = tuple(int(p) for p in android_ver.split("."))
+
+          raw_tags = subprocess.check_output(
+              ["git", "ls-remote", "--tags", "origin", "refs/tags/v*"],
+              text=True,
+          )
+          tag_tuples: list[tuple[int, int, int]] = []
+          for line in raw_tags.splitlines():
+              parts = line.strip().split()
+              if len(parts) < 2:
+                  continue
+              ref = parts[1]
+              if ref.endswith("^{}"):
+                  ref = ref[:-3]
+              m_tag = re.fullmatch(r"refs/tags/v(\d+)\.(\d+)\.(\d+)", ref)
+              if m_tag:
+                  tag_tuples.append(tuple(int(g) for g in m_tag.groups()))
+
+          max_tag = max(tag_tuples) if tag_tuples else None
+          if max_tag is None or base_tuple > max_tag:
+              target_tuple = base_tuple
+              reason = f"using source baseline {android_ver} (max remote tag: {max_tag})"
+          else:
+              target_tuple = (max_tag[0], max_tag[1], max_tag[2] + 1)
+              reason = f"auto-bumped patch from max remote tag v{'.'.join(map(str, max_tag))}"
+
+          if target_tuple[1] >= 1000 or target_tuple[2] >= 1000:
+              fail(
+                  f"Minor/patch component exceeds 999 in {target_tuple}; "
+                  f"please bump minor or major version manually in app/build.gradle.kts and ios/project.yml."
+              )
+
+          calc_code = target_tuple[0] * 1_000_000 + target_tuple[1] * 1_000 + target_tuple[2]
+          target_code = max(calc_code, android_code, ios_code)
+          target_version = f"{target_tuple[0]}.{target_tuple[1]}.{target_tuple[2]}"
+          release_tag = f"v{target_version}"
+
+          print(f"Resolved target release {release_tag} (build {target_code}): {reason}")
+          write_outputs({
+              "should_release": "true",
+              "release_tag": release_tag,
+              "artifact_tag": release_tag,
+              "target_version": target_version,
+              "target_build_number": str(target_code),
+          })
+          PY
 
   android:
     name: Android Test & Release APK
@@ -90,6 +200,45 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Inject target version into Android build
+        if: needs.meta.outputs.should_release == 'true'
+        env:
+          TARGET_VERSION: ${{ needs.meta.outputs.target_version }}
+          TARGET_BUILD_NUMBER: ${{ needs.meta.outputs.target_build_number }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import re
+          import sys
+          from pathlib import Path
+
+          target_ver = os.environ["TARGET_VERSION"]
+          target_code = os.environ["TARGET_BUILD_NUMBER"]
+          gradle_path = Path("app/build.gradle.kts")
+          text = gradle_path.read_text(encoding="utf-8")
+
+          text, cnt_code = re.subn(
+              r'^(\s*versionCode\s*=\s*)\d+',
+              rf'\g<1>{target_code}',
+              text,
+              count=1,
+              flags=re.MULTILINE,
+          )
+          text, cnt_ver = re.subn(
+              r'^(\s*versionName\s*=\s*)"[^"]+"',
+              rf'\g<1>"{target_ver}"',
+              text,
+              count=1,
+              flags=re.MULTILINE,
+          )
+          if cnt_code != 1 or cnt_ver != 1:
+              print(f"::error::Failed to inject version into app/build.gradle.kts (cnt_code={cnt_code}, cnt_ver={cnt_ver})", file=sys.stderr)
+              sys.exit(1)
+
+          gradle_path.write_text(text, encoding="utf-8")
+          PY
+          git diff app/build.gradle.kts
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -181,6 +330,45 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Inject target version into iOS project
+        if: needs.meta.outputs.should_release == 'true'
+        env:
+          TARGET_VERSION: ${{ needs.meta.outputs.target_version }}
+          TARGET_BUILD_NUMBER: ${{ needs.meta.outputs.target_build_number }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import re
+          import sys
+          from pathlib import Path
+
+          target_ver = os.environ["TARGET_VERSION"]
+          target_code = os.environ["TARGET_BUILD_NUMBER"]
+          proj_path = Path("ios/project.yml")
+          text = proj_path.read_text(encoding="utf-8")
+
+          text, cnt_ver = re.subn(
+              r'^(\s*MARKETING_VERSION:\s*)"[^"]+"',
+              rf'\g<1>"{target_ver}"',
+              text,
+              count=1,
+              flags=re.MULTILINE,
+          )
+          text, cnt_code = re.subn(
+              r'^(\s*CURRENT_PROJECT_VERSION:\s*)"?\d+"?',
+              rf'\g<1>"{target_code}"',
+              text,
+              count=1,
+              flags=re.MULTILINE,
+          )
+          if cnt_ver != 1 or cnt_code != 1:
+              print(f"::error::Failed to inject version into ios/project.yml (cnt_ver={cnt_ver}, cnt_code={cnt_code})", file=sys.stderr)
+              sys.exit(1)
+
+          proj_path.write_text(text, encoding="utf-8")
+          PY
+          git diff ios/project.yml
+
       - name: Install XcodeGen
         run: |
           set -euo pipefail
@@ -268,6 +456,7 @@ jobs:
 
           APP_BUNDLE="build/Build/Products/Release-iphoneos/Yubrae.app"
           test -d "${APP_BUNDLE}" || { echo "::error::Missing built app bundle: ${APP_BUNDLE}"; exit 1; }
+          plutil -p "${APP_BUNDLE}/Info.plist" | grep -E "CFBundleShortVersionString|CFBundleVersion" || true
 
           rm -rf Payload
           mkdir -p Payload

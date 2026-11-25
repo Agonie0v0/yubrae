@@ -1468,7 +1468,7 @@ public struct QuickRecordSheet: View {
             attrButton(
                 icon: "wallet.pass.fill",
                 label: selectedAccount?.name ?? "账户",
-                selected: activePanel == .account || selectedAccount != null
+                selected: activePanel == .account || selectedAccount != nil
             ) {
                 activePanel = activePanel == .account ? .category : .account
             }
