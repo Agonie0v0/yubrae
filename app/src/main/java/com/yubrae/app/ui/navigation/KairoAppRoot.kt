@@ -84,11 +84,13 @@ import com.yubrae.app.data.db.TagEntity
 import com.yubrae.app.data.db.TransactionEntity
 import com.yubrae.app.data.db.TransactionType
 import com.yubrae.app.data.prefs.AppSettings
+import com.yubrae.app.ui.components.AppUpdateDialog
 import com.yubrae.app.ui.components.LedgerManageSheet
 import com.yubrae.app.ui.components.LocalPrivacyMasked
 import com.yubrae.app.ui.components.QuickRecordSheet
 import com.yubrae.app.ui.components.SmartInputSheet
 import com.yubrae.app.ui.components.YubraeBrandMark
+import kotlinx.coroutines.delay
 import com.yubrae.app.ui.screens.assets.AccountDetailScreen
 import com.yubrae.app.ui.screens.assets.AssetsScreen
 import com.yubrae.app.ui.screens.assets.HiddenAssetsScreen
@@ -162,6 +164,14 @@ fun KairoAppRoot(
     val pendingCount by viewModel.pendingCount.collectAsStateWithLifecycle()
     val pendingReimburseCount by viewModel.pendingReimburseCount.collectAsStateWithLifecycle()
     val openDebtCount by viewModel.openDebtCount.collectAsStateWithLifecycle()
+    val hasAvailableUpdate by viewModel.hasAvailableUpdate.collectAsStateWithLifecycle()
+    val showUpdateDialog by viewModel.showUpdateDialog.collectAsStateWithLifecycle()
+    val updateState by viewModel.updateState.collectAsStateWithLifecycle()
+
+    LaunchedEffect(Unit) {
+        delay(1_500L)
+        viewModel.checkForUpdates(manual = false)
+    }
 
     // 为 4 个主 Tab 保留持久滚动位置
     val txListState = rememberLazyListState()
@@ -468,6 +478,7 @@ fun KairoAppRoot(
                                 YubraeBottomBar(
                                     selectedTab = selectedTab,
                                     pendingCount = pendingCount,
+                                    hasUpdateBadge = hasAvailableUpdate,
                                     onSelectTab = { index ->
                                         selectedTab = index
                                         if (index != 3) {
@@ -764,6 +775,23 @@ fun KairoAppRoot(
                     }
                 )
             }
+
+            if (showUpdateDialog && !(isAppLocked && settings.biometricLockEnabled)) {
+                AppUpdateDialog(
+                    state = updateState,
+                    mirrorPrefix = settings.updateMirrorPrefix,
+                    canInstallPackages = { viewModel.canRequestPackageInstalls(context) },
+                    onDismiss = { viewModel.dismissUpdateDialog() },
+                    onRetryCheck = { viewModel.checkForUpdates(manual = true) },
+                    onStartDownload = { info -> viewModel.startUpdateDownload(info) },
+                    onCancelDownload = { viewModel.cancelUpdateDownload() },
+                    onInstallReady = { viewModel.installReadyUpdate(context) },
+                    onOpenUnknownSources = { viewModel.openUnknownAppSourcesSettings(context) },
+                    onIgnoreVersion = { tag -> viewModel.ignoreUpdateVersion(tag) },
+                    onOpenBrowser = { url -> viewModel.openUpdateReleasePage(context, url) },
+                    onSaveMirrorPrefix = { prefix -> viewModel.saveUpdateMirrorPrefix(prefix) }
+                )
+            }
         }
     }
 }
@@ -939,6 +967,7 @@ private fun HomeAiRecordFab(
 private fun YubraeBottomBar(
     selectedTab: Int,
     pendingCount: Int,
+    hasUpdateBadge: Boolean = false,
     onSelectTab: (Int) -> Unit,
     onQuickRecord: () -> Unit,
     onSmartInput: () -> Unit
@@ -969,6 +998,7 @@ private fun YubraeBottomBar(
                         tab = tab,
                         selected = selectedTab == tab.index,
                         pendingCount = if (tab.index == 0) pendingCount else 0,
+                        showDotBadge = false,
                         onClick = { onSelectTab(tab.index) },
                         modifier = Modifier.weight(1f)
                     )
@@ -1009,6 +1039,7 @@ private fun YubraeBottomBar(
                         tab = tab,
                         selected = selectedTab == tab.index,
                         pendingCount = 0,
+                        showDotBadge = tab.index == 3 && hasUpdateBadge,
                         onClick = { onSelectTab(tab.index) },
                         modifier = Modifier.weight(1f)
                     )
@@ -1023,6 +1054,7 @@ private fun YubraeNavTabItem(
     tab: BottomTabItem,
     selected: Boolean,
     pendingCount: Int,
+    showDotBadge: Boolean = false,
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -1057,6 +1089,19 @@ private fun YubraeNavTabItem(
                                 lineHeight = 10.sp
                             )
                         }
+                    }
+                ) {
+                    Icon(
+                        imageVector = tab.icon,
+                        contentDescription = tab.label,
+                        tint = tint,
+                        modifier = Modifier.size(21.dp)
+                    )
+                }
+            } else if (showDotBadge) {
+                BadgedBox(
+                    badge = {
+                        Badge(containerColor = MaterialTheme.colorScheme.error)
                     }
                 ) {
                     Icon(

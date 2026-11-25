@@ -55,6 +55,7 @@ import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Security
 import androidx.compose.material.icons.rounded.SmartToy
+import androidx.compose.material.icons.rounded.SystemUpdateAlt
 import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material3.AlertDialog
@@ -66,6 +67,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -95,6 +97,7 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.yubrae.app.BuildConfig
+import com.yubrae.app.capture.DeviceRomProfile
 import com.yubrae.app.core.contract.DevicePermissionReport
 import com.yubrae.app.data.prefs.ThemeMode
 import com.yubrae.app.ui.components.CompactHairlineDivider
@@ -109,6 +112,8 @@ import com.yubrae.app.ui.theme.KairoThemePreset
 import com.yubrae.app.ui.theme.KairoThemePresets
 import com.yubrae.app.ui.theme.tabular
 import com.yubrae.app.ui.viewmodel.KairoMainViewModel
+import com.yubrae.app.update.AppUpdateManager
+import com.yubrae.app.update.UpdateUiState
 import java.time.Instant
 import java.time.ZoneId
 
@@ -194,15 +199,24 @@ fun MineHubScreen(
         settings.accessibilityCaptureEnabled ||
         settings.autoAccountingBridgeEnabled
 
-    val readyCount = remember(report) {
-        report?.let { r ->
-            listOf(
-                r.notificationListenerEnabled,
-                r.accessibilityServiceEnabled,
-                r.smsPermissionGranted,
-                r.overlayPermissionGranted,
-                r.ignoringBatteryOptimizations
-            ).count { it }
+    val hasAvailableUpdate by viewModel.hasAvailableUpdate.collectAsStateWithLifecycle()
+    val updateState by viewModel.updateState.collectAsStateWithLifecycle()
+
+    val (readyCount, requiredCount) = remember(report, settings) {
+        if (report == null) {
+            null to 0
+        } else {
+            val r = report!!
+            val checks = buildList {
+                if (settings.notificationCaptureEnabled) add(r.notificationListenerEnabled)
+                if (settings.accessibilityCaptureEnabled) {
+                    add(r.accessibilityServiceEnabled && r.accessibilityServiceRunning)
+                }
+                if (settings.smsCaptureEnabled) add(r.smsPermissionGranted)
+                if (settings.floatingConfirmEnabled) add(r.overlayPermissionGranted)
+                add(r.ignoringBatteryOptimizations)
+            }
+            checks.count { it } to checks.size
         }
     }
 
@@ -226,6 +240,7 @@ fun MineHubScreen(
                 privacyMasked = settings.privacyMaskEnabled,
                 autoCaptureEnabled = autoCaptureEnabled,
                 readyCount = readyCount,
+                requiredCount = requiredCount,
                 recordingDays = recordingDays,
                 totalTransactions = totalTransactionCount,
                 ledgerCount = activeLedgerCount,
@@ -286,7 +301,11 @@ fun MineHubScreen(
                             icon = Icons.Rounded.Security,
                             title = "自动记账与权限",
                             subtitle = "通知监听、无障碍、短信、悬浮窗与外部协议",
-                            statusText = readyCount?.let { "$it/5" },
+                            statusText = when {
+                                !autoCaptureEnabled -> "已关闭"
+                                readyCount != null && requiredCount > 0 -> "$readyCount/$requiredCount"
+                                else -> null
+                            },
                             onClick = { onNavigate(SettingsRoutes.AUTO_CAPTURE) }
                         )
                         CompactHairlineDivider(startIndent = 58.dp)
@@ -361,6 +380,32 @@ fun MineHubScreen(
                             statusText = styleLabel,
                             onClick = { onNavigate(SettingsRoutes.APPEARANCE) }
                         )
+                        CompactHairlineDivider(startIndent = 58.dp)
+                        val updateStatusBadge = when {
+                            hasAvailableUpdate -> {
+                                val ver = when (val st = updateState) {
+                                    is UpdateUiState.Available -> "v${st.info.versionName}"
+                                    is UpdateUiState.ReadyToInstall -> "待安装"
+                                    else -> "有新版"
+                                }
+                                "发现新版 $ver"
+                            }
+                            else -> "v${BuildConfig.VERSION_NAME}"
+                        }
+                        HubNavRow(
+                            icon = Icons.Rounded.SystemUpdateAlt,
+                            title = "检查版本更新",
+                            subtitle = "从 GitHub Releases 检查并下载安装新版本",
+                            statusText = updateStatusBadge,
+                            highlightStatus = hasAvailableUpdate,
+                            onClick = {
+                                if (hasAvailableUpdate) {
+                                    viewModel.openUpdateDialog(triggerCheckIfIdle = false)
+                                } else {
+                                    viewModel.checkForUpdates(manual = true)
+                                }
+                            }
+                        )
                     }
                 }
             }
@@ -373,6 +418,7 @@ private fun MineBrandHeaderCard(
     privacyMasked: Boolean,
     autoCaptureEnabled: Boolean,
     readyCount: Int?,
+    requiredCount: Int,
     recordingDays: Int,
     totalTransactions: Int,
     ledgerCount: Int,
@@ -389,7 +435,7 @@ private fun MineBrandHeaderCard(
             .padding(top = 6.dp)
     }
 
-    val allReady = autoCaptureEnabled && readyCount == 5
+    val allReady = autoCaptureEnabled && readyCount != null && requiredCount > 0 && readyCount == requiredCount
     val pillBg = when {
         !autoCaptureEnabled -> semantic.heroPillBg
         allReady -> semantic.incomeContainer.copy(alpha = 0.86f)
@@ -404,8 +450,8 @@ private fun MineBrandHeaderCard(
     }
     val pillLabel = when {
         !autoCaptureEnabled -> "自动记账 已关"
-        allReady -> "自动记账 5/5"
-        readyCount != null -> "自动记账 $readyCount/5"
+        allReady -> "自动记账 $readyCount/$requiredCount"
+        readyCount != null && requiredCount > 0 -> "自动记账 $readyCount/$requiredCount"
         else -> "自动记账"
     }
 
@@ -637,7 +683,11 @@ fun AutoCaptureSettingsScreen(
     val report by viewModel.permissionReport.collectAsStateWithLifecycle()
     val isBusy by viewModel.isBusy.collectAsStateWithLifecycle()
 
-    var showHyperOsGuide by remember { mutableStateOf(false) }
+    var showRomGuide by remember { mutableStateOf(false) }
+
+    val activeRomFamily = remember(report?.romFamilyName) {
+        DeviceRomProfile.byFamilyName(report?.romFamilyName ?: "AOSP")
+    }
 
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -683,19 +733,36 @@ fun AutoCaptureSettingsScreen(
             ),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            // 权限体检与 Root 一键授权
+            // 权限体检与分环境授权
             item(key = "permission_health") {
                 PermissionHealthCard(
                     report = report,
                     isBusy = isBusy,
-                    onOpenHyperOsGuide = { showHyperOsGuide = true },
+                    onOpenRomGuide = { showRomGuide = true },
+                    onOpenOemBackgroundSettings = {
+                        if (!DeviceRomProfile.openOemBackgroundSettings(context, activeRomFamily)) {
+                            viewModel.showMessage("无法打开系统后台设置，请手动前往应用信息页设置")
+                        }
+                    },
+                    onOpenAppDetails = {
+                        if (!DeviceRomProfile.openAppDetails(context)) {
+                            viewModel.showMessage("无法打开应用详情页，请前往系统设置手动查找「余白」")
+                        }
+                    },
                     onRefresh = { viewModel.refreshPermissions() },
                     onRootGrant = { viewModel.tryRootGrantPermissions() },
                     onOpenNotificationListener = {
-                        safeStartActivity(context, Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+                        if (!safeStartActivity(context, Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))) {
+                            viewModel.showMessage("无法打开通知使用权设置，请在系统设置中搜索「通知使用权」手动开启")
+                        }
                     },
                     onOpenAccessibility = {
-                        safeStartActivity(context, Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                        val isStale = report?.let { it.accessibilityServiceEnabled && !it.accessibilityServiceRunning } == true
+                        if (!safeStartActivity(context, Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))) {
+                            viewModel.showMessage("无法打开无障碍设置，请在系统设置中搜索「无障碍」手动开启")
+                        } else if (isStale) {
+                            viewModel.showMessage("检测到无障碍开关已开但后台未运行，请尝试关闭后再重新打开「余白」")
+                        }
                     },
                     onRequestSms = {
                         runCatching {
@@ -710,13 +777,19 @@ fun AutoCaptureSettingsScreen(
                         }
                     },
                     onOpenOverlay = {
-                        safeStartActivity(
+                        val opened = safeStartActivity(
                             context,
                             Intent(
                                 Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
                                 Uri.parse("package:${context.packageName}")
                             )
+                        ) || safeStartActivity(
+                            context,
+                            Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION)
                         )
+                        if (!opened) {
+                            viewModel.showMessage("无法打开悬浮窗权限设置，请在系统应用权限管理中手动开启")
+                        }
                     },
                     onRequestPostNotification = {
                         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -729,16 +802,15 @@ fun AutoCaptureSettingsScreen(
                             val intent = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).apply {
                                 putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
                             }
-                            safeStartActivity(context, intent)
+                            val opened = safeStartActivity(context, intent) || DeviceRomProfile.openAppDetails(context)
+                            if (!opened) {
+                                viewModel.showMessage("无法打开系统通知设置，请在系统应用设置中手动开启通知权限")
+                            }
                         }
                     },
                     onOpenBatteryWhitelist = {
-                        val reqIntent = Intent(
-                            Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
-                            Uri.parse("package:${context.packageName}")
-                        )
-                        if (!safeStartActivity(context, reqIntent)) {
-                            safeStartActivity(context, Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                        if (!DeviceRomProfile.openBatteryWhitelist(context, activeRomFamily)) {
+                            viewModel.showMessage("无法打开电池优化设置，请在系统设置中手动将「余白」设为无限制")
                         }
                     }
                 )
@@ -874,21 +946,48 @@ fun AutoCaptureSettingsScreen(
         }
     }
 
-    if (showHyperOsGuide) {
+    if (showRomGuide) {
+        val (guideTitle, guideSteps) = remember(activeRomFamily) {
+            DeviceRomProfile.guideForFamily(activeRomFamily)
+        }
         AlertDialog(
-            onDismissRequest = { showHyperOsGuide = false },
-            title = { Text("小米 HyperOS 防冻结指引") },
+            onDismissRequest = { showRomGuide = false },
+            title = { Text(guideTitle) },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("1. 应用信息 → 省电策略 → 无限制", style = MaterialTheme.typography.bodySmall)
-                    Text("2. 应用信息 → 权限管理 → 开启「自启动」与「显示悬浮窗」", style = MaterialTheme.typography.bodySmall)
-                    Text("3. 系统设置 → 通知使用权 → 开启「余白」", style = MaterialTheme.typography.bodySmall)
-                    Text("4. 系统设置 → 无障碍 → 已下载的应用 → 开启「余白」", style = MaterialTheme.typography.bodySmall)
-                    Text("5. 多任务界面长按或下拉「余白」卡片锁定后台", style = MaterialTheme.typography.bodySmall)
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    guideSteps.forEach { step ->
+                        Text(step, style = MaterialTheme.typography.bodySmall)
+                    }
                 }
             },
             confirmButton = {
-                TextButton(onClick = { showHyperOsGuide = false }) { Text("知道了") }
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    TextButton(onClick = {
+                        showRomGuide = false
+                        if (!DeviceRomProfile.openOemBackgroundSettings(context, activeRomFamily)) {
+                            viewModel.showMessage("无法打开系统后台设置，请手动前往应用信息页设置")
+                        }
+                    }) {
+                        Text("前往后台设置")
+                    }
+                    TextButton(onClick = { showRomGuide = false }) { Text("知道了") }
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    showRomGuide = false
+                    if (!DeviceRomProfile.openAppDetails(context)) {
+                        viewModel.showMessage("无法打开应用详情页，请前往系统设置手动查找「余白」")
+                    }
+                }) {
+                    Text(
+                        if (DeviceRomProfile.needsRestrictedSettingsHint()) {
+                            "应用信息(解除受限)"
+                        } else {
+                            "应用信息"
+                        }
+                    )
+                }
             }
         )
     }
@@ -1132,8 +1231,15 @@ fun AppearanceSecurityScreen(
                 }
             }
 
-            // 卡片 3：应用信息
+            // 卡片 3：应用信息与版本更新
             item(key = "app_info_card") {
+                val hasAvailableUpdate by viewModel.hasAvailableUpdate.collectAsStateWithLifecycle()
+                var mirrorInput by remember(settings.updateMirrorPrefix) {
+                    mutableStateOf(settings.updateMirrorPrefix)
+                }
+                var mirrorInputError by remember(settings.updateMirrorPrefix) {
+                    mutableStateOf<String?>(null)
+                }
                 YimuCard(containerColor = MaterialTheme.colorScheme.surfaceContainerLowest) {
                     Column(
                         modifier = Modifier.padding(14.dp),
@@ -1151,12 +1257,62 @@ fun AppearanceSecurityScreen(
                                     fontWeight = FontWeight.SemiBold
                                 )
                                 Text(
-                                    text = "版本 ${BuildConfig.VERSION_NAME}",
+                                    text = "版本 ${BuildConfig.VERSION_NAME} (${BuildConfig.BUILD_TYPE})",
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
+                            OutlinedButton(
+                                onClick = {
+                                    if (hasAvailableUpdate) {
+                                        viewModel.openUpdateDialog(triggerCheckIfIdle = false)
+                                    } else {
+                                        viewModel.checkForUpdates(manual = true)
+                                    }
+                                },
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Text(if (hasAvailableUpdate) "立即更新" else "检查更新")
+                            }
                         }
+                        CompactHairlineDivider(startIndent = 0.dp)
+                        CompactSwitchRow(
+                            title = "启动时自动检查新版本",
+                            checked = settings.autoCheckUpdateEnabled,
+                            onCheckedChange = { enabled ->
+                                viewModel.updateSettings { it.copy(autoCheckUpdateEnabled = enabled) }
+                            }
+                        )
+                        OutlinedTextField(
+                            value = mirrorInput,
+                            onValueChange = {
+                                mirrorInput = it
+                                mirrorInputError = null
+                            },
+                            label = { Text("GitHub 更新加速镜像前缀（可选）") },
+                            placeholder = { Text("例如 https://gh-proxy.com/") },
+                            isError = mirrorInputError != null,
+                            supportingText = mirrorInputError?.let { err -> { Text(err) } },
+                            singleLine = true,
+                            trailingIcon = {
+                                TextButton(onClick = {
+                                    when (val validation = AppUpdateManager.validateMirrorPrefix(mirrorInput)) {
+                                        is AppUpdateManager.MirrorPrefixValidation.Valid -> {
+                                            mirrorInputError = null
+                                            mirrorInput = validation.normalizedPrefix
+                                            viewModel.saveUpdateMirrorPrefix(validation.normalizedPrefix)
+                                        }
+                                        is AppUpdateManager.MirrorPrefixValidation.Invalid -> {
+                                            mirrorInputError = validation.reason
+                                            viewModel.saveUpdateMirrorPrefix(mirrorInput)
+                                        }
+                                    }
+                                }) {
+                                    Text("保存")
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        )
                         CompactHairlineDivider(startIndent = 0.dp)
                         Text(
                             text = "本地优先存储 · 支持 AES-256-GCM 加密备份与 yubrae://addbill 外部协议记账",
@@ -1282,7 +1438,9 @@ private fun ThemePresetGalleryCard(
 private fun PermissionHealthCard(
     report: DevicePermissionReport?,
     isBusy: Boolean,
-    onOpenHyperOsGuide: () -> Unit,
+    onOpenRomGuide: () -> Unit,
+    onOpenOemBackgroundSettings: () -> Unit,
+    onOpenAppDetails: () -> Unit,
     onRefresh: () -> Unit,
     onRootGrant: () -> Unit,
     onOpenNotificationListener: () -> Unit,
@@ -1292,6 +1450,14 @@ private fun PermissionHealthCard(
     onRequestPostNotification: () -> Unit,
     onOpenBatteryWhitelist: () -> Unit
 ) {
+    val semantic = KairoTheme.semantic
+    val romFamily = remember(report?.romFamilyName) {
+        DeviceRomProfile.byFamilyName(report?.romFamilyName ?: "AOSP")
+    }
+    val guideTitle = remember(romFamily) {
+        DeviceRomProfile.guideForFamily(romFamily).first
+    }
+
     YimuCard(containerColor = MaterialTheme.colorScheme.surfaceContainerLowest) {
         Column(
             modifier = Modifier.padding(14.dp),
@@ -1330,48 +1496,155 @@ private fun PermissionHealthCard(
             }
 
             if (report != null) {
-                PermissionRow("Root 环境 (su)", report.isRooted, "已获取", "未检测", null)
-                PermissionRow("LSPosed 框架", report.hasLsposedHint, "已就绪", "未检测", null)
+                if (!report.isRooted) {
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = semantic.incomeContainer.copy(alpha = 0.55f),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = "标准免 Root 模式：无需 Root 权限即可使用通知监听、无障碍屏幕识别与悬浮窗记账。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = semantic.income,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)
+                        )
+                    }
+                } else {
+                    PermissionRow(
+                        name = "Root 环境 (su)",
+                        granted = true,
+                        okLabel = if (report.rootGrantedConfirmed) "已获授权" else "已检测",
+                        failLabel = "未检测",
+                        onAction = null
+                    )
+                    if (report.hasLsposedHint) {
+                        PermissionRow("LSPosed 框架", true, "已就绪", "未检测", null)
+                    }
+                }
+
                 PermissionRow("通知监听", report.notificationListenerEnabled, "已授权", "未开启", onOpenNotificationListener)
-                PermissionRow("无障碍服务", report.accessibilityServiceEnabled, "已开启", "未开启", onOpenAccessibility)
+
+                val a11yStale = report.accessibilityServiceEnabled && !report.accessibilityServiceRunning
+                PermissionRow(
+                    name = "无障碍服务",
+                    granted = report.accessibilityServiceEnabled && report.accessibilityServiceRunning,
+                    okLabel = "运行中",
+                    failLabel = if (a11yStale) "已开但未运行" else "未开启",
+                    actionLabel = if (a11yStale) "去重启" else "去设置",
+                    onAction = onOpenAccessibility
+                )
+
                 PermissionRow("短信权限", report.smsPermissionGranted, "已授权", "未授权", onRequestSms)
                 PermissionRow("悬浮窗权限", report.overlayPermissionGranted, "已授权", "未授权", onOpenOverlay)
                 PermissionRow("系统通知", report.postNotificationGranted, "已授权", "未授权", onRequestPostNotification)
                 PermissionRow("电池无限制", report.ignoringBatteryOptimizations, "无限制", "受限制", onOpenBatteryWhitelist)
-            }
 
-            Column(
-                modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Button(
-                    onClick = onRootGrant,
-                    enabled = !isBusy,
-                    shape = RoundedCornerShape(14.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    if (isBusy) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(16.dp),
-                            strokeWidth = 2.dp,
-                            color = MaterialTheme.colorScheme.onPrimary
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                    } else {
-                        Icon(Icons.Rounded.AdminPanelSettings, null, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
+                val showRestrictedHint = DeviceRomProfile.needsRestrictedSettingsHint() &&
+                    (!report.notificationListenerEnabled || !report.accessibilityServiceEnabled)
+                if (showRestrictedHint) {
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = semantic.warningContainer.copy(alpha = 0.65f),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(10.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Text(
+                                text = "Android 13+ 无法打开无障碍或通知监听？",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = semantic.warning
+                            )
+                            Text(
+                                text = "侧载安装的应用默认受系统「受限设置」保护。请点下方进入「应用信息」→ 点击右上角 ⋮ 菜单 → 选择「允许受限设置」，验证锁屏密码后再返回开启。若应用信息右上角未出现该选项，请先点击一次无障碍或通知监听触发系统拦截后再返回。",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            TextButton(
+                                onClick = onOpenAppDetails,
+                                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp),
+                                modifier = Modifier.height(28.dp)
+                            ) {
+                                Text("打开「余白」应用信息页")
+                            }
+                        }
                     }
-                    Text("Root 一键授予权限")
                 }
 
-                OutlinedButton(
-                    onClick = onOpenHyperOsGuide,
-                    shape = RoundedCornerShape(14.dp),
-                    modifier = Modifier.fillMaxWidth()
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Icon(Icons.Rounded.Info, null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("小米 HyperOS 防冻结指引")
+                    if (report.isRooted) {
+                        Button(
+                            onClick = onRootGrant,
+                            enabled = !isBusy,
+                            shape = RoundedCornerShape(14.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            if (isBusy) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(16.dp),
+                                    strokeWidth = 2.dp,
+                                    color = MaterialTheme.colorScheme.onPrimary
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                            } else {
+                                Icon(Icons.Rounded.AdminPanelSettings, null, modifier = Modifier.size(18.dp))
+                                Spacer(modifier = Modifier.width(6.dp))
+                            }
+                            Text(
+                                if (report.isXiaomiRom) {
+                                    "Root 一键授权与 ${romFamily.displayName} 防冻结"
+                                } else {
+                                    "Root 一键授予权限（通用 Android）"
+                                }
+                            )
+                        }
+
+                        OutlinedButton(
+                            onClick = onOpenRomGuide,
+                            shape = RoundedCornerShape(14.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Icon(Icons.Rounded.Info, null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(guideTitle)
+                        }
+                    } else {
+                        Button(
+                            onClick = onOpenOemBackgroundSettings,
+                            shape = RoundedCornerShape(14.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Icon(Icons.Rounded.Security, null, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text("前往 ${romFamily.displayName} 后台保活设置")
+                        }
+
+                        OutlinedButton(
+                            onClick = onOpenRomGuide,
+                            shape = RoundedCornerShape(14.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Icon(Icons.Rounded.Info, null, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(guideTitle)
+                        }
+
+                        TextButton(
+                            onClick = onRootGrant,
+                            enabled = !isBusy,
+                            modifier = Modifier.align(Alignment.CenterHorizontally)
+                        ) {
+                            Text(
+                                text = if (isBusy) "正在请求 Root 授权..." else "已 Root（含隐藏环境）？尝试 Root 一键授权",
+                                style = MaterialTheme.typography.labelMedium
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -1384,7 +1657,8 @@ private fun PermissionRow(
     granted: Boolean,
     okLabel: String,
     failLabel: String,
-    onAction: (() -> Unit)?
+    onAction: (() -> Unit)?,
+    actionLabel: String = "去设置"
 ) {
     val semantic = KairoTheme.semantic
     Row(
@@ -1415,7 +1689,7 @@ private fun PermissionRow(
                     contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp),
                     modifier = Modifier.height(28.dp)
                 ) {
-                    Text("去设置", style = MaterialTheme.typography.labelMedium)
+                    Text(actionLabel, style = MaterialTheme.typography.labelMedium)
                 }
             }
         }
@@ -1428,6 +1702,7 @@ private fun HubNavRow(
     title: String,
     subtitle: String? = null,
     statusText: String? = null,
+    highlightStatus: Boolean = false,
     onClick: () -> Unit
 ) {
     Row(
@@ -1484,7 +1759,11 @@ private fun HubNavRow(
             Spacer(modifier = Modifier.width(8.dp))
             Surface(
                 shape = CircleShape,
-                color = MaterialTheme.colorScheme.surfaceContainerLow
+                color = if (highlightStatus) {
+                    MaterialTheme.colorScheme.primaryContainer
+                } else {
+                    MaterialTheme.colorScheme.surfaceContainerLow
+                }
             ) {
                 Text(
                     text = statusText,
@@ -1492,7 +1771,12 @@ private fun HubNavRow(
                         fontSize = 11.sp,
                         lineHeight = 14.sp
                     ),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = if (highlightStatus) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    fontWeight = if (highlightStatus) FontWeight.SemiBold else FontWeight.Normal,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)

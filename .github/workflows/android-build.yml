@@ -1,4 +1,4 @@
-name: Android CI & APK Build
+name: Yubrae Release CI (Android + iOS)
 
 on:
   push:
@@ -15,8 +15,8 @@ permissions:
   contents: write
 
 jobs:
-  build:
-    name: Test & Build APKs
+  android:
+    name: Android Test & Release APK
     runs-on: ubuntu-latest
 
     steps:
@@ -35,46 +35,64 @@ jobs:
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
 
-      - name: Run unit tests
+      - name: Run Android unit tests
         run: ./gradlew testDebugUnitTest --no-parallel --console=plain
 
-      - name: Build Perf (R8) and Debug APKs
-        run: ./gradlew assemblePerf assembleDebug --no-parallel --console=plain
-
-      - name: Build signed Release APK (if signing secrets exist)
+      - name: Build Android Release APK
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           SIGNING_STORE_PASSWORD: ${{ secrets.SIGNING_STORE_PASSWORD }}
           SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
           SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
         run: |
-          if [ -n "$ANDROID_KEYSTORE_BASE64" ] && [ -n "$SIGNING_STORE_PASSWORD" ] && [ -n "$SIGNING_KEY_ALIAS" ] && [ -n "$SIGNING_KEY_PASSWORD" ]; then
-            echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > /tmp/release-signing.jks
+          set -euo pipefail
+          HAS_SIGNING=true
+          if [ -z "$ANDROID_KEYSTORE_BASE64" ] || [ -z "$SIGNING_STORE_PASSWORD" ] || [ -z "$SIGNING_KEY_ALIAS" ] || [ -z "$SIGNING_KEY_PASSWORD" ]; then
+            HAS_SIGNING=false
+          fi
+
+          if [ "$HAS_SIGNING" = "true" ]; then
+            trap 'rm -f /tmp/release-signing.jks' EXIT
+            printf '%s' "$ANDROID_KEYSTORE_BASE64" | tr -d '\r\n ' | base64 --decode > /tmp/release-signing.jks
             export SIGNING_STORE_FILE=/tmp/release-signing.jks
             ./gradlew assembleRelease --no-parallel --console=plain
-            rm -f /tmp/release-signing.jks
           else
-            echo "Skipping signed Release APK (signing secrets not configured)."
+            case "${GITHUB_REF:-}" in
+              refs/tags/v*)
+                echo "::error::Tag release requires ANDROID_KEYSTORE_BASE64, SIGNING_STORE_PASSWORD, SIGNING_KEY_ALIAS, and SIGNING_KEY_PASSWORD secrets."
+                exit 1
+                ;;
+              *)
+                echo "Signing secrets not configured; running unsigned assembleRelease to verify R8 compilation and packaging."
+                ./gradlew assembleRelease --no-parallel --console=plain
+                ;;
+            esac
           fi
 
-      - name: Collect APK artifacts
+      - name: Collect Android Release APK
         run: |
-          mkdir -p dist
+          set -euo pipefail
+          mkdir -p dist-android
           VERSION_TAG="${GITHUB_REF_NAME:-main}"
           SAFE_TAG="${VERSION_TAG//\//-}"
-          if [ -f app/build/outputs/apk/perf/app-perf.apk ]; then
-            cp app/build/outputs/apk/perf/app-perf.apk "dist/yubrae-${SAFE_TAG}-perf.apk"
-          fi
-          if [ -f app/build/outputs/apk/debug/app-debug.apk ]; then
-            cp app/build/outputs/apk/debug/app-debug.apk "dist/yubrae-${SAFE_TAG}-debug.apk"
-          fi
-          if [ -f app/build/outputs/apk/release/app-release.apk ]; then
-            cp app/build/outputs/apk/release/app-release.apk "dist/yubrae-${SAFE_TAG}-release.apk"
-          fi
-          ls -lh dist/
-          (cd dist && sha256sum *.apk > SHA256SUMS.txt)
 
-      - name: Upload unit test reports
+          if [ -f app/build/outputs/apk/release/app-release.apk ]; then
+            cp app/build/outputs/apk/release/app-release.apk "dist-android/yubrae-${SAFE_TAG}-release.apk"
+          elif [ -f app/build/outputs/apk/release/app-release-unsigned.apk ]; then
+            case "${GITHUB_REF:-}" in
+              refs/tags/v*)
+                echo "::error::Expected signed app-release.apk for tag release, found only unsigned APK."
+                exit 1
+                ;;
+            esac
+            cp app/build/outputs/apk/release/app-release-unsigned.apk "dist-android/yubrae-${SAFE_TAG}-release-unsigned.apk"
+          else
+            echo "::error::No release APK produced under app/build/outputs/apk/release/"
+            exit 1
+          fi
+          ls -lh dist-android/
+
+      - name: Upload Android unit test reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -82,18 +100,163 @@ jobs:
           path: app/build/test-results/testDebugUnitTest/
           if-no-files-found: ignore
 
-      - name: Upload APK artifacts
+      - name: Upload Android Release artifact
         uses: actions/upload-artifact@v4
         with:
-          name: yubrae-apks
-          path: dist/
+          name: yubrae-android-release
+          path: dist-android/
           retention-days: 30
 
+  ios:
+    name: iOS Test & Release IPA
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: |
+          set -euo pipefail
+          if ! command -v xcodegen >/dev/null 2>&1; then
+            brew install xcodegen
+          fi
+          xcodegen --version
+
+      - name: Generate Xcode project
+        working-directory: ios
+        run: xcodegen generate
+
+      - name: Run iOS unit tests on latest available iPhone Simulator
+        working-directory: ios
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' > /tmp/sim_udid.txt
+          import json
+          import re
+          import subprocess
+          import sys
+
+          raw = subprocess.check_output(["xcrun", "simctl", "list", "devices", "available", "-j"])
+          data = json.loads(raw)
+          candidates = []
+          for runtime, devices in data.get("devices", {}).items():
+              match = re.search(r"SimRuntime\.iOS-(\d+)-(\d+)(?:-(\d+))?", runtime)
+              if not match:
+                  continue
+              ver = (int(match.group(1)), int(match.group(2)), int(match.group(3) or 0))
+              if ver < (16, 0, 0):
+                  continue
+              for dev in devices:
+                  name = dev.get("name", "")
+                  if dev.get("isAvailable", True) and "iPhone" in name:
+                      is_se = 1 if "SE" in name else 0
+                      nums = [int(n) for n in re.findall(r"\d+", name)]
+                      model_num = nums[0] if nums else 0
+                      candidates.append((ver, -is_se, model_num, name, dev["udid"], runtime))
+
+          if not candidates:
+              print("No available iOS >= 16.0 iPhone simulator found.", file=sys.stderr)
+              sys.exit(1)
+
+          candidates.sort(reverse=True)
+          best = candidates[0]
+          print(f"Selected simulator: {best[3]} ({best[5]}) [{best[4]}]", file=sys.stderr)
+          print(best[4])
+          PY
+          SIM_UDID="$(cat /tmp/sim_udid.txt)"
+          rm -f /tmp/sim_udid.txt
+          echo "Running YubraeTests on Simulator UDID: ${SIM_UDID}"
+          xcodebuild test \
+            -project Yubrae.xcodeproj \
+            -scheme Yubrae \
+            -destination "id=${SIM_UDID}"
+
+      - name: Build iOS Release app and package IPA
+        working-directory: ios
+        env:
+          IOS_P12_BASE64: ${{ secrets.IOS_P12_BASE64 }}
+          IOS_PROVISION_PROFILE_BASE64: ${{ secrets.IOS_PROVISION_PROFILE_BASE64 }}
+        run: |
+          set -euo pipefail
+          VERSION_TAG="${GITHUB_REF_NAME:-main}"
+          SAFE_TAG="${VERSION_TAG//\//-}"
+          mkdir -p ../dist-ios
+
+          if [ -n "$IOS_P12_BASE64" ] && [ -n "$IOS_PROVISION_PROFILE_BASE64" ]; then
+            # 预留 Apple 正式证书签名扩展入口：
+            # 后续接入 Apple Developer 签名时，可在此导入临时 Keychain (.p12 + IOS_P12_PASSWORD)
+            # 与 Provisioning Profile，并改用 xcodebuild archive + -exportArchive 输出已签名 IPA。
+            echo "Detected IOS_P12_BASE64 and IOS_PROVISION_PROFILE_BASE64; signed archive export hook is reserved, proceeding with unsigned Release IPA."
+          fi
+
+          xcodebuild build \
+            -project Yubrae.xcodeproj \
+            -scheme Yubrae \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination "generic/platform=iOS" \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY=""
+
+          APP_BUNDLE="build/Build/Products/Release-iphoneos/Yubrae.app"
+          test -d "${APP_BUNDLE}" || { echo "::error::Missing built app bundle: ${APP_BUNDLE}"; exit 1; }
+
+          rm -rf Payload
+          mkdir -p Payload
+          cp -R "${APP_BUNDLE}" Payload/Yubrae.app
+          zip -qry "../dist-ios/yubrae-${SAFE_TAG}-ios-unsigned.ipa" Payload
+          rm -rf Payload
+          ls -lh ../dist-ios/
+
+      - name: Upload iOS Release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: yubrae-ios-release
+          path: dist-ios/
+          retention-days: 30
+
+  release:
+    name: Publish Dual-Platform GitHub Release
+    runs-on: ubuntu-latest
+    needs: [android, ios]
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    steps:
+      - name: Download Android Release artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: yubrae-android-release
+          path: dist
+
+      - name: Download iOS Release artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: yubrae-ios-release
+          path: dist
+
+      - name: Verify release assets and generate SHA256SUMS.txt
+        run: |
+          set -euo pipefail
+          VERSION_TAG="${GITHUB_REF_NAME}"
+          SAFE_TAG="${VERSION_TAG//\//-}"
+          EXPECTED_APK="yubrae-${SAFE_TAG}-release.apk"
+          EXPECTED_IPA="yubrae-${SAFE_TAG}-ios-unsigned.ipa"
+
+          test -f "dist/${EXPECTED_APK}" || { echo "::error::Missing expected Android APK: ${EXPECTED_APK}"; ls -la dist/; exit 1; }
+          test -f "dist/${EXPECTED_IPA}" || { echo "::error::Missing expected iOS IPA: ${EXPECTED_IPA}"; ls -la dist/; exit 1; }
+
+          (
+            cd dist
+            sha256sum "${EXPECTED_APK}" "${EXPECTED_IPA}" > SHA256SUMS.txt
+          )
+          ls -lh dist/
+          cat dist/SHA256SUMS.txt
+
       - name: Publish GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            dist/*.apk
-            dist/SHA256SUMS.txt
+          files: dist/*
           generate_release_notes: true

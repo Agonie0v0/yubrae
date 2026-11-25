@@ -1,10 +1,10 @@
-<#
+﻿<#
 .SYNOPSIS
-    余白 (YUBRAE) 构建、安装并自动重启小米 14 应用的开发脚本（默认构建 R8 优化性能包）。
+    余白 (YUBRAE) 构建、安装并自动重启 Android 设备应用的开发脚本（默认构建正式签名 Release 包，自动适配 Root / 免 Root 与小米 / 非小米设备）。
 .EXAMPLE
     .\scripts\dev-run.ps1
-    .\scripts\dev-run.ps1 -Debug
     .\scripts\dev-run.ps1 -Release
+    .\scripts\dev-run.ps1 -Debug
     .\scripts\dev-run.ps1 -Watch
     .\scripts\dev-run.ps1 -Device d05c6533 -SkipTests -EnsureAccessibility
 #>
@@ -23,13 +23,14 @@ if ($Debug -and $Release) {
 }
 
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
-$PackageName = if ($Release) { 'com.yubrae.app' } else { 'com.yubrae.app.debug' }
+$IsDebugBuild = [bool]$Debug
+$PackageName = if ($IsDebugBuild) { 'com.yubrae.app.debug' } else { 'com.yubrae.app' }
 $MainActivity = 'com.yubrae.app.MainActivity'
 $A11yClass = 'com.yubrae.app.capture.screen.KairoAccessibilityService'
 $A11yShortClass = '.capture.screen.KairoAccessibilityService'
 $A11yComponent = "$PackageName/$A11yClass"
-$VariantName = if ($Release) { 'release' } elseif ($Debug) { 'debug' } else { 'perf' }
-$AssembleTask = if ($Release) { 'assembleRelease' } elseif ($Debug) { 'assembleDebug' } else { 'assemblePerf' }
+$VariantName = if ($IsDebugBuild) { 'debug' } else { 'release' }
+$AssembleTask = if ($IsDebugBuild) { 'assembleDebug' } else { 'assembleRelease' }
 $ApkPath = Join-Path $ProjectRoot "app\build\outputs\apk\$VariantName\app-$VariantName.apk"
 
 if (-not $env:JAVA_HOME -and (Test-Path 'D:\DevTools\jdk-21\bin\java.exe')) {
@@ -90,7 +91,7 @@ function Restore-KairoAccessibility([string]$serial) {
         $joined = $merged -join ':'
 
         if ($hasRoot) {
-            $escaped = $joined -replace "'", "'\\''"
+            $escaped = $joined -replace "'", "'\''"
             $putSh = (@"
 settings put secure enabled_accessibility_services '$escaped'
 settings put secure accessibility_enabled 1
@@ -114,85 +115,102 @@ settings put secure accessibility_enabled 1
     Write-Host "[Yubrae] 警告：重试后 enabled_accessibility_services 仍未保留 $A11yComponent。" -ForegroundColor Yellow
 }
 
-function Ensure-HyperOsKeepAlive([string]$serial) {
+function Ensure-DeviceKeepAlive([string]$serial) {
     $suCheck = (& $AdbExe -s $serial shell "su -c id 2>/dev/null" 2>$null) -join ''
     if ($suCheck -notmatch 'uid=0') {
-        Write-Host "[Yubrae] 设备未授予 ADB Shell Root，跳过 HyperOS 防冻结与 AppOps 自动放行。" -ForegroundColor Yellow
+        Write-Host "[Yubrae] 设备未授予 ADB Shell Root，跳过 Root 后台白名单与 AppOps 自动放行（可在手机内按指引手动开启）。" -ForegroundColor Yellow
         return
     }
 
+    $hyperVer = ((& $AdbExe -s $serial shell getprop ro.mi.os.version.name 2>$null) -join '').Trim()
+    $miuiVer = ((& $AdbExe -s $serial shell getprop ro.miui.ui.version.name 2>$null) -join '').Trim()
+    $miuiCode = ((& $AdbExe -s $serial shell getprop ro.miui.ui.version.code 2>$null) -join '').Trim()
+    $isXiaomi = ($hyperVer -ne '') -or ($miuiVer -ne '') -or ($miuiCode -ne '')
+
     $rawSh = @'
 PKG='__PKG__'
+IS_XIAOMI='__IS_XIAOMI__'
 dumpsys deviceidle whitelist +"$PKG" >/dev/null 2>&1 || true
 am set-standby-bucket "$PKG" active >/dev/null 2>&1 || true
 
-# 1. HyperOS 3 PowerKeeper 省电策略设为无限制 (noRestrict)
-PK_OUT=$(content query --uri content://com.miui.powerkeeper.configure/userTable --where "pkgName='${PKG}' AND userId=0" 2>&1 || true)
-NOW_S=$(date +%s 2>/dev/null || echo 0)
-case "$NOW_S" in ''|*[!0-9]*) NOW_MS=0 ;; *) NOW_MS="${NOW_S}000" ;; esac
-case "$PK_OUT" in
-    *Error*|*Exception*|*"Could not find provider"*) ;;
-    *"Row:"*)
-        case "$PK_OUT" in
-            *"bgControl=noRestrict"*) ;;
-            *) content update --uri content://com.miui.powerkeeper.configure/userTable --where "pkgName='${PKG}' AND userId=0" --bind bgControl:s:noRestrict --bind lastConfigured:l:"$NOW_MS" >/dev/null 2>&1 || true ;;
-        esac
-        ;;
-    *"No result found"*)
-        content insert --uri content://com.miui.powerkeeper.configure/userTable --bind userId:i:0 --bind pkgName:s:"$PKG" --bind bgControl:s:noRestrict --bind lastConfigured:l:"$NOW_MS" >/dev/null 2>&1 || true
-        ;;
-esac
-
-# 2. 无损将应用包名加入 immobulus_mode_switch_restrict 的 _allowlist_
-IMMOB_CUR=$(settings get secure immobulus_mode_switch_restrict 2>/dev/null | tr -d '\r\n')
-case "$IMMOB_CUR" in
-    *_allowlist_*)
-        case "$IMMOB_CUR" in
-            *_wakeuplist_*) ALLOW_PART=${IMMOB_CUR%%_wakeuplist_*} ;;
-            *) ALLOW_PART=$IMMOB_CUR ;;
-        esac
-        ALLOW_SEG=${ALLOW_PART#*_allowlist_}
-        NEED_ADD=1
-        case "$ALLOW_SEG" in
-            "$PKG"|"${PKG}_"*|*"_${PKG}"|*"_${PKG}_"*) NEED_ADD=0 ;;
-        esac
-        if [ "$NEED_ADD" = "1" ]; then
-            HEAD_PART=${IMMOB_CUR%%_allowlist_*}
-            TAIL_PART=${IMMOB_CUR#*_allowlist_}
-            if [ -z "$TAIL_PART" ]; then
-                IMMOB_NEW="${HEAD_PART}_allowlist_${PKG}"
-            else
-                case "$TAIL_PART" in
-                    _*) IMMOB_NEW="${HEAD_PART}_allowlist_${PKG}${TAIL_PART}" ;;
-                    *) IMMOB_NEW="${HEAD_PART}_allowlist_${PKG}_${TAIL_PART}" ;;
-                esac
-            fi
-            settings put secure immobulus_mode_switch_restrict "$IMMOB_NEW" >/dev/null 2>&1 || true
-        fi
-        ;;
-esac
-
-# 3. 批量放行后台保活 / 悬浮窗 / MIUI 后台弹出与锁屏展示 AppOps
-for OP in SYSTEM_ALERT_WINDOW RUN_IN_BACKGROUND RUN_ANY_IN_BACKGROUND ACCESS_RESTRICTED_SETTINGS RECEIVE_SENSITIVE_NOTIFICATIONS 10008 10021; do
+for OP in SYSTEM_ALERT_WINDOW RUN_IN_BACKGROUND RUN_ANY_IN_BACKGROUND ACCESS_RESTRICTED_SETTINGS RECEIVE_SENSITIVE_NOTIFICATIONS; do
     appops set "$PKG" "$OP" allow >/dev/null 2>&1 || true
 done
 
-# 4. 查询当前 UID 并立即通过 Greezer 与 cgroup 解冻兜底
-KAIRO_UID=$(cmd package list packages -U "$PKG" 2>/dev/null | sed -n 's/.*uid:\([0-9][0-9]*\).*/\1/p' | head -n 1)
-if [ -n "$KAIRO_UID" ] && [ "$KAIRO_UID" -gt 0 ] 2>/dev/null; then
-    cmd greezer thuid "$KAIRO_UID" 1000 >/dev/null 2>&1 || true
-    for CF in "/sys/fs/cgroup/apps/uid_${KAIRO_UID}/cgroup.freeze" /sys/fs/cgroup/apps/uid_${KAIRO_UID}/pid_*/cgroup.freeze; do
-        [ -w "$CF" ] && printf '0\n' > "$CF" 2>/dev/null || true
+if [ "$IS_XIAOMI" = "1" ]; then
+    # 1. HyperOS / MIUI PowerKeeper 省电策略设为无限制 (noRestrict)
+    PK_OUT=$(content query --uri content://com.miui.powerkeeper.configure/userTable --where "pkgName='${PKG}' AND userId=0" 2>&1 || true)
+    NOW_S=$(date +%s 2>/dev/null || echo 0)
+    case "$NOW_S" in ''|*[!0-9]*) NOW_MS=0 ;; *) NOW_MS="${NOW_S}000" ;; esac
+    case "$PK_OUT" in
+        *Error*|*Exception*|*"Could not find provider"*) ;;
+        *"Row:"*)
+            case "$PK_OUT" in
+                *"bgControl=noRestrict"*) ;;
+                *) content update --uri content://com.miui.powerkeeper.configure/userTable --where "pkgName='${PKG}' AND userId=0" --bind bgControl:s:noRestrict --bind lastConfigured:l:"$NOW_MS" >/dev/null 2>&1 || true ;;
+            esac
+            ;;
+        *"No result found"*)
+            content insert --uri content://com.miui.powerkeeper.configure/userTable --bind userId:i:0 --bind pkgName:s:"$PKG" --bind bgControl:s:noRestrict --bind lastConfigured:l:"$NOW_MS" >/dev/null 2>&1 || true
+            ;;
+    esac
+
+    # 2. 无损将应用包名加入 immobulus_mode_switch_restrict 的 _allowlist_
+    IMMOB_CUR=$(settings get secure immobulus_mode_switch_restrict 2>/dev/null | tr -d '\r\n')
+    case "$IMMOB_CUR" in
+        *_allowlist_*)
+            case "$IMMOB_CUR" in
+                *_wakeuplist_*) ALLOW_PART=${IMMOB_CUR%%_wakeuplist_*} ;;
+                *) ALLOW_PART=$IMMOB_CUR ;;
+            esac
+            ALLOW_SEG=${ALLOW_PART#*_allowlist_}
+            NEED_ADD=1
+            case "$ALLOW_SEG" in
+                "$PKG"|"${PKG}_"*|*"_${PKG}"|*"_${PKG}_"*) NEED_ADD=0 ;;
+            esac
+            if [ "$NEED_ADD" = "1" ]; then
+                HEAD_PART=${IMMOB_CUR%%_allowlist_*}
+                TAIL_PART=${IMMOB_CUR#*_allowlist_}
+                if [ -z "$TAIL_PART" ]; then
+                    IMMOB_NEW="${HEAD_PART}_allowlist_${PKG}"
+                else
+                    case "$TAIL_PART" in
+                        _*) IMMOB_NEW="${HEAD_PART}_allowlist_${PKG}${TAIL_PART}" ;;
+                        *) IMMOB_NEW="${HEAD_PART}_allowlist_${PKG}_${TAIL_PART}" ;;
+                    esac
+                fi
+                settings put secure immobulus_mode_switch_restrict "$IMMOB_NEW" >/dev/null 2>&1 || true
+            fi
+            ;;
+    esac
+
+    # 3. 放行 MIUI 后台弹出与锁屏展示 AppOps
+    for OP in 10008 10021; do
+        appops set "$PKG" "$OP" allow >/dev/null 2>&1 || true
     done
+
+    # 4. 查询当前 UID 并立即通过 Greezer 与 cgroup 解冻兜底
+    KAIRO_UID=$(cmd package list packages -U "$PKG" 2>/dev/null | sed -n "s/^package:${PKG} uid:\([0-9][0-9]*\).*/\1/p" | head -n 1)
+    if [ -n "$KAIRO_UID" ] && [ "$KAIRO_UID" -gt 0 ] 2>/dev/null; then
+        cmd greezer thuid "$KAIRO_UID" 1000 >/dev/null 2>&1 || true
+        for CF in "/sys/fs/cgroup/apps/uid_${KAIRO_UID}/cgroup.freeze" /sys/fs/cgroup/apps/uid_${KAIRO_UID}/pid_*/cgroup.freeze; do
+            [ -w "$CF" ] && printf '0\n' > "$CF" 2>/dev/null || true
+        done
+    fi
 fi
-echo "__HYPEROS_KEEPALIVE_DONE__"
+echo "__DEVICE_KEEPALIVE_DONE__"
 '@
-    $lfSh = ($rawSh -replace '__PKG__', $PackageName) -replace "`r`n", "`n"
+    $isXiaomiFlag = if ($isXiaomi) { '1' } else { '0' }
+    $lfSh = (($rawSh -replace '__PKG__', $PackageName) -replace '__IS_XIAOMI__', $isXiaomiFlag) -replace "`r`n", "`n"
     $out = ($lfSh | & $AdbExe -s $serial shell "su -c sh" 2>&1) -join "`n"
-    if ($out -match '__HYPEROS_KEEPALIVE_DONE__') {
-        Write-Host "[Yubrae] 已施加 HyperOS 3 防冻结保护 (noRestrict + immobulus + AppOps + 解冻)。" -ForegroundColor Green
+    if ($out -match '__DEVICE_KEEPALIVE_DONE__') {
+        if ($isXiaomi) {
+            Write-Host "[Yubrae] 已施加小米 HyperOS / MIUI 专项防冻结保护 (noRestrict + immobulus + AppOps + 解冻)。" -ForegroundColor Green
+        } else {
+            Write-Host "[Yubrae] 已施加通用 Android Root 保活放行 (deviceidle + AppOps)。" -ForegroundColor Green
+        }
     } else {
-        Write-Host "[Yubrae] HyperOS 3 防冻结脚本未确认完成: $out" -ForegroundColor Yellow
+        Write-Host "[Yubrae] 设备保活脚本未确认完成: $out" -ForegroundColor Yellow
     }
 }
 
@@ -207,13 +225,18 @@ function Invoke-BuildAndRestart {
             return $false
         }
         if (-not (Test-Path $ApkPath)) {
-            Write-Host "[Yubrae] 未找到输出 APK: $ApkPath" -ForegroundColor Red
+            $unsignedPath = Join-Path $ProjectRoot 'app\build\outputs\apk\release\app-release-unsigned.apk'
+            if (-not $IsDebugBuild -and (Test-Path $unsignedPath)) {
+                Write-Host "[Yubrae] 仅生成了未签名 Release 包 ($unsignedPath)。请配置 signing.properties 或签名环境变量，或使用 -Debug 构建本地调试包。" -ForegroundColor Red
+            } else {
+                Write-Host "[Yubrae] 未找到输出 APK: $ApkPath" -ForegroundColor Red
+            }
             return $false
         }
 
         $target = Get-TargetDevice
         if (-not $target) {
-            Write-Host "[Yubrae] 构建成功！未检测到在线 ADB 设备（请连接小米 14 并开启 USB/无线调试）。" -ForegroundColor Yellow
+            Write-Host "[Yubrae] 构建成功！未检测到在线 ADB 设备（请连接 Android 设备并开启 USB/无线调试）。" -ForegroundColor Yellow
             Write-Host "[Yubrae] APK 路径: $ApkPath" -ForegroundColor Green
             return $true
         }
@@ -230,7 +253,7 @@ function Invoke-BuildAndRestart {
         & $AdbExe -s $target shell am start -n "$PackageName/$MainActivity" | Out-Null
 
         if ($wasA11yEnabled -or $EnsureAccessibility) {
-            Ensure-HyperOsKeepAlive $target
+            Ensure-DeviceKeepAlive $target
             Start-Sleep -Milliseconds 1500
             Restore-KairoAccessibility $target
         }

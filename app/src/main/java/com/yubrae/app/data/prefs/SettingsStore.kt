@@ -90,7 +90,11 @@ data class AppSettings(
     val accessibilityOrderDetailEnabled: Boolean = true,
     val hiddenAssetAccountIds: Set<Long> = emptySet(),
     val hiddenAssetModules: Set<String> = emptySet(),
-    val hideRecentsPreviewEnabled: Boolean = false
+    val hideRecentsPreviewEnabled: Boolean = false,
+    val autoCheckUpdateEnabled: Boolean = true,
+    val lastUpdateCheckMillis: Long = 0L,
+    val ignoredUpdateTag: String = "",
+    val updateMirrorPrefix: String = ""
 )
 
 class SettingsStore(private val context: Context) {
@@ -132,6 +136,10 @@ class SettingsStore(private val context: Context) {
         val HIDDEN_ASSET_ACCOUNT_IDS = stringPreferencesKey("hidden_asset_account_ids")
         val HIDDEN_ASSET_MODULES = stringPreferencesKey("hidden_asset_modules")
         val HIDE_RECENTS_PREVIEW = booleanPreferencesKey("hide_recents_preview")
+        val AUTO_CHECK_UPDATE = booleanPreferencesKey("auto_check_update")
+        val LAST_UPDATE_CHECK = longPreferencesKey("last_update_check")
+        val IGNORED_UPDATE_TAG = stringPreferencesKey("ignored_update_tag")
+        val UPDATE_MIRROR_PREFIX = stringPreferencesKey("update_mirror_prefix")
     }
 
     val settingsFlow: Flow<AppSettings> = context.kairoDataStore.data.map { prefs ->
@@ -187,7 +195,11 @@ class SettingsStore(private val context: Context) {
             accessibilityOrderDetailEnabled = prefs[Keys.ACCESSIBILITY_ORDER_DETAIL] ?: true,
             hiddenAssetAccountIds = hiddenAccountIds,
             hiddenAssetModules = hiddenModules,
-            hideRecentsPreviewEnabled = prefs[Keys.HIDE_RECENTS_PREVIEW] ?: false
+            hideRecentsPreviewEnabled = prefs[Keys.HIDE_RECENTS_PREVIEW] ?: false,
+            autoCheckUpdateEnabled = prefs[Keys.AUTO_CHECK_UPDATE] ?: true,
+            lastUpdateCheckMillis = prefs[Keys.LAST_UPDATE_CHECK] ?: 0L,
+            ignoredUpdateTag = prefs[Keys.IGNORED_UPDATE_TAG] ?: "",
+            updateMirrorPrefix = prefs[Keys.UPDATE_MIRROR_PREFIX] ?: ""
         )
     }
 
@@ -237,6 +249,10 @@ class SettingsStore(private val context: Context) {
             prefs[Keys.HIDDEN_ASSET_ACCOUNT_IDS] = settings.hiddenAssetAccountIds.sorted().joinToString(",")
             prefs[Keys.HIDDEN_ASSET_MODULES] = settings.hiddenAssetModules.sorted().joinToString(",")
             prefs[Keys.HIDE_RECENTS_PREVIEW] = settings.hideRecentsPreviewEnabled
+            prefs[Keys.AUTO_CHECK_UPDATE] = settings.autoCheckUpdateEnabled
+            prefs[Keys.LAST_UPDATE_CHECK] = settings.lastUpdateCheckMillis
+            prefs[Keys.IGNORED_UPDATE_TAG] = settings.ignoredUpdateTag
+            prefs[Keys.UPDATE_MIRROR_PREFIX] = settings.updateMirrorPrefix
         }
     }
 
@@ -246,5 +262,9 @@ class SettingsStore(private val context: Context) {
 
     suspend fun markBackupSynced(epochMillis: Long = System.currentTimeMillis()) {
         context.kairoDataStore.edit { it[Keys.LAST_BACKUP_SYNC] = epochMillis }
+    }
+
+    suspend fun markUpdateChecked(epochMillis: Long = System.currentTimeMillis()) {
+        context.kairoDataStore.edit { it[Keys.LAST_UPDATE_CHECK] = epochMillis }
     }
 }

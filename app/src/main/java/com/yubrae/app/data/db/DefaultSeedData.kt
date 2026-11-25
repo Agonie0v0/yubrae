@@ -13,7 +13,7 @@ import java.util.Locale
  * - 28 个预置标签（4 组，按 name 无损查缺补漏）
  * - 默认账户（含公交卡钱包账户）与账户别名（含交通卡包名/关键字）
  * - 离线兜底汇率
- * - 内置动账正则规则（含小米钱包/NFC公交卡及通用交通卡规则）
+ * - 内置动账正则规则（含手机钱包/NFC公交卡及通用交通卡规则）
  */
 object DefaultSeedData {
 
@@ -422,7 +422,7 @@ object DefaultSeedData {
 
     private val PRESET_PARSE_RULES: List<ParseRuleEntity> = listOf(
         ParseRuleEntity(
-            name = "小米钱包/NFC公交卡刷卡扣费通知",
+            name = "手机钱包/NFC公交卡刷卡扣费通知",
             sourcePackage = "com.miui.tsmclient,com.mipay.wallet,com.xiaomi.pass,com.huawei.wallet,com.hihonor.wallet,com.finshell.wallet,com.coloros.wallet,com.vivo.wallet,com.samsung.android.spay",
             channelType = "NOTIFICATION",
             regexPattern = "(?:刷卡|乘车|出站|扣费|扣款|消费|支出)(?:成功|完成)?(?:[，,：:\\s]*(?:本次|交易|实际)?(?:扣费|扣款|消费|支出|支付|金额))?(?:为|：|:|\\s)*[￥¥]?\\s*([0-9]+(?:,[0-9]{3})*(?:\\.[0-9]{1,2})?)(?![0-9.])(?!\\s*(?:年|月|日|号|时|分|秒|路|线|号线|次|-|/|:\\d))\\s*元?",
@@ -895,6 +895,15 @@ object DefaultSeedData {
     }
 
     suspend fun ensurePresetParseRules(parseRuleDao: ParseRuleDao) {
+        val existingRules = parseRuleDao.getAll()
+        val legacyRuleName = "小米钱包/NFC公交卡刷卡扣费通知"
+        val unifiedRuleName = "手机钱包/NFC公交卡刷卡扣费通知"
+        val hasUnifiedRule = existingRules.any { it.name == unifiedRuleName }
+        if (!hasUnifiedRule) {
+            existingRules.firstOrNull { it.isBuiltIn && it.name == legacyRuleName }?.let { legacy ->
+                parseRuleDao.update(legacy.copy(name = unifiedRuleName))
+            }
+        }
         val existingNames = parseRuleDao.getAll().mapTo(HashSet()) { it.name }
         val toInsert = PRESET_PARSE_RULES.filter { existingNames.add(it.name) }
         if (toInsert.isNotEmpty()) {

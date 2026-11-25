@@ -232,7 +232,25 @@ class DefaultSeedDataTest {
         assertEquals(MoneyAmount.parseToMicros("2.00"), draft!!.origAmountMicros)
         assertEquals("CNY", draft.origCurrency)
         assertEquals("公交卡", accDao.getById(draft.accountId!!)!!.name)
-        assertTrue(draft.parserUsed.contains("小米钱包/NFC公交卡刷卡扣费通知"))
+        assertTrue(draft.parserUsed.contains("手机钱包/NFC公交卡刷卡扣费通知"))
+    }
+
+    @Test
+    fun ensurePresetParseRules_migratesLegacyMiWalletRuleNameWithoutDuplication() = runTest {
+        val ruleDao = FakeParseRuleDao()
+        ruleDao.insert(
+            ParseRuleEntity(
+                name = "小米钱包/NFC公交卡刷卡扣费通知",
+                sourcePackage = "com.miui.tsmclient",
+                channelType = "NOTIFICATION",
+                regexPattern = ".*",
+                isBuiltIn = true
+            )
+        )
+        DefaultSeedData.ensurePresetParseRules(ruleDao)
+        val all = ruleDao.getAll()
+        assertFalse(all.any { it.name == "小米钱包/NFC公交卡刷卡扣费通知" })
+        assertEquals(1, all.count { it.name == "手机钱包/NFC公交卡刷卡扣费通知" })
     }
 
     @Test

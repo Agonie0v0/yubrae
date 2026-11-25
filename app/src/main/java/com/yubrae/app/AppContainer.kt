@@ -13,6 +13,7 @@ import com.yubrae.app.data.repository.ExchangeRateRepositoryImpl
 import com.yubrae.app.data.repository.LedgerRepositoryImpl
 import com.yubrae.app.importer.YimuCsvImporter
 import com.yubrae.app.sync.WebDavSyncManager
+import com.yubrae.app.update.AppUpdateManager
 import okhttp3.OkHttpClient
 import java.io.File
 import java.util.concurrent.TimeUnit
@@ -64,6 +65,11 @@ class AppContainer(context: Context) {
         db = database,
         settingsStore = settingsStore,
         okHttpClient = okHttpClient
+    )
+
+    val appUpdateManager: AppUpdateManager = AppUpdateManager(
+        context = appContext,
+        baseHttpClient = okHttpClient
     )
 
     fun requireExchangeRateProvider(): ExchangeRateProvider = exchangeRateProvider

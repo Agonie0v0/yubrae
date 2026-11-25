@@ -36,8 +36,11 @@ android {
         applicationId = "com.yubrae.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 2
-        versionName = "1.0.1"
+        versionCode = 3
+        versionName = "1.1.0"
+
+        buildConfigField("String", "GITHUB_OWNER", "\"Agonie0v0\"")
+        buildConfigField("String", "GITHUB_REPO", "\"yubrae\"")
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -76,16 +79,6 @@ android {
             isMinifyEnabled = false
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"
-        }
-        create("perf") {
-            initWith(getByName("release"))
-            signingConfig = signingConfigs.getByName("debug")
-            applicationIdSuffix = ".debug"
-            versionNameSuffix = "-perf"
-            isDebuggable = false
-            isMinifyEnabled = true
-            isShrinkResources = true
-            matchingFallbacks += listOf("release", "debug")
         }
     }
 
@@ -162,7 +155,6 @@ dependencies {
 afterEvaluate {
     listOf(
         "assembleDebug" to "debug",
-        "assemblePerf" to "perf",
         "assembleRelease" to "release"
     ).forEach { (taskName, variantName) ->
         tasks.matching { it.name == taskName }.configureEach {

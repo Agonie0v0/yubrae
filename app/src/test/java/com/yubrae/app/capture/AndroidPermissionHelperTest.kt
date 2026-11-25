@@ -199,4 +199,303 @@ class AndroidPermissionHelperTest {
         assertNull(AndroidPermissionHelper.buildAppendedImmobulusAllowlist("null", pkg))
         assertNull(AndroidPermissionHelper.buildAppendedImmobulusAllowlist("disable_mode", pkg))
     }
+
+    @Test
+    fun buildRootGrantScript_isolatesXiaomiSpecificCommandsForNonXiaomiRootDevices() {
+        val genericScript = AndroidPermissionHelper.buildRootGrantScript(
+            pkg = "com.yubrae.app",
+            uid = 10250,
+            userId = 0,
+            sdkInt = 35,
+            listenerComponent = "com.yubrae.app/com.yubrae.app.capture.KairoNotificationListenerService",
+            quotedAccessibility = "'com.yubrae.app/com.yubrae.app.capture.screen.KairoAccessibilityService'",
+            isXiaomiRom = false,
+            updatedImmobulus = null
+        )
+
+        assertTrue(genericScript.contains("dumpsys deviceidle whitelist +com.yubrae.app"))
+        assertTrue(genericScript.contains("SYSTEM_ALERT_WINDOW"))
+        assertTrue(genericScript.contains("ACCESS_RESTRICTED_SETTINGS"))
+        assertTrue(genericScript.contains("POST_NOTIFICATIONS"))
+        assertTrue(genericScript.contains("cmd notification allow_listener"))
+        assertTrue(genericScript.contains("enabled_accessibility_services"))
+        assertFalse(genericScript.contains("powerkeeper"))
+        assertFalse(genericScript.contains("immobulus"))
+        assertFalse(genericScript.contains("greezer"))
+        assertFalse(genericScript.contains("10008"))
+        assertFalse(genericScript.contains("10021"))
+
+        val xiaomiMultiUserScript = AndroidPermissionHelper.buildRootGrantScript(
+            pkg = "com.yubrae.app",
+            uid = 1010250,
+            userId = 10,
+            sdkInt = 35,
+            listenerComponent = "com.yubrae.app/com.yubrae.app.capture.KairoNotificationListenerService",
+            quotedAccessibility = "'com.yubrae.app/com.yubrae.app.capture.screen.KairoAccessibilityService'",
+            isXiaomiRom = true,
+            updatedImmobulus = "enable_24_allowlist_com.yubrae.app"
+        )
+
+        assertTrue(xiaomiMultiUserScript.contains("com.miui.powerkeeper.configure/userTable"))
+        assertTrue(xiaomiMultiUserScript.contains("userId=10"))
+        assertTrue(xiaomiMultiUserScript.contains("--user 10"))
+        assertTrue(xiaomiMultiUserScript.contains("immobulus_mode_switch_restrict"))
+        assertTrue(xiaomiMultiUserScript.contains("10008"))
+        assertTrue(xiaomiMultiUserScript.contains("10021"))
+        assertTrue(xiaomiMultiUserScript.contains("cmd greezer thuid 1010250 1000"))
+        assertTrue(
+            xiaomiMultiUserScript.contains(
+                "cmd notification allow_listener com.yubrae.app/com.yubrae.app.capture.KairoNotificationListenerService 10 ;"
+            )
+        )
+        assertTrue(
+            genericScript.contains(
+                "cmd notification allow_listener com.yubrae.app/com.yubrae.app.capture.KairoNotificationListenerService ;"
+            )
+        )
+    }
+
+    @Test
+    fun buildRootGrantScript_handlesApi26And27NotificationListenersAndMultiUserLosslessly() {
+        val listener = "com.yubrae.app/com.yubrae.app.capture.KairoNotificationListenerService"
+        val a11yQuoted = "'com.yubrae.app/com.yubrae.app.capture.screen.KairoAccessibilityService'"
+
+        val api26Primary = AndroidPermissionHelper.buildRootGrantScript(
+            pkg = "com.yubrae.app",
+            uid = 10250,
+            userId = 0,
+            sdkInt = 26,
+            listenerComponent = listener,
+            quotedAccessibility = a11yQuoted,
+            isXiaomiRom = false,
+            updatedImmobulus = null
+        )
+        assertFalse(api26Primary.contains("cmd notification allow_listener"))
+        assertFalse(api26Primary.contains("POST_NOTIFICATIONS"))
+        assertTrue(api26Primary.contains("settings get secure enabled_notification_listeners"))
+        assertTrue(api26Primary.contains("settings put secure enabled_notification_listeners \"\$_NL_NEW\""))
+        assertTrue(api26Primary.contains("com.yubrae.app/.capture.KairoNotificationListenerService"))
+
+        val api27WorkProfile = AndroidPermissionHelper.buildRootGrantScript(
+            pkg = "com.yubrae.app",
+            uid = 1010250,
+            userId = 10,
+            sdkInt = 27,
+            listenerComponent = listener,
+            quotedAccessibility = a11yQuoted,
+            isXiaomiRom = false,
+            updatedImmobulus = null,
+            quotedNotificationListeners = "'com.other.watch/.WatchListener:$listener'"
+        )
+        assertFalse(api27WorkProfile.contains("cmd notification allow_listener"))
+        assertTrue(api27WorkProfile.contains("settings get --user 10 secure enabled_notification_listeners"))
+        assertTrue(api27WorkProfile.contains("settings put --user 10 secure enabled_notification_listeners \"\$_NL_NEW\""))
+        assertTrue(api27WorkProfile.contains("'com.other.watch/.WatchListener:$listener'"))
+        assertTrue(api27WorkProfile.contains("settings get --user 10 secure enabled_accessibility_services"))
+        assertTrue(api27WorkProfile.contains("settings put --user 10 secure enabled_accessibility_services \"\$_A11Y_NEW\""))
+
+        val api28WorkProfile = AndroidPermissionHelper.buildRootGrantScript(
+            pkg = "com.yubrae.app",
+            uid = 1010250,
+            userId = 10,
+            sdkInt = 28,
+            listenerComponent = listener,
+            quotedAccessibility = a11yQuoted,
+            isXiaomiRom = false,
+            updatedImmobulus = null
+        )
+        assertTrue(api28WorkProfile.contains("cmd notification allow_listener $listener 10 ;"))
+        assertFalse(api28WorkProfile.contains("enabled_notification_listeners"))
+    }
+
+    @Test
+    fun buildRootGrantScript_embedsShellSideImmobulusAppendWhenNonRootReadUnavailable() {
+        val xiaomiFallbackScript = AndroidPermissionHelper.buildRootGrantScript(
+            pkg = "com.yubrae.app",
+            uid = 1010250,
+            userId = 10,
+            sdkInt = 35,
+            listenerComponent = "com.yubrae.app/com.yubrae.app.capture.KairoNotificationListenerService",
+            quotedAccessibility = "'com.yubrae.app/com.yubrae.app.capture.screen.KairoAccessibilityService'",
+            isXiaomiRom = true,
+            updatedImmobulus = null
+        )
+        assertTrue(xiaomiFallbackScript.contains("settings get --user 10 secure immobulus_mode_switch_restrict"))
+        assertTrue(xiaomiFallbackScript.contains("_allowlist_"))
+        assertTrue(xiaomiFallbackScript.contains("_wakeuplist_"))
+        assertTrue(xiaomiFallbackScript.contains("settings put --user 10 secure immobulus_mode_switch_restrict \"\$_IMMOB_NEW\""))
+    }
+
+    @Test
+    fun buildAppendedComponentList_preservesExistingNotificationListenersAndDeduplicates() {
+        val target = "com.yubrae.app.debug/${AndroidPermissionHelper.NOTIFICATION_LISTENER_CLASS}"
+        val existing = "com.smartwatch.app/.NotifService:com.tasker.app/com.tasker.app.Listener"
+
+        val appended = AndroidPermissionHelper.buildAppendedComponentList(
+            existingRaw = existing,
+            targetComponent = target,
+            knownShortSuffix = ".capture.KairoNotificationListenerService",
+            knownFullClass = AndroidPermissionHelper.NOTIFICATION_LISTENER_CLASS
+        )
+        assertEquals("$existing:$target", appended)
+
+        val existingShort = "com.smartwatch.app/.NotifService:com.yubrae.app.debug/.capture.KairoNotificationListenerService"
+        val deduped = AndroidPermissionHelper.buildAppendedComponentList(
+            existingRaw = existingShort,
+            targetComponent = target,
+            knownShortSuffix = ".capture.KairoNotificationListenerService",
+            knownFullClass = AndroidPermissionHelper.NOTIFICATION_LISTENER_CLASS
+        )
+        assertEquals(existingShort, deduped)
+    }
+
+    @Test
+    fun resolveRootProbe_enforcesZeroSuWhenUnauthorizedReusesCacheAndClearsOnRevocation() {
+        var probeCount = 0
+
+        // 1. 未授权/免 Root：绝不触发 runProbe
+        val unauthorized = AndroidPermissionHelper.resolveRootProbe(
+            isAuthorized = false,
+            cachedProbe = null,
+            runProbe = {
+                probeCount++
+                AndroidPermissionHelper.RootProbeResult(isRootGranted = true, hasLsposed = true)
+            }
+        )
+        assertEquals(0, probeCount)
+        assertFalse(unauthorized.probeResult.isRootGranted)
+        assertFalse(unauthorized.shouldClearAuthorization)
+
+        // 2. 已授权且命中短缓存：直接复用，避免紧接着 refreshPermissions 重复弹 su
+        val cached = AndroidPermissionHelper.RootProbeResult(
+            isRootGranted = true,
+            hasLsposed = true,
+            powerKeeperBgControl = "noRestrict"
+        )
+        val fromCache = AndroidPermissionHelper.resolveRootProbe(
+            isAuthorized = true,
+            cachedProbe = cached,
+            runProbe = {
+                probeCount++
+                AndroidPermissionHelper.RootProbeResult(isRootGranted = false, hasLsposed = false)
+            }
+        )
+        assertEquals(0, probeCount)
+        assertTrue(fromCache.probeResult.isRootGranted)
+        assertEquals("noRestrict", fromCache.probeResult.powerKeeperBgControl)
+        assertFalse(fromCache.shouldClearAuthorization)
+
+        // 3. 已授权但缓存过期（如冷启动）：执行只读探测，捕获小米 PowerKeeper 漂移
+        val drifted = AndroidPermissionHelper.resolveRootProbe(
+            isAuthorized = true,
+            cachedProbe = null,
+            runProbe = {
+                probeCount++
+                AndroidPermissionHelper.RootProbeResult(
+                    isRootGranted = true,
+                    hasLsposed = false,
+                    powerKeeperBgControl = "miuiAuto"
+                )
+            }
+        )
+        assertEquals(1, probeCount)
+        assertTrue(drifted.probeResult.isRootGranted)
+        assertEquals("miuiAuto", drifted.probeResult.powerKeeperBgControl)
+        assertFalse(drifted.shouldClearAuthorization)
+
+        // 4. Root 被撤销或仅本次允许过期：立刻通知清除持久化标记，且 rootGrantedConfirmed 为 false
+        val revoked = AndroidPermissionHelper.resolveRootProbe(
+            isAuthorized = true,
+            cachedProbe = null,
+            runProbe = {
+                probeCount++
+                AndroidPermissionHelper.RootProbeResult(isRootGranted = false, hasLsposed = false)
+            }
+        )
+        assertEquals(2, probeCount)
+        assertFalse(revoked.probeResult.isRootGranted)
+        assertTrue(revoked.shouldClearAuthorization)
+    }
+
+    @Test
+    fun rootProbeCache_respectsTtlKeyMatchingAndNeverCachesDeniedResult() {
+        AndroidPermissionHelper.clearCachedRootProbe()
+        val t0 = 1_000_000_000L
+        val granted = AndroidPermissionHelper.RootProbeResult(
+            isRootGranted = true,
+            hasLsposed = true,
+            powerKeeperBgControl = "noRestrict"
+        )
+
+        AndroidPermissionHelper.updateCachedRootProbe("com.yubrae.app", true, 0, granted, nowNanos = t0)
+        assertEquals(
+            granted,
+            AndroidPermissionHelper.getValidCachedRootProbe(
+                "com.yubrae.app",
+                true,
+                0,
+                nowNanos = t0 + 1_000_000_000L
+            )
+        )
+        // 不同 userId / 机型标志不命中
+        assertNull(
+            AndroidPermissionHelper.getValidCachedRootProbe(
+                "com.yubrae.app",
+                true,
+                10,
+                nowNanos = t0 + 500_000_000L
+            )
+        )
+        assertNull(
+            AndroidPermissionHelper.getValidCachedRootProbe(
+                "com.yubrae.app",
+                false,
+                0,
+                nowNanos = t0 + 500_000_000L
+            )
+        )
+        // 超过 TTL 过期
+        assertNull(
+            AndroidPermissionHelper.getValidCachedRootProbe(
+                "com.yubrae.app",
+                true,
+                0,
+                nowNanos = t0 + AndroidPermissionHelper.ROOT_PROBE_CACHE_TTL_NANOS + 1L
+            )
+        )
+
+        // 拒绝结果不缓存且清空旧缓存
+        AndroidPermissionHelper.updateCachedRootProbe(
+            "com.yubrae.app",
+            true,
+            0,
+            AndroidPermissionHelper.RootProbeResult(isRootGranted = false, hasLsposed = false),
+            nowNanos = t0
+        )
+        assertNull(AndroidPermissionHelper.getValidCachedRootProbe("com.yubrae.app", true, 0, nowNanos = t0))
+    }
+
+    @Test
+    fun buildRootProbeScript_onlyQueriesPowerKeeperOnXiaomiAndCombinedOutputParsesCleanly() {
+        val nonXiaomiProbe = AndroidPermissionHelper.buildRootProbeScript("com.yubrae.app", false, 0)
+        assertFalse(nonXiaomiProbe.contains("powerkeeper"))
+        assertFalse(nonXiaomiProbe.contains("__PK_BEGIN__"))
+
+        val xiaomiProbe = AndroidPermissionHelper.buildRootProbeScript("com.yubrae.app", true, 10)
+        assertTrue(xiaomiProbe.contains("com.miui.powerkeeper.configure/userTable"))
+        assertTrue(xiaomiProbe.contains("userId=10"))
+        assertTrue(xiaomiProbe.contains("__PK_BEGIN__"))
+        assertTrue(xiaomiProbe.contains("__PK_END__"))
+
+        val combinedOutput = """
+            __KAIRO_ROOT_OK__
+            uid=0(root) gid=0(root)
+            __LSPD_DIR__
+            __PK_BEGIN__
+            Row: 0 _id=1, userId=10, pkgName=com.yubrae.app, bgControl=noRestrict
+            __PK_END__
+        """.trimIndent()
+        assertEquals(true to true, AndroidPermissionHelper.parseRootProbeOutput(combinedOutput))
+        assertEquals("noRestrict", AndroidPermissionHelper.parsePowerKeeperBgControlFromProbe(combinedOutput))
+    }
 }

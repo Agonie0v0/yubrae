@@ -11,12 +11,10 @@
 -keep class com.yubrae.app.core.** { *; }
 -keep class com.yubrae.app.sync.** { *; }
 -keep class com.yubrae.app.capture.** { *; }
+-keep class com.yubrae.app.update.** { *; }
 -keep class com.yubrae.app.importer.** { *; }
 -keep class com.yubrae.app.widget.** { *; }
 -keep class androidx.glance.** { *; }
--keepclassmembers class * {
-    @kotlinx.serialization.Serializable <init>(...);
-}
 -dontwarn okhttp3.**
 -dontwarn okio.**
 -dontwarn org.bouncycastle.**

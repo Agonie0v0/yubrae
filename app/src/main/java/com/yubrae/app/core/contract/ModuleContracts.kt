@@ -297,7 +297,11 @@ data class DevicePermissionReport(
     val postNotificationGranted: Boolean,
     val manufacturer: String,
     val osDisplay: String,
-    val accessibilityServiceEnabled: Boolean = false
+    val accessibilityServiceEnabled: Boolean = false,
+    val accessibilityServiceRunning: Boolean = accessibilityServiceEnabled,
+    val romFamilyName: String = "AOSP",
+    val isXiaomiRom: Boolean = false,
+    val rootGrantedConfirmed: Boolean = false
 )
 
 interface CaptureEngine {

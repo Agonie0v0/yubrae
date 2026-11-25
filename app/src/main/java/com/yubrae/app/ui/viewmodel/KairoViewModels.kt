@@ -1,9 +1,12 @@
 package com.yubrae.app.ui.viewmodel
 
+import android.content.Context
+import android.util.Base64
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.yubrae.app.AppContainer
+import com.yubrae.app.BuildConfig
 import com.yubrae.app.capture.LlmBillParser
 import com.yubrae.app.capture.SmartInputParser
 import com.yubrae.app.core.contract.BudgetProgress
@@ -47,15 +50,21 @@ import com.yubrae.app.data.db.TransactionType
 import com.yubrae.app.data.prefs.AppSettings
 import com.yubrae.app.domain.LedgerAnalytics
 import com.yubrae.app.ui.components.KairoIcons
+import com.yubrae.app.update.AppUpdateInfo
+import com.yubrae.app.update.AppUpdateManager
+import com.yubrae.app.update.UpdateCheckResult
+import com.yubrae.app.update.UpdateUiState
 import com.yubrae.app.widget.KairoWidgetUpdater
 import java.io.File
 import java.math.BigDecimal
 import java.math.RoundingMode
 import java.time.DayOfWeek
 import java.time.temporal.TemporalAdjusters
-import android.util.Base64
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -741,8 +750,33 @@ class KairoMainViewModel(
     private val _csvImportDialog = MutableStateFlow<CsvImportDialogState?>(null)
     val csvImportDialog: StateFlow<CsvImportDialogState?> = _csvImportDialog.asStateFlow()
 
+    private val appUpdateManager: AppUpdateManager = container.appUpdateManager
+    private val _updateState = MutableStateFlow<UpdateUiState>(UpdateUiState.Idle)
+    val updateState: StateFlow<UpdateUiState> = _updateState.asStateFlow()
+    private val _showUpdateDialog = MutableStateFlow(false)
+    val showUpdateDialog: StateFlow<Boolean> = _showUpdateDialog.asStateFlow()
+    private var updateCheckJob: Job? = null
+    @Volatile
+    private var updateCheckUpgradeToManual: Boolean = false
+    private var updateDownloadJob: Job? = null
+    @Volatile
+    private var activeDownloadToken: Long = 0L
+    private var pendingMirrorSaveJob: Job? = null
+
+    val hasAvailableUpdate: StateFlow<Boolean> = combine(_updateState, settings) { state, appSettings ->
+        when (state) {
+            is UpdateUiState.Available ->
+                !state.info.tagName.equals(appSettings.ignoredUpdateTag, ignoreCase = true)
+            is UpdateUiState.ReadyToInstall -> true
+            else -> false
+        }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000L), false)
+
     init {
         refreshPermissions()
+        viewModelScope.launch(Dispatchers.IO) {
+            appUpdateManager.cleanupOldApks()
+        }
         viewModelScope.launch {
             combine(settings, ledgers) { appSettings, ledgerList ->
                 appSettings to ledgerList
@@ -1725,6 +1759,266 @@ class KairoMainViewModel(
                 ?: CurrencyCatalog.find(to).fallbackRateToCnyMicros
         }
         return MoneyAmount.crossRate(fromToCny, toToCny)
+    }
+
+    // --- In-App Update actions ---
+    fun openUpdateDialog(triggerCheckIfIdle: Boolean = true) {
+        _showUpdateDialog.value = true
+        if (triggerCheckIfIdle &&
+            (_updateState.value is UpdateUiState.Idle || _updateState.value is UpdateUiState.Error)
+        ) {
+            checkForUpdates(manual = true)
+        }
+    }
+
+    fun dismissUpdateDialog() {
+        _showUpdateDialog.value = false
+    }
+
+    fun checkForUpdates(manual: Boolean) {
+        if (_updateState.value is UpdateUiState.Downloading ||
+            _updateState.value is UpdateUiState.Verifying
+        ) {
+            if (manual) _showUpdateDialog.value = true
+            return
+        }
+        if (updateCheckJob?.isActive == true) {
+            if (manual) {
+                updateCheckUpgradeToManual = true
+                _showUpdateDialog.value = true
+                _updateState.value = UpdateUiState.Checking
+            }
+            return
+        }
+
+        updateCheckUpgradeToManual = manual
+        updateCheckJob = viewModelScope.launch {
+            try {
+                pendingMirrorSaveJob?.join()
+                val currentSettings = withContext(Dispatchers.IO) { settingsStore.getSnapshot() }
+                if (!manual && !updateCheckUpgradeToManual) {
+                    if (!currentSettings.autoCheckUpdateEnabled) return@launch
+                    val now = System.currentTimeMillis()
+                    val elapsed = now - currentSettings.lastUpdateCheckMillis
+                    if (elapsed in 0L until UPDATE_CHECK_INTERVAL_MILLIS) return@launch
+                } else {
+                    _showUpdateDialog.value = true
+                    _updateState.value = UpdateUiState.Checking
+                }
+
+                val result = withContext(Dispatchers.IO) {
+                    appUpdateManager.checkLatestRelease(
+                        currentVersionName = BuildConfig.VERSION_NAME,
+                        buildType = BuildConfig.BUILD_TYPE,
+                        mirrorPrefix = currentSettings.updateMirrorPrefix
+                    )
+                }
+
+                if (result is UpdateCheckResult.UpdateAvailable || result is UpdateCheckResult.UpToDate) {
+                    withContext(Dispatchers.IO) {
+                        settingsStore.markUpdateChecked()
+                    }
+                }
+
+                val reportToUser = manual || updateCheckUpgradeToManual
+                when (result) {
+                    is UpdateCheckResult.UpdateAvailable -> {
+                        _updateState.value = UpdateUiState.Available(result.info)
+                        if (reportToUser) {
+                            _showUpdateDialog.value = true
+                        }
+                    }
+                    is UpdateCheckResult.UpToDate -> {
+                        if (reportToUser) {
+                            _updateState.value = UpdateUiState.UpToDate(
+                                currentVersion = result.currentVersion,
+                                latestTag = result.latestTag
+                            )
+                        }
+                    }
+                    is UpdateCheckResult.Failed -> {
+                        if (reportToUser) {
+                            _updateState.value = UpdateUiState.Error(
+                                message = result.reason,
+                                fallbackUrl = result.fallbackUrl
+                            )
+                        }
+                    }
+                }
+            } finally {
+                updateCheckUpgradeToManual = false
+            }
+        }
+    }
+
+    fun startUpdateDownload(info: AppUpdateInfo) {
+        val currentState = _updateState.value
+        if (updateDownloadJob?.isActive == true &&
+            (currentState is UpdateUiState.Downloading || currentState is UpdateUiState.Verifying)
+        ) {
+            return
+        }
+
+        val previousJob = updateDownloadJob
+        val downloadToken = activeDownloadToken + 1L
+        activeDownloadToken = downloadToken
+
+        _updateState.value = UpdateUiState.Downloading(
+            info = info,
+            downloadedBytes = 0L,
+            totalBytes = info.assetSizeBytes
+        )
+
+        updateDownloadJob = viewModelScope.launch {
+            try {
+                if (previousJob != null && previousJob.isActive) {
+                    previousJob.cancelAndJoin()
+                }
+                if (activeDownloadToken != downloadToken) return@launch
+
+                pendingMirrorSaveJob?.join()
+                val mirror = withContext(Dispatchers.IO) { settingsStore.getSnapshot().updateMirrorPrefix }
+                if (activeDownloadToken != downloadToken) return@launch
+
+                val res = withContext(Dispatchers.IO) {
+                    appUpdateManager.downloadAndVerify(
+                        info = info,
+                        mirrorPrefix = mirror,
+                        onVerifying = {
+                            if (activeDownloadToken == downloadToken) {
+                                _updateState.value = UpdateUiState.Verifying(info)
+                            }
+                        },
+                        onProgress = { downloaded, total ->
+                            if (activeDownloadToken == downloadToken) {
+                                _updateState.value = UpdateUiState.Downloading(
+                                    info = info,
+                                    downloadedBytes = downloaded,
+                                    totalBytes = if (total > 0L) total else info.assetSizeBytes
+                                )
+                            }
+                        }
+                    )
+                }
+                if (activeDownloadToken != downloadToken) return@launch
+
+                res.onSuccess { verified ->
+                    if (activeDownloadToken == downloadToken) {
+                        _updateState.value = UpdateUiState.ReadyToInstall(
+                            info = info,
+                            apkFile = verified.file,
+                            sha256Verified = verified.sha256Verified
+                        )
+                    }
+                }.onFailure { err ->
+                    if (activeDownloadToken != downloadToken) return@onFailure
+                    if (err is CancellationException) {
+                        _updateState.value = UpdateUiState.Available(info)
+                    } else {
+                        _updateState.value = UpdateUiState.Error(
+                            message = err.message ?: "下载或校验失败",
+                            fallbackUrl = info.htmlUrl,
+                            info = info
+                        )
+                    }
+                }
+            } catch (_: CancellationException) {
+                if (activeDownloadToken == downloadToken) {
+                    _updateState.value = UpdateUiState.Available(info)
+                }
+            }
+        }
+    }
+
+    fun cancelUpdateDownload() {
+        val cur = _updateState.value
+        if (cur !is UpdateUiState.Downloading && cur !is UpdateUiState.Verifying) {
+            return
+        }
+        activeDownloadToken += 1L
+        updateDownloadJob?.cancel()
+        val info = when (cur) {
+            is UpdateUiState.Downloading -> cur.info
+            is UpdateUiState.Verifying -> cur.info
+            else -> null
+        }
+        if (info != null) {
+            _updateState.value = UpdateUiState.Available(info)
+        }
+        showMessage("已取消下载")
+    }
+
+    fun ignoreUpdateVersion(tagName: String) {
+        updateSettings { it.copy(ignoredUpdateTag = tagName) }
+        _showUpdateDialog.value = false
+        showMessage("已忽略 $tagName 的新版本提醒，可随时在「检查更新」中手动升级")
+    }
+
+    fun saveUpdateMirrorPrefix(prefix: String): Boolean {
+        return when (val validation = AppUpdateManager.validateMirrorPrefix(prefix)) {
+            is AppUpdateManager.MirrorPrefixValidation.Invalid -> {
+                showMessage(validation.reason)
+                false
+            }
+            is AppUpdateManager.MirrorPrefixValidation.Valid -> {
+                val normalized = validation.normalizedPrefix
+                val prevSave = pendingMirrorSaveJob
+                pendingMirrorSaveJob = viewModelScope.launch {
+                    prevSave?.join()
+                    withContext(Dispatchers.IO) {
+                        settingsStore.update { it.copy(updateMirrorPrefix = normalized) }
+                    }
+                }
+                showMessage(
+                    if (normalized.isEmpty()) "已清除下载镜像加速前缀" else "已保存下载镜像加速前缀"
+                )
+                true
+            }
+        }
+    }
+
+    fun canRequestPackageInstalls(context: Context): Boolean =
+        appUpdateManager.canRequestPackageInstalls(context)
+
+    fun openUnknownAppSourcesSettings(context: Context) {
+        runCatching {
+            context.startActivity(appUpdateManager.createUnknownAppSourcesIntent(context))
+        }.onFailure {
+            showMessage("无法直接跳转安装权限页，请在系统设置中搜索「安装未知应用」")
+        }
+    }
+
+    fun installReadyUpdate(context: Context) {
+        val ready = _updateState.value as? UpdateUiState.ReadyToInstall ?: return
+        if (!ready.apkFile.exists() || ready.apkFile.length() <= 0L) {
+            _updateState.value = UpdateUiState.Available(ready.info)
+            showMessage("安装包缓存已被系统清理，请重新下载")
+            return
+        }
+        if (!appUpdateManager.canRequestPackageInstalls(context)) {
+            openUnknownAppSourcesSettings(context)
+            showMessage("请先开启「允许安装未知应用」，返回后即可一键安装")
+            return
+        }
+        appUpdateManager.launchApkInstaller(context, ready.apkFile)
+            .onFailure { err ->
+                if (!ready.apkFile.exists() || ready.apkFile.length() <= 0L) {
+                    _updateState.value = UpdateUiState.Available(ready.info)
+                    showMessage("安装包缓存已失效，请重新下载")
+                } else {
+                    showMessage("拉起系统安装器失败：${err.message ?: "请尝试用浏览器下载安装"}")
+                }
+            }
+    }
+
+    fun openUpdateReleasePage(context: Context, url: String = AppUpdateManager.DEFAULT_RELEASE_PAGE_URL) {
+        if (!appUpdateManager.openReleaseInBrowser(context, url)) {
+            showMessage("未找到可用的浏览器应用，请手动前往 GitHub Releases 下载")
+        }
+    }
+
+    companion object {
+        private const val UPDATE_CHECK_INTERVAL_MILLIS = 24L * 60L * 60L * 1000L
     }
 }
 
