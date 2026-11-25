@@ -1147,6 +1147,12 @@ class KairoMainViewModel(
         }
     }
 
+    suspend fun createCategoryAndReturnId(category: CategoryEntity): Long {
+        val savedId = withContext(Dispatchers.IO) { ledgerService.saveCategory(category) }
+        showMessage("已新建分类「${category.name.trim()}」")
+        return savedId
+    }
+
     fun deleteCategory(categoryId: Long) {
         viewModelScope.launch {
             withContext(Dispatchers.IO) { ledgerService.deleteCategory(categoryId) }
@@ -1160,6 +1166,12 @@ class KairoMainViewModel(
             showMessage("已保存标签「${tag.name.trim()}」")
             onDone()
         }
+    }
+
+    suspend fun createTagSuspend(tag: TagEntity): Long {
+        val savedId = withContext(Dispatchers.IO) { ledgerService.saveTag(tag) }
+        showMessage("已新建标签「${tag.name.trim()}」")
+        return savedId
     }
 
     fun deleteTag(tagId: Long) {

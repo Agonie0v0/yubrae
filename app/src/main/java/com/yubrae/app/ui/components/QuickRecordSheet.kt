@@ -1,30 +1,27 @@
 package com.yubrae.app.ui.components
 
-import android.content.Context
-import android.graphics.Bitmap
-import android.graphics.BitmapFactory
-import android.graphics.Matrix
-import android.media.ExifInterface
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -46,13 +43,10 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.rounded.Backspace
 import androidx.compose.material.icons.automirrored.rounded.Label
 import androidx.compose.material.icons.automirrored.rounded.MenuBook
-import androidx.compose.material.icons.automirrored.rounded.ReceiptLong
 import androidx.compose.material.icons.rounded.AccountBalanceWallet
 import androidx.compose.material.icons.rounded.Add
-import androidx.compose.material.icons.rounded.AddPhotoAlternate
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Calculate
 import androidx.compose.material.icons.rounded.CalendarMonth
@@ -60,9 +54,8 @@ import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.CurrencyExchange
 import androidx.compose.material.icons.rounded.Delete
-import androidx.compose.material.icons.rounded.Image
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
-import androidx.compose.material.icons.rounded.KeyboardHide
+import androidx.compose.material.icons.rounded.PhotoLibrary
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Replay
 import androidx.compose.material.icons.rounded.Schedule
@@ -70,13 +63,10 @@ import androidx.compose.material.icons.rounded.Storefront
 import androidx.compose.material.icons.rounded.SwapHoriz
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDefaults
 import androidx.compose.material3.DatePickerDialog
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
@@ -105,20 +95,15 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.yubrae.app.core.contract.ConversionPreview
 import com.yubrae.app.core.contract.ParsedBillDraft
@@ -135,16 +120,11 @@ import com.yubrae.app.data.db.TagTextCodec
 import com.yubrae.app.data.db.TransactionEntity
 import com.yubrae.app.data.db.TransactionStatus
 import com.yubrae.app.data.db.TransactionType
+import com.yubrae.app.domain.RecordUsageRanker
 import com.yubrae.app.ui.theme.KairoTheme
 import com.yubrae.app.ui.theme.tabular
 import com.yubrae.app.ui.viewmodel.KairoMainViewModel
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import java.io.File
-import java.io.FileOutputStream
-import java.math.BigDecimal
-import java.math.RoundingMode
 import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalDateTime
@@ -152,385 +132,12 @@ import java.time.LocalTime
 import java.time.ZoneId
 import java.time.ZoneOffset
 
-private object QuickExprEval {
-    private val OPERATOR_CHARS = charArrayOf('+', '-', '×', '÷', '*', '/')
-
-    fun isOperator(ch: Char): Boolean = ch in OPERATOR_CHARS
-
-    fun containsOperator(expr: String): Boolean {
-        if (expr.isEmpty()) return false
-        for (i in 1 until expr.length) {
-            if (isOperator(expr[i])) return true
-        }
-        return false
-    }
-
-    private fun lastOperatorIndex(expr: String): Int {
-        var idx = -1
-        for (i in expr.indices) {
-            if (isOperator(expr[i]) && i > 0) {
-                idx = i
-            }
-        }
-        return idx
-    }
-
-    fun appendDigit(expr: String, digit: String): String {
-        if (expr == "0" && digit != "00") return digit
-        if (expr == "0" && digit == "00") return "0"
-        val lastSep = lastOperatorIndex(expr)
-        val currentSeg = expr.substring(lastSep + 1)
-        if (currentSeg == "0") {
-            return if (digit == "00" || digit == "0") expr else expr.dropLast(1) + digit
-        }
-        if (currentSeg.isEmpty() && digit == "00") {
-            return "${expr}0"
-        }
-        return expr + digit
-    }
-
-    fun appendDot(expr: String): String {
-        val lastSep = lastOperatorIndex(expr)
-        val currentSeg = expr.substring(lastSep + 1)
-        if (currentSeg.contains('.')) return expr
-        return if (currentSeg.isEmpty()) "${expr}0." else "$expr."
-    }
-
-    fun appendOperator(expr: String, op: Char): String {
-        if (expr.isEmpty()) return ""
-        val last = expr.last()
-        return when {
-            isOperator(last) -> expr.dropLast(1) + op
-            last == '.' -> expr.dropLast(1) + op
-            else -> expr + op
-        }
-    }
-
-    fun evaluate(expr: String): BigDecimal? {
-        val cleaned = expr.trim().trimEnd('+', '-', '×', '÷', '*', '/', '.')
-        if (cleaned.isEmpty()) return null
-        val tokens = mutableListOf<String>()
-        val sb = StringBuilder()
-        cleaned.forEachIndexed { index, ch ->
-            if (isOperator(ch) && index > 0 && sb.isNotEmpty()) {
-                tokens.add(sb.toString())
-                sb.clear()
-                tokens.add(ch.toString())
-            } else {
-                sb.append(ch)
-            }
-        }
-        if (sb.isNotEmpty()) tokens.add(sb.toString())
-        if (tokens.isEmpty()) return null
-
-        return try {
-            // 第一遍：先计算 × 和 ÷（支持高优先级四则运算）
-            val reduced = mutableListOf<String>()
-            var acc = BigDecimal(tokens[0])
-            var i = 1
-            while (i + 1 < tokens.size) {
-                val op = tokens[i]
-                val rhs = BigDecimal(tokens[i + 1])
-                when (op) {
-                    "×", "*" -> {
-                        acc = acc.multiply(rhs)
-                    }
-                    "÷", "/" -> {
-                        if (rhs.compareTo(BigDecimal.ZERO) == 0) return null
-                        acc = acc.divide(rhs, 8, RoundingMode.HALF_UP)
-                    }
-                    else -> {
-                        reduced.add(acc.toPlainString())
-                        reduced.add(op)
-                        acc = rhs
-                    }
-                }
-                i += 2
-            }
-            reduced.add(acc.toPlainString())
-
-            // 第二遍：再从左向右计算 + 和 -
-            var result = BigDecimal(reduced[0])
-            var j = 1
-            while (j + 1 < reduced.size) {
-                val op = reduced[j]
-                val rhs = BigDecimal(reduced[j + 1])
-                result = when (op) {
-                    "+" -> result.add(rhs)
-                    "-" -> result.subtract(rhs)
-                    else -> return null
-                }
-                j += 2
-            }
-            result
-        } catch (_: Exception) {
-            null
-        }
-    }
-
-    fun evaluateAndFormat(expr: String, maxScale: Int = 4): String? {
-        val bd = evaluate(expr) ?: return null
-        val scaled = bd.setScale(maxScale.coerceIn(2, 4), RoundingMode.HALF_UP)
-            .stripTrailingZeros()
-        return if (scaled.compareTo(BigDecimal.ZERO) == 0) "0" else scaled.toPlainString()
-    }
-
-    fun evaluateToMicros(expr: String): Long? {
-        val bd = evaluate(expr) ?: return null
-        if (bd <= BigDecimal.ZERO) return null
-        return try {
-            bd.multiply(BigDecimal(MoneyAmount.AMOUNT_SCALE))
-                .setScale(0, RoundingMode.HALF_UP)
-                .longValueExact()
-        } catch (_: Exception) {
-            null
-        }
-    }
-}
-
-internal object ReceiptImageUtils {
-    private const val MAX_EDGE_PX = 1600
-
-    private fun receiptsDir(context: Context): File =
-        File(context.filesDir, "receipts").apply { if (!exists()) mkdirs() }
-
-    private fun computeInSampleSize(width: Int, height: Int, maxEdge: Int): Int {
-        var inSampleSize = 1
-        var longest = maxOf(width, height)
-        while (longest / inSampleSize > maxEdge) {
-            inSampleSize *= 2
-        }
-        return inSampleSize.coerceAtLeast(1)
-    }
-
-    private fun rotateIfNeeded(bitmap: Bitmap, orientation: Int): Bitmap {
-        val degrees = when (orientation) {
-            ExifInterface.ORIENTATION_ROTATE_90 -> 90f
-            ExifInterface.ORIENTATION_ROTATE_180 -> 180f
-            ExifInterface.ORIENTATION_ROTATE_270 -> 270f
-            else -> 0f
-        }
-        if (degrees == 0f) return bitmap
-        val matrix = Matrix().apply { postRotate(degrees) }
-        return runCatching {
-            val rotated = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
-            if (rotated !== bitmap) bitmap.recycle()
-            rotated
-        }.getOrDefault(bitmap)
-    }
-
-    private fun scaleBitmapDown(bitmap: Bitmap, maxEdge: Int): Bitmap {
-        val longest = maxOf(bitmap.width, bitmap.height)
-        if (longest <= maxEdge) return bitmap
-        val ratio = maxEdge.toFloat() / longest.toFloat()
-        val targetW = (bitmap.width * ratio).toInt().coerceAtLeast(1)
-        val targetH = (bitmap.height * ratio).toInt().coerceAtLeast(1)
-        return runCatching {
-            val scaled = Bitmap.createScaledBitmap(bitmap, targetW, targetH, true)
-            if (scaled !== bitmap) bitmap.recycle()
-            scaled
-        }.getOrDefault(bitmap)
-    }
-
-    suspend fun savePickedImageToReceipts(context: Context, uri: Uri): String? = withContext(Dispatchers.IO) {
-        val resolver = context.contentResolver
-        val dir = receiptsDir(context)
-        val destFile = File(dir, "receipt_${System.currentTimeMillis()}.jpg")
-
-        val decoded = runCatching {
-            val orientation = resolver.openInputStream(uri)?.use { stream ->
-                runCatching {
-                    ExifInterface(stream).getAttributeInt(
-                        ExifInterface.TAG_ORIENTATION,
-                        ExifInterface.ORIENTATION_NORMAL
-                    )
-                }.getOrDefault(ExifInterface.ORIENTATION_NORMAL)
-            } ?: ExifInterface.ORIENTATION_NORMAL
-
-            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-            resolver.openInputStream(uri)?.use { stream ->
-                BitmapFactory.decodeStream(stream, null, bounds)
-            }
-            if (bounds.outWidth > 0 && bounds.outHeight > 0) {
-                val opts = BitmapFactory.Options().apply {
-                    inSampleSize = computeInSampleSize(bounds.outWidth, bounds.outHeight, MAX_EDGE_PX)
-                }
-                resolver.openInputStream(uri)?.use { stream ->
-                    BitmapFactory.decodeStream(stream, null, opts)
-                }?.let { bmp ->
-                    scaleBitmapDown(rotateIfNeeded(bmp, orientation), MAX_EDGE_PX)
-                }
-            } else {
-                null
-            }
-        }.getOrNull()
-
-        if (decoded != null) {
-            return@withContext runCatching {
-                FileOutputStream(destFile).use { out ->
-                    decoded.compress(Bitmap.CompressFormat.JPEG, 88, out)
-                }
-                decoded.recycle()
-                destFile.absolutePath
-            }.getOrNull()
-        }
-
-        // 若位图解码不可用，回退流式复制原始字节
-        runCatching {
-            resolver.openInputStream(uri)?.use { input ->
-                FileOutputStream(destFile).use { output ->
-                    input.copyTo(output)
-                }
-                destFile.absolutePath
-            }
-        }.getOrNull()
-    }
-
-    suspend fun saveBitmapToReceipts(context: Context, bitmap: Bitmap): String? = withContext(Dispatchers.IO) {
-        runCatching {
-            val destFile = File(receiptsDir(context), "receipt_cam_${System.currentTimeMillis()}.jpg")
-            val longest = maxOf(bitmap.width, bitmap.height)
-            val toSave = if (longest > MAX_EDGE_PX) {
-                val ratio = MAX_EDGE_PX.toFloat() / longest.toFloat()
-                Bitmap.createScaledBitmap(
-                    bitmap,
-                    (bitmap.width * ratio).toInt().coerceAtLeast(1),
-                    (bitmap.height * ratio).toInt().coerceAtLeast(1),
-                    true
-                )
-            } else {
-                bitmap
-            }
-            FileOutputStream(destFile).use { out ->
-                toSave.compress(Bitmap.CompressFormat.JPEG, 88, out)
-            }
-            if (toSave !== bitmap) toSave.recycle()
-            destFile.absolutePath
-        }.getOrNull()
-    }
-
-    suspend fun loadThumbnailBitmap(path: String, maxSizePx: Int = 600): Bitmap? = withContext(Dispatchers.IO) {
-        val file = File(path)
-        if (!file.exists() || !file.isFile) return@withContext null
-        runCatching {
-            val orientation = runCatching {
-                ExifInterface(file.absolutePath).getAttributeInt(
-                    ExifInterface.TAG_ORIENTATION,
-                    ExifInterface.ORIENTATION_NORMAL
-                )
-            }.getOrDefault(ExifInterface.ORIENTATION_NORMAL)
-
-            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-            BitmapFactory.decodeFile(file.absolutePath, bounds)
-            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return@withContext null
-
-            val opts = BitmapFactory.Options().apply {
-                inSampleSize = computeInSampleSize(bounds.outWidth, bounds.outHeight, maxSizePx)
-            }
-            val bmp = BitmapFactory.decodeFile(file.absolutePath, opts) ?: return@withContext null
-            rotateIfNeeded(bmp, orientation)
-        }.getOrNull()
-    }
-}
-
-@Composable
-internal fun ReceiptThumbnailImage(
-    path: String,
-    modifier: Modifier = Modifier,
-    maxSizePx: Int = 480,
-    contentScale: ContentScale = ContentScale.Crop
-) {
-    var bitmap by remember(path, maxSizePx) { mutableStateOf<Bitmap?>(null) }
-    LaunchedEffect(path, maxSizePx) {
-        bitmap = ReceiptImageUtils.loadThumbnailBitmap(path, maxSizePx)
-    }
-    if (bitmap != null) {
-        Image(
-            bitmap = bitmap!!.asImageBitmap(),
-            contentDescription = "小票图片",
-            contentScale = contentScale,
-            modifier = modifier
-        )
-    } else {
-        Box(
-            modifier = modifier.background(MaterialTheme.colorScheme.surfaceContainerHigh),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(
-                imageVector = Icons.Rounded.Image,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(22.dp)
-            )
-        }
-    }
-}
-
-@Composable
-internal fun ReceiptZoomPreviewDialog(
-    imagePath: String,
-    onDismiss: () -> Unit
-) {
-    var bitmap by remember(imagePath) { mutableStateOf<Bitmap?>(null) }
-    LaunchedEffect(imagePath) {
-        bitmap = ReceiptImageUtils.loadThumbnailBitmap(imagePath, maxSizePx = 1800)
-    }
-    Dialog(
-        onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false)
-    ) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(Color.Black.copy(alpha = 0.92f))
-                .clickable(onClick = onDismiss)
-                .padding(16.dp)
-        ) {
-            if (bitmap != null) {
-                Image(
-                    bitmap = bitmap!!.asImageBitmap(),
-                    contentDescription = "小票原图预览",
-                    contentScale = ContentScale.Fit,
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .align(Alignment.Center)
-                )
-            } else {
-                Column(
-                    modifier = Modifier.align(Alignment.Center),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.Image,
-                        contentDescription = null,
-                        tint = Color.White.copy(alpha = 0.7f),
-                        modifier = Modifier.size(48.dp)
-                    )
-                    Text(
-                        text = "无法加载图片或文件已被清理",
-                        color = Color.White.copy(alpha = 0.8f),
-                        style = MaterialTheme.typography.bodyMedium
-                    )
-                }
-            }
-            Surface(
-                shape = CircleShape,
-                color = Color.Black.copy(alpha = 0.6f),
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(top = 12.dp, end = 4.dp)
-            ) {
-                IconButton(onClick = onDismiss) {
-                    Icon(
-                        imageVector = Icons.Rounded.Close,
-                        contentDescription = "关闭预览",
-                        tint = Color.White
-                    )
-                }
-            }
-        }
-    }
+private enum class RecordWorkspacePanel {
+    CATEGORY,
+    TAGS,
+    ACCOUNT,
+    DATE_TIME,
+    MORE
 }
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
@@ -554,6 +161,7 @@ fun QuickRecordSheet(
     onOpenCategoryManager: (() -> Unit)? = null,
     availableTags: List<TagEntity> = emptyList(),
     onQuickCreateTag: ((name: String, colorHex: Long) -> Unit)? = null,
+    onQuickCreateCategory: (suspend (CategoryEntity) -> Long?)? = null,
     onDismiss: () -> Unit
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -561,6 +169,7 @@ fun QuickRecordSheet(
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     val semantic = KairoTheme.semantic
+    val recentTransactions by viewModel.allTransactions.collectAsStateWithLifecycle()
 
     val isEditMode = existingTransaction != null
     val isRefundMode = !isEditMode && refundOfTransaction != null
@@ -596,6 +205,8 @@ fun QuickRecordSheet(
     }
 
     var txType by remember(stateKey) { mutableStateOf(resolvedInitialType) }
+    var activePanel by remember(stateKey) { mutableStateOf(RecordWorkspacePanel.CATEGORY) }
+
     var selectedAccountId by remember(stateKey) {
         mutableLongStateOf(
             existingTransaction?.accountId
@@ -695,13 +306,13 @@ fun QuickRecordSheet(
             }
         }
     }
+
     var excludeFromStats by remember(stateKey) {
         mutableStateOf(existingTransaction?.excludeFromStats ?: false)
     }
     var excludeFromBudget by remember(stateKey) {
         mutableStateOf(existingTransaction?.excludeFromBudget ?: false)
     }
-
     var merchant by remember(stateKey) {
         mutableStateOf(
             existingTransaction?.merchant
@@ -734,8 +345,6 @@ fun QuickRecordSheet(
             )
         )
     }
-    var localCreatedTagColors by remember(stateKey) { mutableStateOf<Map<String, Long>>(emptyMap()) }
-    var showQuickCreateTagDialog by remember { mutableStateOf(false) }
     var reimburseStatus by remember(stateKey) {
         mutableStateOf(existingTransaction?.reimburseStatus ?: ReimburseStatus.NONE)
     }
@@ -794,7 +403,6 @@ fun QuickRecordSheet(
     var editingAccountAmountField by remember { mutableStateOf(false) }
     var editingRateField by remember { mutableStateOf(false) }
 
-    // 转账目标账户跨币种状态
     var manualToAmountMicros by remember(stateKey) {
         mutableStateOf(existingTransaction?.toAmountMicros)
     }
@@ -816,15 +424,11 @@ fun QuickRecordSheet(
     var preview by remember { mutableStateOf<ConversionPreview?>(null) }
     var showKeypad by remember { mutableStateOf(true) }
     var showCurrencyPicker by remember { mutableStateOf(false) }
-    var showAccountPicker by remember { mutableStateOf(false) }
     var showLedgerPicker by remember { mutableStateOf(false) }
     var showRateOverrideDialog by remember { mutableStateOf(false) }
-    var showMerchantDialog by remember { mutableStateOf(false) }
-    var showReimburseMenu by remember { mutableStateOf(false) }
     var showDatePicker by remember { mutableStateOf(false) }
     var showTimePicker by remember { mutableStateOf(false) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
-    var showTagPanel by remember(stateKey) { mutableStateOf(false) }
 
     val handlePickedImageUri: (Uri?) -> Unit = { uri ->
         if (uri != null) {
@@ -849,6 +453,20 @@ fun QuickRecordSheet(
         onResult = handlePickedImageUri
     )
 
+    val openImagePicker: () -> Unit = {
+        runCatching {
+            pickImageLauncher.launch(
+                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+            )
+        }.onFailure {
+            runCatching {
+                fallbackImageLauncher.launch("image/*")
+            }.onFailure {
+                viewModel.showMessage("无法打开系统相册，请检查相册权限后重试")
+            }
+        }
+    }
+
     val selectedAccount = remember(accounts, selectedAccountId) {
         accounts.firstOrNull { it.id == selectedAccountId }
     }
@@ -866,7 +484,6 @@ fun QuickRecordSheet(
         (!selectedToAccount.currencyCode.equals(origCurrency, ignoreCase = true) ||
             (selectedAccount != null && !selectedToAccount.currencyCode.equals(selectedAccount.currencyCode, ignoreCase = true)))
 
-    // 实时调用 ledgerService.previewConversion
     LaunchedEffect(
         parsedOrigMicros,
         origCurrency,
@@ -899,7 +516,6 @@ fun QuickRecordSheet(
         }
     }
 
-    // 转账跨币种实时联动
     LaunchedEffect(
         txType,
         parsedOrigMicros,
@@ -944,6 +560,12 @@ fun QuickRecordSheet(
             ?: ledgers.firstOrNull { it.id == selectedLedgerId }
             ?: selectableLedgers.firstOrNull()
     }
+    val selectedCategoryObj = remember(categories, selectedCategoryId) {
+        categories.firstOrNull { it.id == selectedCategoryId }
+    }
+    val selectedCategoryParent = remember(categories, selectedCategoryObj) {
+        selectedCategoryObj?.parentId?.let { pid -> categories.firstOrNull { it.id == pid } }
+    }
     val currencyInfo = remember(origCurrency) { CurrencyCatalog.find(origCurrency) }
     val accentColor = transactionAmountColor(txType)
 
@@ -967,14 +589,10 @@ fun QuickRecordSheet(
                             val digits = CurrencyCatalog.find(draft.origCurrency).minorDigits
                             amountExpr = MoneyAmount.formatPlain(draft.origAmountMicros, digits, grouping = false)
                         }
-                        if (draft.origCurrency.isNotBlank()) {
-                            origCurrency = draft.origCurrency
-                        }
+                        if (draft.origCurrency.isNotBlank()) origCurrency = draft.origCurrency
                         if (draft.merchant.isNotBlank()) merchant = draft.merchant
                         if (draft.note.isNotBlank()) note = draft.note
-                        if (draft.tags.isNotBlank()) {
-                            tags = TagTextCodec.merge(tags, draft.tags)
-                        }
+                        if (draft.tags.isNotBlank()) tags = TagTextCodec.merge(tags, draft.tags)
                         if (draft.categoryId != null) selectedCategoryId = draft.categoryId
                         if (draft.accountId != null) selectedAccountId = draft.accountId
                         if (draft.timestamp > 0L) timestampMillis = draft.timestamp
@@ -983,9 +601,7 @@ fun QuickRecordSheet(
                         }
                         viewModel.showMessage("AI 已识别小票并填入表单")
                     } else {
-                        viewModel.showMessage(
-                            if (llmEnabled) "未识别出有效账单" else "请先开启 AI 配置"
-                        )
+                        viewModel.showMessage(if (llmEnabled) "未识别出有效账单" else "请先开启 AI 配置")
                     }
                 }.onFailure { err ->
                     viewModel.showMessage("小票识别失败：${err.message ?: "请检查 AI 配置"}")
@@ -994,7 +610,7 @@ fun QuickRecordSheet(
         }
     }
 
-    val performSave: () -> Unit = {
+    val saveWithMode: (Boolean) -> Unit = { continueNext ->
         val finalAmountMicros = QuickExprEval.evaluateToMicros(amountExpr)
         val acct = selectedAccount
         when {
@@ -1021,7 +637,7 @@ fun QuickRecordSheet(
                     merchant = merchant.trim(),
                     note = note.trim(),
                     tags = TagTextCodec.format(TagTextCodec.parse(tags)),
-                    reimburseStatus = reimburseStatus,
+                    reimburseStatus = if (txType == TransactionType.EXPENSE) reimburseStatus else ReimburseStatus.NONE,
                     sourceType = existingTransaction?.sourceType ?: CaptureChannel.MANUAL,
                     rawEventId = existingTransaction?.rawEventId,
                     status = TransactionStatus.CONFIRMED,
@@ -1034,9 +650,42 @@ fun QuickRecordSheet(
                     attachmentPaths = attachmentPaths.joinToString(";"),
                     reimbursedTxId = existingTransaction?.reimbursedTxId
                 )
-                viewModel.saveTransaction(req, onSuccess = onDismiss)
+                viewModel.saveTransaction(
+                    request = req,
+                    onSuccess = {
+                        if (continueNext) {
+                            amountExpr = ""
+                            merchant = ""
+                            note = ""
+                            tags = ""
+                            reimburseStatus = ReimburseStatus.NONE
+                            excludeFromStats = false
+                            excludeFromBudget = false
+                            attachmentPaths = emptyList()
+                            manualAccountAmountMicros = null
+                            manualRateToAccountMicros = null
+                            manualToAmountMicros = null
+                            manualTransferRateMicros = null
+                            activePanel = RecordWorkspacePanel.CATEGORY
+                            showKeypad = true
+                            viewModel.showMessage("已记一笔，可继续记录下一笔")
+                        } else {
+                            onDismiss()
+                        }
+                    }
+                )
             }
         }
+    }
+
+    val moreActiveCount = remember(merchant, reimburseStatus, excludeFromStats, excludeFromBudget, attachmentPaths) {
+        var count = 0
+        if (merchant.isNotBlank()) count++
+        if (reimburseStatus != ReimburseStatus.NONE) count++
+        if (excludeFromStats) count++
+        if (excludeFromBudget) count++
+        if (attachmentPaths.isNotEmpty()) count++
+        count
     }
 
     ModalBottomSheet(
@@ -1049,15 +698,16 @@ fun QuickRecordSheet(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .fillMaxHeight(0.90f)
                 .navigationBarsPadding()
                 .imePadding()
         ) {
-            // 1. 顶部紧凑控制条（~38dp）：居中 支出 / 收入 / 转账 分段微胶囊 + 右侧「分类管理」与「关闭」
+            // 1. 顶栏：左侧(删除/账本) | 中央(支出/收入/转账) | 右侧(关闭)
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(min = 38.dp)
-                    .padding(horizontal = 10.dp, vertical = 2.dp)
+                    .heightIn(min = 44.dp)
+                    .padding(horizontal = 12.dp, vertical = 4.dp)
             ) {
                 if (isEditMode) {
                     IconButton(
@@ -1070,8 +720,42 @@ fun QuickRecordSheet(
                             imageVector = Icons.Rounded.Delete,
                             contentDescription = "删除交易",
                             tint = MaterialTheme.colorScheme.error,
-                            modifier = Modifier.size(17.dp)
+                            modifier = Modifier.size(18.dp)
                         )
+                    }
+                } else if (selectableLedgers.size > 1 && selectedLedger != null) {
+                    val ledgerColor = Color(selectedLedger.colorHex)
+                    Surface(
+                        shape = CircleShape,
+                        color = ledgerColor.copy(alpha = 0.12f),
+                        border = BorderStroke(0.6.dp, ledgerColor.copy(alpha = 0.3f)),
+                        modifier = Modifier
+                            .align(Alignment.CenterStart)
+                            .height(28.dp)
+                            .clip(CircleShape)
+                            .clickable { showLedgerPicker = true }
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 9.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Icon(
+                                imageVector = KairoIcons.ledgerIcon(selectedLedger.icon),
+                                contentDescription = null,
+                                tint = ledgerColor,
+                                modifier = Modifier.size(13.dp)
+                            )
+                            Text(
+                                text = selectedLedger.name,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = ledgerColor,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.widthIn(max = 72.dp)
+                            )
+                        }
                     }
                 }
 
@@ -1123,66 +807,53 @@ fun QuickRecordSheet(
                                     .clickable {
                                         txType = mode
                                         if (mode != TransactionType.TRANSFER) {
-                                            val matchingCat = categories.firstOrNull { it.id == selectedCategoryId && it.type == mode }
+                                            val matchingCat = categories.firstOrNull {
+                                                it.id == selectedCategoryId && it.type == mode
+                                            }
                                             if (matchingCat == null && !isRefundMode) {
-                                                selectedCategoryId = categories.firstOrNull { it.type == mode && it.parentId == null }?.id
+                                                selectedCategoryId = categories.firstOrNull {
+                                                    it.type == mode && it.parentId == null
+                                                }?.id
                                             }
                                         } else if (toAccountId == null || toAccountId == selectedAccountId) {
                                             toAccountId = accounts.firstOrNull { it.id != selectedAccountId }?.id
+                                        }
+                                        if (activePanel != RecordWorkspacePanel.CATEGORY) {
+                                            activePanel = RecordWorkspacePanel.CATEGORY
                                         }
                                     }
                             ) {
                                 Text(
                                     text = label,
                                     color = textColor,
-                                    style = MaterialTheme.typography.labelLarge.copy(fontSize = 12.sp),
+                                    style = MaterialTheme.typography.labelLarge.copy(fontSize = 12.5.sp),
                                     fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 3.5.dp)
+                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp)
                                 )
                             }
                         }
                     }
                 }
 
-                Row(
-                    modifier = Modifier.align(Alignment.CenterEnd),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(2.dp)
+                IconButton(
+                    onClick = onDismiss,
+                    modifier = Modifier
+                        .align(Alignment.CenterEnd)
+                        .size(32.dp)
                 ) {
-                    if (onOpenCategoryManager != null) {
-                        IconButton(
-                            onClick = onOpenCategoryManager,
-                            modifier = Modifier.size(32.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Rounded.Tune,
-                                contentDescription = "分类管理",
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = Modifier.size(17.dp)
-                            )
-                        }
-                    }
-                    IconButton(
-                        onClick = onDismiss,
-                        modifier = Modifier.size(32.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Rounded.Close,
-                            contentDescription = "关闭",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(18.dp)
-                        )
-                    }
+                    Icon(
+                        imageVector = Icons.Rounded.Close,
+                        contentDescription = "关闭",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(19.dp)
+                    )
                 }
             }
 
-            // 退款模式精巧提示条
+            // 退款模式提示条
             if (isRefundMode) {
                 val origCatName = refundOfTransaction.categoryId?.let { id ->
                     categories.firstOrNull { it.id == id }?.name
-                }
-                val refundOrigCategory = refundOfTransaction.categoryId?.let { id ->
-                    categories.firstOrNull { it.id == id }
                 }
                 Surface(
                     shape = RoundedCornerShape(10.dp),
@@ -1224,576 +895,531 @@ fun QuickRecordSheet(
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.weight(1f)
                         )
-                        if (refundOrigCategory != null && selectedCategoryId == refundOrigCategory.id && refundOrigCategory.type != txType) {
-                            Surface(
-                                shape = CircleShape,
-                                color = MaterialTheme.colorScheme.secondaryContainer
-                            ) {
-                                Text(
-                                    text = refundOrigCategory.name,
-                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
-                                    color = MaterialTheme.colorScheme.onSecondaryContainer,
-                                    modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
-                                )
-                            }
-                        }
                     }
                 }
             }
 
-            // 2. 中部高频分类网格 / 转账双格卡（单手友好限高 120~172/220dp，确保 3 整行 15 个分类完整可见）
-            Column(
-                modifier = Modifier
-                    .weight(1f, fill = false)
-                    .heightIn(min = 120.dp, max = if (showKeypad) 172.dp else 220.dp)
-                    .verticalScroll(rememberScrollState())
-                    .padding(horizontal = 12.dp, vertical = 2.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                when (txType) {
-                    TransactionType.EXPENSE, TransactionType.INCOME -> {
-                        val typeCats = remember(categories, txType) {
-                            categories.filter { it.type == txType }.sortedWith(compareBy({ it.sortOrder }, { it.id }))
-                        }
-                        val parents = remember(typeCats) { typeCats.filter { it.parentId == null } }
-                        val parentRows = remember(parents) { parents.chunked(5) }
-                        val selectedCatObj = remember(typeCats, selectedCategoryId) {
-                            typeCats.firstOrNull { it.id == selectedCategoryId }
-                        }
-                        val activeParentId = selectedCatObj?.parentId ?: selectedCatObj?.id
-                        val subCategories = remember(typeCats, activeParentId) {
-                            if (activeParentId != null) typeCats.filter { it.parentId == activeParentId } else emptyList()
-                        }
-
-                        if (parents.isEmpty()) {
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 20.dp),
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                Text(
-                                    text = "暂无分类",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                                if (onOpenCategoryManager != null) {
-                                    FilledTonalButton(
-                                        onClick = onOpenCategoryManager,
-                                        shape = CircleShape,
-                                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 6.dp),
-                                        modifier = Modifier.height(34.dp)
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Rounded.Add,
-                                            contentDescription = null,
-                                            modifier = Modifier.size(16.dp)
-                                        )
-                                        Spacer(modifier = Modifier.width(4.dp))
-                                        Text("添加分类", style = MaterialTheme.typography.labelLarge)
-                                    }
-                                }
-                            }
-                        } else {
-                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                parentRows.forEach { rowCats ->
-                                    Row(
-                                        modifier = Modifier.fillMaxWidth(),
-                                        horizontalArrangement = Arrangement.spacedBy(2.dp)
-                                    ) {
-                                        rowCats.forEach { cat ->
-                                            val isSelected = activeParentId == cat.id
-                                            CategoryGridCell(
-                                                category = cat,
-                                                selected = isSelected,
-                                                onClick = { selectedCategoryId = cat.id },
-                                                modifier = Modifier.weight(1f)
-                                            )
-                                        }
-                                        repeat(5 - rowCats.size) {
-                                            Spacer(modifier = Modifier.weight(1f))
-                                        }
-                                    }
-
-                                    // 紧贴当前点击行轻巧展开二级分类微胶囊
-                                    val rowHasActiveParent = activeParentId != null && rowCats.any { it.id == activeParentId }
-                                    if (rowHasActiveParent && subCategories.isNotEmpty()) {
-                                        Surface(
-                                            shape = RoundedCornerShape(10.dp),
-                                            color = MaterialTheme.colorScheme.surfaceContainerLow,
-                                            border = BorderStroke(
-                                                0.5.dp,
-                                                MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)
-                                            ),
-                                            modifier = Modifier.fillMaxWidth()
-                                        ) {
-                                            FlowRow(
-                                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
-                                                horizontalArrangement = Arrangement.spacedBy(5.dp),
-                                                verticalArrangement = Arrangement.spacedBy(5.dp)
-                                            ) {
-                                                subCategories.forEach { sub ->
-                                                    val isSubSelected = selectedCategoryId == sub.id
-                                                    CategorySelectChip(
-                                                        category = sub,
-                                                        selected = isSubSelected,
-                                                        compact = true,
-                                                        onClick = {
-                                                            selectedCategoryId = if (isSubSelected) activeParentId else sub.id
-                                                        }
-                                                    )
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    TransactionType.TRANSFER -> {
-                        TransferModePanel(
-                            accounts = accounts,
-                            selectedAccount = selectedAccount,
-                            selectedToAccount = selectedToAccount,
-                            onSelectFrom = { acc ->
-                                selectedAccountId = acc.id
-                                origCurrency = acc.currencyCode
-                                manualAccountAmountMicros = null
-                                manualRateToAccountMicros = null
-                                manualToAmountMicros = null
-                                if (toAccountId == acc.id) {
-                                    toAccountId = accounts.firstOrNull { it.id != acc.id }?.id
-                                }
-                            },
-                            onSelectTo = { acc ->
-                                toAccountId = acc.id
-                                manualToAmountMicros = null
-                            },
-                            onSwap = {
-                                val oldFrom = selectedAccount
-                                val oldTo = selectedToAccount
-                                if (oldFrom != null && oldTo != null) {
-                                    selectedAccountId = oldTo.id
-                                    toAccountId = oldFrom.id
-                                    origCurrency = oldTo.currencyCode
-                                    manualAccountAmountMicros = null
-                                    manualRateToAccountMicros = null
-                                    manualToAmountMicros = null
-                                }
-                            }
-                        )
-                    }
-
-                    else -> {
-                        YimuCard(
-                            containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
-                            cornerRadius = 12.dp
-                        ) {
-                            Column(
-                                modifier = Modifier.padding(12.dp),
-                                verticalArrangement = Arrangement.spacedBy(4.dp)
-                            ) {
-                                Text(
-                                    text = "余额校准",
-                                    style = MaterialTheme.typography.titleSmall,
-                                    fontWeight = FontWeight.SemiBold
-                                )
-                                Text(
-                                    text = "${selectedAccount?.name ?: "未选择"} · ${selectedAccount?.currencyCode ?: origCurrency}",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-
-            // 3. 底部一体化工作台（紧贴自定义数字键盘上方）
-            CompactHairlineDivider(startIndent = 0.dp)
-
-            // 3a. 金额与备注紧凑融合行
-            Row(
+            // 2. 独立大金额 & 当前分类摘要带（彻底告别三合一拥挤行）
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerLow,
+                border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 5.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    .padding(horizontal = 12.dp, vertical = 4.dp)
             ) {
-                Surface(
-                    shape = CircleShape,
-                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                    border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)),
-                    modifier = Modifier
-                        .height(30.dp)
-                        .clip(CircleShape)
-                        .clickable { showCurrencyPicker = true }
-                ) {
+                Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp)) {
                     Row(
-                        modifier = Modifier.padding(horizontal = 8.dp),
+                        modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(3.dp)
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        Text(text = currencyInfo.flag, fontSize = 12.sp)
-                        Text(
-                            text = currencyInfo.code,
-                            style = MaterialTheme.typography.labelMedium.copy(fontSize = 11.5.sp),
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                        Icon(
-                            imageVector = Icons.Rounded.KeyboardArrowDown,
-                            contentDescription = "切换币种",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(13.dp)
-                        )
-                    }
-                }
-
-                Surface(
-                    shape = RoundedCornerShape(9.dp),
-                    color = MaterialTheme.colorScheme.surfaceContainerLow,
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(32.dp)
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(horizontal = 10.dp),
-                        contentAlignment = Alignment.CenterStart
-                    ) {
-                        BasicTextField(
-                            value = note,
-                            onValueChange = { note = it },
-                            singleLine = true,
-                            textStyle = MaterialTheme.typography.bodyMedium.copy(
-                                fontSize = 13.sp,
-                                color = MaterialTheme.colorScheme.onSurface
-                            ),
-                            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
-                            keyboardActions = KeyboardActions(
-                                onDone = {
-                                    focusManager.clearFocus()
-                                    showKeypad = true
-                                }
-                            ),
+                        // 左侧：当前分类或转账流向徽章（点击随时回到分类视图）
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
                             modifier = Modifier
-                                .fillMaxWidth()
-                                .onFocusChanged { if (it.isFocused) showKeypad = false },
-                            decorationBox = { innerTextField ->
-                                if (note.isEmpty()) {
+                                .weight(1f, fill = false)
+                                .clip(RoundedCornerShape(10.dp))
+                                .clickable { activePanel = RecordWorkspacePanel.CATEGORY }
+                                .padding(vertical = 2.dp, horizontal = 2.dp)
+                        ) {
+                            when (txType) {
+                                TransactionType.TRANSFER -> {
+                                    CartoonAccountIcon(
+                                        iconKey = selectedAccount?.icon ?: "wallet",
+                                        accountName = selectedAccount?.name.orEmpty(),
+                                        colorHex = selectedAccount?.colorHex ?: 0xFF2AA876L,
+                                        size = 34.dp
+                                    )
+                                    Column {
+                                        Text(
+                                            text = "${selectedAccount?.name ?: "转出"} → ${selectedToAccount?.name ?: "转入"}",
+                                            style = MaterialTheme.typography.titleSmall,
+                                            fontWeight = FontWeight.Bold,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        Text(
+                                            text = "账户互转",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                                TransactionType.ADJUST -> {
+                                    CartoonAccountIcon(
+                                        iconKey = selectedAccount?.icon ?: "wallet",
+                                        accountName = selectedAccount?.name.orEmpty(),
+                                        colorHex = selectedAccount?.colorHex ?: 0xFF2AA876L,
+                                        size = 34.dp
+                                    )
+                                    Column {
+                                        Text(
+                                            text = selectedAccount?.name ?: "余额校准",
+                                            style = MaterialTheme.typography.titleSmall,
+                                            fontWeight = FontWeight.Bold,
+                                            maxLines = 1
+                                        )
+                                        Text(
+                                            text = "校准差额",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                }
+                                else -> {
+                                    val cat = selectedCategoryObj
+                                    CartoonCategoryIcon(
+                                        iconKey = cat?.icon ?: "category",
+                                        size = 34.dp,
+                                        fallbackColorHex = cat?.colorHex ?: 0xFF2AA876L
+                                    )
+                                    Column {
+                                        Text(
+                                            text = cat?.name ?: "选分类",
+                                            style = MaterialTheme.typography.titleSmall,
+                                            fontWeight = FontWeight.Bold,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                        if (selectedCategoryParent != null) {
+                                            Text(
+                                                text = selectedCategoryParent.name,
+                                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.5.sp),
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                maxLines = 1
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.weight(1f))
+
+                        // 右侧：紧凑币种胶囊 + 醒目大号数字金额
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Surface(
+                                shape = CircleShape,
+                                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                                border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)),
+                                modifier = Modifier
+                                    .height(26.dp)
+                                    .clip(CircleShape)
+                                    .clickable { showCurrencyPicker = true }
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 7.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(2.dp)
+                                ) {
+                                    Text(text = currencyInfo.flag, fontSize = 11.sp)
                                     Text(
-                                        text = "备注…",
-                                        style = MaterialTheme.typography.bodyMedium.copy(fontSize = 12.5.sp),
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
+                                        text = currencyInfo.code,
+                                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                    Icon(
+                                        imageVector = Icons.Rounded.KeyboardArrowDown,
+                                        contentDescription = "切换币种",
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(12.dp)
                                     )
                                 }
-                                innerTextField()
                             }
-                        )
-                    }
-                }
 
-                val amountScroll = rememberScrollState()
-                LaunchedEffect(amountExpr) {
-                    amountScroll.scrollTo(amountScroll.maxValue)
-                }
-                Column(
-                    horizontalAlignment = Alignment.End,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(8.dp))
-                        .clickable {
-                            focusManager.clearFocus()
-                            showKeypad = true
+                            val amountScroll = rememberScrollState()
+                            LaunchedEffect(amountExpr) {
+                                amountScroll.scrollTo(amountScroll.maxValue)
+                            }
+                            Column(
+                                horizontalAlignment = Alignment.End,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .clickable {
+                                        focusManager.clearFocus()
+                                        showKeypad = true
+                                    }
+                                    .padding(horizontal = 2.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .widthIn(max = 178.dp)
+                                        .horizontalScroll(amountScroll)
+                                ) {
+                                    Text(
+                                        text = "${currencyInfo.symbol}${amountExpr.ifEmpty { "0.00" }}",
+                                        style = MaterialTheme.typography.headlineMedium.copy(
+                                            fontSize = 26.sp,
+                                            lineHeight = 30.sp,
+                                            fontWeight = FontWeight.Bold
+                                        ).tabular(),
+                                        color = if (amountExpr.isEmpty()) accentColor.copy(alpha = 0.42f) else accentColor,
+                                        maxLines = 1,
+                                        softWrap = false
+                                    )
+                                }
+                                if (QuickExprEval.containsOperator(amountExpr) && parsedOrigMicros > 0L) {
+                                    Text(
+                                        text = "= ${MoneyAmount.format(parsedOrigMicros, origCurrency, showCurrencyCode = false)}",
+                                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp).tabular(),
+                                        color = accentColor.copy(alpha = 0.85f),
+                                        maxLines = 1
+                                    )
+                                }
+                            }
                         }
-                        .padding(horizontal = 2.dp)
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .widthIn(max = 172.dp)
-                            .horizontalScroll(amountScroll)
-                    ) {
-                        Text(
-                            text = "${currencyInfo.symbol}${amountExpr.ifEmpty { "0.00" }}",
-                            style = MaterialTheme.typography.headlineSmall.copy(
-                                fontSize = 22.sp,
-                                lineHeight = 26.sp,
-                                fontWeight = FontWeight.Bold
-                            ).tabular(),
-                            color = if (amountExpr.isEmpty()) accentColor.copy(alpha = 0.42f) else accentColor,
-                            maxLines = 1,
-                            softWrap = false
-                        )
                     }
-                    if (QuickExprEval.containsOperator(amountExpr) && parsedOrigMicros > 0L) {
-                        Text(
-                            text = "= ${MoneyAmount.format(parsedOrigMicros, origCurrency, showCurrencyCode = false)}",
-                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.5.sp).tabular(),
-                            color = accentColor.copy(alpha = 0.85f),
-                            maxLines = 1
-                        )
+
+                    // 跨币种汇率折算微条
+                    val baseHintText = preview
+                        ?.takeIf { !origCurrency.equals(baseCurrency, ignoreCase = true) && parsedOrigMicros > 0L }
+                        ?.let { "折算本币 ≈ ${MoneyAmount.format(it.baseAmountMicros, baseCurrency, showCurrencyCode = true)}" }
+                    if (needsSourceConversion || needsTransferConversion || baseHintText != null) {
+                        val canEditRate = needsSourceConversion || needsTransferConversion
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 6.dp)
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.28f))
+                                .then(if (canEditRate) Modifier.clickable { showRateOverrideDialog = true } else Modifier)
+                                .padding(horizontal = 8.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(5.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.CurrencyExchange,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(13.dp)
+                            )
+                            val conversionSummary = buildString {
+                                if (needsSourceConversion) {
+                                    val act = if (txType == TransactionType.INCOME) "实入" else "实扣"
+                                    append("$act ${accountAmountText.ifBlank { "0" }} ${selectedAccount.currencyCode} · 汇率 $rateText")
+                                } else if (needsTransferConversion) {
+                                    append("到账 ${transferToAmountText.ifBlank { "0" }} ${selectedToAccount.currencyCode} · 汇率 $transferRateText")
+                                } else if (baseHintText != null) {
+                                    append(baseHintText)
+                                }
+                            }
+                            Text(
+                                text = conversionSummary,
+                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp).tabular(),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f)
+                            )
+                            if (canEditRate) {
+                                val isManual = manualAccountAmountMicros != null ||
+                                    manualRateToAccountMicros != null ||
+                                    manualToAmountMicros != null ||
+                                    manualTransferRateMicros != null
+                                Text(
+                                    text = if (isManual) "已自定义" else "调汇率",
+                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
+                                    color = MaterialTheme.colorScheme.primary,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                        }
                     }
                 }
             }
 
-            // 3b. 跨币种汇率折算微条（仅当与账户币种或本币不同时显示）
-            val baseHintText = preview
-                ?.takeIf { !origCurrency.equals(baseCurrency, ignoreCase = true) && parsedOrigMicros > 0L }
-                ?.let { "折算本币 ≈ ${MoneyAmount.format(it.baseAmountMicros, baseCurrency, showCurrencyCode = true)}" }
-            if (needsSourceConversion || needsTransferConversion || baseHintText != null) {
-                val canEditRate = needsSourceConversion || needsTransferConversion
-                Surface(
-                    shape = RoundedCornerShape(8.dp),
-                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.28f),
-                    border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.22f)),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 12.dp)
-                        .padding(bottom = 5.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .then(if (canEditRate) Modifier.clickable { showRateOverrideDialog = true } else Modifier)
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Rounded.CurrencyExchange,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(13.dp)
-                        )
-                        val conversionSummary = buildString {
-                            if (needsSourceConversion) {
-                                val act = if (txType == TransactionType.INCOME) "实入" else "实扣"
-                                append("$act ${accountAmountText.ifBlank { "0" }} ${selectedAccount.currencyCode} · 汇率 $rateText")
-                            } else if (needsTransferConversion) {
-                                append("到账 ${transferToAmountText.ifBlank { "0" }} ${selectedToAccount.currencyCode} · 汇率 $transferRateText")
-                            } else if (baseHintText != null) {
-                                append(baseHintText)
+            // 3. 大视野主工作区（根据屏幕余量自适应撑开，流畅切换 5 大面板）
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .padding(horizontal = 12.dp, vertical = 4.dp)
+            ) {
+                AnimatedContent(
+                    targetState = activePanel,
+                    transitionSpec = { fadeIn() togetherWith fadeOut() },
+                    label = "quick_record_workspace_panel"
+                ) { panel ->
+                    when (panel) {
+                        RecordWorkspacePanel.CATEGORY -> {
+                            when (txType) {
+                                TransactionType.EXPENSE, TransactionType.INCOME -> {
+                                    CategoryExplorerPanel(
+                                        txType = txType,
+                                        categories = categories,
+                                        selectedCategoryId = selectedCategoryId,
+                                        recentTransactions = recentTransactions,
+                                        onSelectCategory = { selectedCategoryId = it },
+                                        onCreateCategory = { entity ->
+                                            onQuickCreateCategory?.invoke(entity)
+                                                ?: viewModel.createCategoryAndReturnId(entity)
+                                        },
+                                        onOpenCategoryManager = onOpenCategoryManager,
+                                        onRequestImeFocus = { showKeypad = false },
+                                        onReleaseImeFocus = { },
+                                        modifier = Modifier.fillMaxSize()
+                                    )
+                                }
+                                TransactionType.TRANSFER -> {
+                                    TransferModePanel(
+                                        accounts = accounts,
+                                        selectedAccount = selectedAccount,
+                                        selectedToAccount = selectedToAccount,
+                                        onSelectFrom = { acc ->
+                                            selectedAccountId = acc.id
+                                            origCurrency = acc.currencyCode
+                                            manualAccountAmountMicros = null
+                                            manualRateToAccountMicros = null
+                                            manualToAmountMicros = null
+                                            if (toAccountId == acc.id) {
+                                                toAccountId = accounts.firstOrNull { it.id != acc.id }?.id
+                                            }
+                                        },
+                                        onSelectTo = { acc ->
+                                            toAccountId = acc.id
+                                            manualToAmountMicros = null
+                                        },
+                                        onSwap = {
+                                            val oldFrom = selectedAccount
+                                            val oldTo = selectedToAccount
+                                            if (oldFrom != null && oldTo != null) {
+                                                selectedAccountId = oldTo.id
+                                                toAccountId = oldFrom.id
+                                                origCurrency = oldTo.currencyCode
+                                                manualAccountAmountMicros = null
+                                                manualRateToAccountMicros = null
+                                                manualToAmountMicros = null
+                                            }
+                                        },
+                                        modifier = Modifier.verticalScroll(rememberScrollState())
+                                    )
+                                }
+                                else -> {
+                                    YimuCard(
+                                        containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+                                        cornerRadius = 14.dp
+                                    ) {
+                                        Column(
+                                            modifier = Modifier.padding(14.dp),
+                                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                                        ) {
+                                            Text(
+                                                text = "余额校准",
+                                                style = MaterialTheme.typography.titleSmall,
+                                                fontWeight = FontWeight.SemiBold
+                                            )
+                                            Text(
+                                                text = "${selectedAccount?.name ?: "未选择"} · ${selectedAccount?.currencyCode ?: origCurrency}",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                        }
+                                    }
+                                }
                             }
                         }
-                        Text(
-                            text = conversionSummary,
-                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp).tabular(),
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f)
-                        )
-                        if (canEditRate) {
-                            val isManual = manualAccountAmountMicros != null ||
-                                manualRateToAccountMicros != null ||
-                                manualToAmountMicros != null ||
-                                manualTransferRateMicros != null
-                            Text(
-                                text = if (isManual) "已自定义" else "调整汇率",
-                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
-                                color = MaterialTheme.colorScheme.primary,
-                                fontWeight = FontWeight.SemiBold,
-                                maxLines = 1
+
+                        RecordWorkspacePanel.TAGS -> {
+                            GroupedTagPickerPanel(
+                                selectedTagNames = selectedTagNames,
+                                availableTags = availableTags,
+                                allTransactions = recentTransactions,
+                                onToggleTag = { tagName ->
+                                    val updated = if (tagName in selectedTagNames) {
+                                        selectedTagNames.filterNot { it == tagName }
+                                    } else {
+                                        selectedTagNames + tagName
+                                    }
+                                    tags = TagTextCodec.format(updated)
+                                },
+                                onClearTags = { tags = "" },
+                                onQuickCreateTag = { name, groupName, colorHex, iconKey ->
+                                    tags = TagTextCodec.merge(tags, name)
+                                    val nextSort = (availableTags.maxOfOrNull { it.sortOrder } ?: 280) + 10
+                                    if (onQuickCreateTag != null && groupName == "自定义" && iconKey.isBlank()) {
+                                        onQuickCreateTag.invoke(name, colorHex)
+                                    } else {
+                                        viewModel.createTagSuspend(
+                                            TagEntity(
+                                                name = name,
+                                                groupName = groupName,
+                                                colorHex = colorHex,
+                                                sortOrder = nextSort,
+                                                isSystem = false,
+                                                icon = iconKey
+                                            )
+                                        )
+                                    }
+                                },
+                                onDone = { activePanel = RecordWorkspacePanel.CATEGORY },
+                                onRequestImeFocus = { showKeypad = false },
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        }
+
+                        RecordWorkspacePanel.ACCOUNT -> {
+                            Column(
+                                modifier = Modifier.fillMaxSize(),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                PanelHeaderRow(
+                                    title = if (txType == TransactionType.TRANSFER) "选择转出账户" else "选择结算账户",
+                                    onDone = { activePanel = RecordWorkspacePanel.CATEGORY }
+                                )
+                                GroupedAccountPickerPanel(
+                                    accounts = accounts,
+                                    selectedAccountId = selectedAccountId,
+                                    onSelect = { acc ->
+                                        selectedAccountId = acc.id
+                                        origCurrency = acc.currencyCode
+                                        manualAccountAmountMicros = null
+                                        manualRateToAccountMicros = null
+                                        manualToAmountMicros = null
+                                        if (txType == TransactionType.TRANSFER && toAccountId == acc.id) {
+                                            toAccountId = accounts.firstOrNull { it.id != acc.id }?.id
+                                        }
+                                        activePanel = RecordWorkspacePanel.CATEGORY
+                                    },
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+                        }
+
+                        RecordWorkspacePanel.DATE_TIME -> {
+                            DateTimeQuickPanel(
+                                timestampMillis = timestampMillis,
+                                onUpdateTimestamp = { timestampMillis = it },
+                                onOpenDatePicker = { showDatePicker = true },
+                                onOpenTimePicker = { showTimePicker = true },
+                                onDone = { activePanel = RecordWorkspacePanel.CATEGORY },
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        }
+
+                        RecordWorkspacePanel.MORE -> {
+                            MoreAttributesPanel(
+                                txType = txType,
+                                merchant = merchant,
+                                onMerchantChange = { merchant = it },
+                                reimburseStatus = reimburseStatus,
+                                onReimburseChange = { reimburseStatus = it },
+                                excludeFromStats = excludeFromStats,
+                                onExcludeStatsChange = { excludeFromStats = it },
+                                excludeFromBudget = excludeFromBudget,
+                                onExcludeBudgetChange = { excludeFromBudget = it },
+                                selectableLedgers = selectableLedgers,
+                                selectedLedgerId = selectedLedgerId,
+                                onOpenLedgerPicker = { showLedgerPicker = true },
+                                attachmentPaths = attachmentPaths,
+                                isAnalyzingReceipt = isAnalyzingReceipt,
+                                onAddAttachment = openImagePicker,
+                                onRemoveAttachment = { path ->
+                                    attachmentPaths = attachmentPaths.filterNot { it == path }
+                                },
+                                onPreviewAttachment = { previewImagePath = it },
+                                onAnalyzeReceipt = if (onAnalyzeReceiptImage != null) analyzeLastReceipt else null,
+                                onRequestImeFocus = { showKeypad = false },
+                                onDone = { activePanel = RecordWorkspacePanel.CATEGORY },
+                                modifier = Modifier.fillMaxSize()
                             )
                         }
                     }
                 }
             }
 
-            // 3c. 水平滚动属性微胶囊栏（~28dp 高）
-            LazyRow(
+            // 4. 底部高频工作台（仅保留 4 颗高价值属性胶囊 + 独立宽敞备注行 + 舒适键盘）
+            CompactHairlineDivider(startIndent = 0.dp)
+
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(bottom = 4.dp),
-                contentPadding = PaddingValues(horizontal = 12.dp),
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                item(key = "attr_account") {
-                    WorkbenchAttrChip(
-                        icon = Icons.Rounded.AccountBalanceWallet,
-                        label = selectedAccount?.let { acc ->
-                            if (acc.currencyCode.equals(origCurrency, ignoreCase = true)) acc.name else "${acc.name}(${acc.currencyCode})"
-                        } ?: "选账户",
-                        selected = selectedAccount != null,
-                        accentColor = selectedAccount?.let { Color(it.colorHex) } ?: MaterialTheme.colorScheme.error,
-                        onClick = { showAccountPicker = true }
-                    )
-                }
-
-                if (selectableLedgers.isNotEmpty()) {
-                    item(key = "attr_ledger") {
-                        WorkbenchAttrChip(
-                            icon = selectedLedger?.let { KairoIcons.ledgerIcon(it.icon) }
-                                ?: Icons.AutoMirrored.Rounded.MenuBook,
-                            label = selectedLedger?.name ?: "账本",
-                            selected = selectableLedgers.size > 1,
-                            accentColor = selectedLedger?.let { Color(it.colorHex) } ?: MaterialTheme.colorScheme.primary,
-                            onClick = {
-                                if (selectableLedgers.size > 1) {
-                                    showLedgerPicker = true
-                                } else {
-                                    viewModel.showMessage("当前仅有一个可用账本")
-                                }
-                            }
-                        )
-                    }
-                }
-
-                item(key = "attr_date") {
-                    WorkbenchAttrChip(
-                        icon = Icons.Rounded.CalendarMonth,
-                        label = formatCompactDateChip(timestampMillis),
-                        selected = false,
-                        onClick = { showDatePicker = true }
-                    )
-                }
-
-                item(key = "attr_time") {
-                    WorkbenchAttrChip(
-                        icon = Icons.Rounded.Schedule,
-                        label = KairoFormats.formatTime(timestampMillis),
-                        selected = false,
-                        onClick = { showTimePicker = true }
-                    )
-                }
-
-                item(key = "attr_tags") {
-                    WorkbenchAttrChip(
-                        icon = Icons.AutoMirrored.Rounded.Label,
-                        label = if (selectedTagNames.isEmpty()) "标签" else "标签(${selectedTagNames.size})",
-                        selected = showTagPanel || selectedTagNames.isNotEmpty(),
-                        onClick = { showTagPanel = !showTagPanel }
-                    )
-                }
-
-                item(key = "attr_receipt") {
-                    WorkbenchAttrChip(
-                        icon = Icons.Rounded.AddPhotoAlternate,
-                        label = if (attachmentPaths.isEmpty()) "票据/AI" else "票据(${attachmentPaths.size})",
-                        selected = attachmentPaths.isNotEmpty(),
-                        onClick = {
-                            runCatching {
-                                pickImageLauncher.launch(
-                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                                )
-                            }.onFailure {
-                                runCatching {
-                                    fallbackImageLauncher.launch("image/*")
-                                }.onFailure {
-                                    viewModel.showMessage("无法打开系统相册，请检查相册权限后重试")
-                                }
-                            }
+                WorkbenchAttrChip(
+                    icon = Icons.Rounded.AccountBalanceWallet,
+                    customLeading = selectedAccount?.let { acc ->
+                        {
+                            CartoonAccountIcon(
+                                iconKey = acc.icon,
+                                accountName = acc.name,
+                                colorHex = acc.colorHex,
+                                size = 16.dp
+                            )
                         }
-                    )
-                }
-
-                item(key = "attr_merchant") {
-                    WorkbenchAttrChip(
-                        icon = Icons.Rounded.Storefront,
-                        label = if (merchant.isBlank()) "商户" else merchant,
-                        selected = merchant.isNotBlank(),
-                        onClick = { showMerchantDialog = true }
-                    )
-                }
-
-                item(key = "attr_reimburse") {
-                    Box {
-                        val reimburseLabel = when (reimburseStatus) {
-                            ReimburseStatus.PENDING -> "待报销"
-                            ReimburseStatus.REIMBURSED -> "已报销"
-                            else -> "报销"
-                        }
-                        WorkbenchAttrChip(
-                            icon = Icons.AutoMirrored.Rounded.ReceiptLong,
-                            label = reimburseLabel,
-                            selected = reimburseStatus != ReimburseStatus.NONE,
-                            onClick = { showReimburseMenu = true }
-                        )
-                        DropdownMenu(
-                            expanded = showReimburseMenu,
-                            onDismissRequest = { showReimburseMenu = false }
-                        ) {
-                            listOf(
-                                ReimburseStatus.NONE to "不报销",
-                                ReimburseStatus.PENDING to "待报销",
-                                ReimburseStatus.REIMBURSED to "已报销"
-                            ).forEach { (statusCode, label) ->
-                                DropdownMenuItem(
-                                    text = { Text(label, style = MaterialTheme.typography.bodyMedium) },
-                                    trailingIcon = if (reimburseStatus == statusCode) {
-                                        {
-                                            Icon(
-                                                imageVector = Icons.Rounded.Check,
-                                                contentDescription = null,
-                                                tint = MaterialTheme.colorScheme.primary,
-                                                modifier = Modifier.size(16.dp)
-                                            )
-                                        }
-                                    } else null,
-                                    onClick = {
-                                        reimburseStatus = statusCode
-                                        showReimburseMenu = false
-                                    }
-                                )
-                            }
-                        }
-                    }
-                }
-
-                item(key = "attr_exclude_stats") {
-                    WorkbenchAttrChip(
-                        icon = null,
-                        label = "不计收支",
-                        selected = excludeFromStats,
-                        onClick = { excludeFromStats = !excludeFromStats }
-                    )
-                }
-
-                item(key = "attr_exclude_budget") {
-                    WorkbenchAttrChip(
-                        icon = null,
-                        label = "不计预算",
-                        selected = excludeFromBudget,
-                        onClick = { excludeFromBudget = !excludeFromBudget }
-                    )
-                }
-            }
-
-            // 3d. 可展开标签选择与快速新建面板
-            AnimatedVisibility(visible = showTagPanel) {
-                val allTxs by viewModel.allTransactions.collectAsStateWithLifecycle()
-                TagSelectorPanel(
-                    selectedTagNames = selectedTagNames,
-                    availableTags = availableTags,
-                    localCreatedTagColors = localCreatedTagColors,
-                    allTransactions = allTxs,
-                    onToggleTag = { tagName ->
-                        val updated = if (tagName in selectedTagNames) {
-                            selectedTagNames.filterNot { it == tagName }
-                        } else {
-                            selectedTagNames + tagName
-                        }
-                        tags = TagTextCodec.format(updated)
                     },
-                    onClearTags = { tags = "" },
-                    onNewTag = { showQuickCreateTagDialog = true },
-                    onCollapse = { showTagPanel = false }
+                    label = selectedAccount?.name ?: "选账户",
+                    selected = activePanel == RecordWorkspacePanel.ACCOUNT || selectedAccount != null,
+                    accentColor = selectedAccount?.let { Color(it.colorHex) } ?: MaterialTheme.colorScheme.error,
+                    onClick = {
+                        activePanel = if (activePanel == RecordWorkspacePanel.ACCOUNT) {
+                            RecordWorkspacePanel.CATEGORY
+                        } else {
+                            RecordWorkspacePanel.ACCOUNT
+                        }
+                    },
+                    modifier = Modifier.weight(1.1f)
+                )
+
+                WorkbenchAttrChip(
+                    icon = Icons.Rounded.Schedule,
+                    label = formatSmartDateTimeChip(timestampMillis),
+                    selected = activePanel == RecordWorkspacePanel.DATE_TIME,
+                    accentColor = MaterialTheme.colorScheme.primary,
+                    onClick = {
+                        activePanel = if (activePanel == RecordWorkspacePanel.DATE_TIME) {
+                            RecordWorkspacePanel.CATEGORY
+                        } else {
+                            RecordWorkspacePanel.DATE_TIME
+                        }
+                    },
+                    modifier = Modifier.weight(1.15f)
+                )
+
+                WorkbenchAttrChip(
+                    icon = Icons.AutoMirrored.Rounded.Label,
+                    label = if (selectedTagNames.isEmpty()) "标签" else "标签(${selectedTagNames.size})",
+                    selected = activePanel == RecordWorkspacePanel.TAGS || selectedTagNames.isNotEmpty(),
+                    accentColor = MaterialTheme.colorScheme.primary,
+                    onClick = {
+                        activePanel = if (activePanel == RecordWorkspacePanel.TAGS) {
+                            RecordWorkspacePanel.CATEGORY
+                        } else {
+                            RecordWorkspacePanel.TAGS
+                        }
+                    },
+                    modifier = Modifier.weight(0.95f)
+                )
+
+                WorkbenchAttrChip(
+                    icon = Icons.Rounded.Tune,
+                    label = if (moreActiveCount == 0) "更多" else "更多($moreActiveCount)",
+                    selected = activePanel == RecordWorkspacePanel.MORE || moreActiveCount > 0,
+                    accentColor = MaterialTheme.colorScheme.primary,
+                    onClick = {
+                        activePanel = if (activePanel == RecordWorkspacePanel.MORE) {
+                            RecordWorkspacePanel.CATEGORY
+                        } else {
+                            RecordWorkspacePanel.MORE
+                        }
+                    },
+                    modifier = Modifier.weight(0.9f)
                 )
             }
 
-            // 3e. 已选标签或票据缩略图极薄一行预览带
-            AnimatedVisibility(visible = (!showTagPanel && selectedTagNames.isNotEmpty()) || attachmentPaths.isNotEmpty()) {
-                val tagColorMap = remember(availableTags, localCreatedTagColors) {
-                    val map = LinkedHashMap<String, Long>(availableTags.size + localCreatedTagColors.size)
-                    availableTags.forEach { map[it.name] = it.colorHex }
-                    localCreatedTagColors.forEach { (k, v) -> map[k] = v }
-                    map
+            // 已选标签 / 票据轻量摘要带（仅当非标签页且存在内容时展示，点标签直达标签页）
+            AnimatedVisibility(
+                visible = (activePanel != RecordWorkspacePanel.TAGS && selectedTagNames.isNotEmpty()) ||
+                    (activePanel != RecordWorkspacePanel.MORE && attachmentPaths.isNotEmpty())
+            ) {
+                val tagColorMap = remember(availableTags) {
+                    availableTags.associate { it.name to it.colorHex }
                 }
                 val tagIconMap = remember(availableTags) {
                     availableTags.associate { it.name to it.icon }
@@ -1806,84 +1432,61 @@ fun QuickRecordSheet(
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    if (!showTagPanel) {
-                        items(selectedTagNames, key = { "tag_$it" }) { tagName ->
-                            val colorHex = tagColorMap[tagName] ?: KairoIcons.fallbackTagColorHex(tagName)
+                    if (activePanel != RecordWorkspacePanel.TAGS) {
+                        items(selectedTagNames, key = { "sum_tag_$it" }) { tagName ->
+                            val colorHex = tagColorMap[tagName] ?: RecordUsageRanker.stableFallbackColorHex(tagName)
                             TagBadgeChip(
                                 name = tagName,
                                 colorHex = colorHex,
                                 selected = true,
                                 compact = true,
-                                onClick = { showTagPanel = true },
+                                onClick = { activePanel = RecordWorkspacePanel.TAGS },
                                 iconKey = tagIconMap[tagName].orEmpty()
                             )
                         }
                     }
 
-                    items(attachmentPaths, key = { "img_$it" }) { path ->
-                        Box(modifier = Modifier.size(28.dp)) {
+                    items(attachmentPaths, key = { "sum_img_$it" }) { path ->
+                        Box(modifier = Modifier.size(26.dp)) {
                             ReceiptThumbnailImage(
                                 path = path,
-                                maxSizePx = 160,
+                                maxSizePx = 140,
                                 modifier = Modifier
                                     .fillMaxSize()
                                     .clip(RoundedCornerShape(6.dp))
                                     .clickable { previewImagePath = path }
                             )
-                            Surface(
-                                shape = CircleShape,
-                                color = Color.Black.copy(alpha = 0.65f),
-                                modifier = Modifier
-                                    .align(Alignment.TopEnd)
-                                    .size(13.dp)
-                                    .clickable {
-                                        attachmentPaths = attachmentPaths.filterNot { it == path }
-                                    }
-                            ) {
-                                Box(contentAlignment = Alignment.Center) {
-                                    Icon(
-                                        imageVector = Icons.Rounded.Close,
-                                        contentDescription = "移除图片",
-                                        tint = Color.White,
-                                        modifier = Modifier.size(9.dp)
-                                    )
-                                }
-                            }
                         }
                     }
 
                     if (attachmentPaths.isNotEmpty() && onAnalyzeReceiptImage != null) {
-                        item(key = "ai_scan_pill") {
+                        item(key = "sum_ai_scan") {
                             Surface(
                                 shape = CircleShape,
                                 color = MaterialTheme.colorScheme.primaryContainer,
-                                border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)),
                                 modifier = Modifier
-                                    .height(26.dp)
+                                    .height(24.dp)
                                     .clip(CircleShape)
                                     .clickable(enabled = !isAnalyzingReceipt, onClick = analyzeLastReceipt)
                             ) {
                                 Row(
                                     modifier = Modifier.padding(horizontal = 8.dp),
                                     verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                    horizontalArrangement = Arrangement.spacedBy(3.dp)
                                 ) {
                                     if (isAnalyzingReceipt) {
-                                        CircularProgressIndicator(
-                                            modifier = Modifier.size(11.dp),
-                                            strokeWidth = 1.6.dp
-                                        )
+                                        CircularProgressIndicator(modifier = Modifier.size(10.dp), strokeWidth = 1.5.dp)
                                     } else {
                                         Icon(
                                             imageVector = Icons.Rounded.AutoAwesome,
                                             contentDescription = null,
                                             tint = MaterialTheme.colorScheme.primary,
-                                            modifier = Modifier.size(12.dp)
+                                            modifier = Modifier.size(11.dp)
                                         )
                                     }
                                     Text(
-                                        text = if (isAnalyzingReceipt) "识别中..." else "AI识图填单",
-                                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.5.sp),
+                                        text = if (isAnalyzingReceipt) "识别中" else "AI识图",
+                                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
                                         color = MaterialTheme.colorScheme.onPrimaryContainer,
                                         fontWeight = FontWeight.SemiBold
                                     )
@@ -1894,11 +1497,110 @@ fun QuickRecordSheet(
                 }
             }
 
-            // 3f. 紧贴底部的轻薄 4 列自定义数字/计算器键盘或确认栏
+            // 独立宽敞备注行 + 票据快捷图标
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp)
+                    .padding(bottom = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerLow,
+                    border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)),
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(36.dp)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(horizontal = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier.weight(1f),
+                            contentAlignment = Alignment.CenterStart
+                        ) {
+                            if (note.isEmpty()) {
+                                Text(
+                                    text = if (merchant.isNotBlank()) "备注（商户：$merchant）" else "添加备注…",
+                                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.sp),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                            BasicTextField(
+                                value = note,
+                                onValueChange = { note = it },
+                                singleLine = true,
+                                textStyle = MaterialTheme.typography.bodyMedium.copy(
+                                    fontSize = 13.sp,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                ),
+                                cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                                keyboardActions = KeyboardActions(
+                                    onDone = {
+                                        focusManager.clearFocus()
+                                        showKeypad = true
+                                    }
+                                ),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .onFocusChanged { if (it.isFocused) showKeypad = false }
+                            )
+                        }
+                        if (note.isNotEmpty()) {
+                            Icon(
+                                imageVector = Icons.Rounded.Close,
+                                contentDescription = "清空备注",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier
+                                    .size(15.dp)
+                                    .clip(CircleShape)
+                                    .clickable { note = "" }
+                            )
+                        }
+                    }
+                }
+
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = if (attachmentPaths.isNotEmpty()) {
+                        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.75f)
+                    } else {
+                        MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.7f)
+                    },
+                    modifier = Modifier
+                        .size(36.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .clickable(onClick = openImagePicker)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = Icons.Rounded.PhotoLibrary,
+                            contentDescription = "小票图片",
+                            tint = if (attachmentPaths.isNotEmpty()) {
+                                MaterialTheme.colorScheme.primary
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            },
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                }
+            }
+
+            // 5. 舒适触控计算器键盘 / 完成栏
             CompactHairlineDivider(startIndent = 0.dp)
 
             if (showKeypad) {
-                CalculatorKeypad(
+                CompactCalculatorKeypad(
                     hasOperator = QuickExprEval.containsOperator(amountExpr),
                     onDigit = { d -> amountExpr = QuickExprEval.appendDigit(amountExpr, d) },
                     onDot = { amountExpr = QuickExprEval.appendDot(amountExpr) },
@@ -1921,16 +1623,19 @@ fun QuickRecordSheet(
                     },
                     onClear = { amountExpr = "" },
                     onHideKeypad = { showKeypad = false },
-                    onSave = performSave,
-                    saveLabel = if (isEditMode) "保存" else "完成"
+                    onSave = { saveWithMode(false) },
+                    saveLabel = if (isEditMode) "保存" else "完成",
+                    showSaveAndContinue = !isEditMode && !isRefundMode,
+                    onSaveAndContinue = { saveWithMode(true) },
+                    keyHeight = 44.dp
                 )
             } else {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .background(MaterialTheme.colorScheme.surfaceContainerLowest)
-                        .padding(horizontal = 12.dp, vertical = 6.dp),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     TextButton(
@@ -1940,16 +1645,25 @@ fun QuickRecordSheet(
                         },
                         contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
                     ) {
-                        Icon(Icons.Rounded.Calculate, null, modifier = Modifier.size(17.dp))
+                        Icon(Icons.Rounded.Calculate, null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text("数字键盘", style = MaterialTheme.typography.labelLarge)
+                        Text("键盘", style = MaterialTheme.typography.labelLarge)
+                    }
+                    if (!isEditMode && !isRefundMode) {
+                        FilledTonalButton(
+                            onClick = { saveWithMode(true) },
+                            shape = RoundedCornerShape(11.dp),
+                            modifier = Modifier.height(42.dp)
+                        ) {
+                            Text("再记一笔", fontWeight = FontWeight.SemiBold)
+                        }
                     }
                     Button(
-                        onClick = performSave,
-                        shape = RoundedCornerShape(10.dp),
+                        onClick = { saveWithMode(false) },
+                        shape = RoundedCornerShape(11.dp),
                         modifier = Modifier
                             .weight(1f)
-                            .height(40.dp)
+                            .height(42.dp)
                     ) {
                         Icon(Icons.Rounded.Check, null, modifier = Modifier.size(17.dp))
                         Spacer(modifier = Modifier.width(5.dp))
@@ -1985,25 +1699,6 @@ fun QuickRecordSheet(
         )
     }
 
-    if (showAccountPicker) {
-        AccountPickerDialog(
-            accounts = accounts,
-            selectedAccountId = selectedAccountId,
-            onSelect = { acc ->
-                selectedAccountId = acc.id
-                origCurrency = acc.currencyCode
-                manualAccountAmountMicros = null
-                manualRateToAccountMicros = null
-                manualToAmountMicros = null
-                if (txType == TransactionType.TRANSFER && toAccountId == acc.id) {
-                    toAccountId = accounts.firstOrNull { it.id != acc.id }?.id
-                }
-                showAccountPicker = false
-            },
-            onDismiss = { showAccountPicker = false }
-        )
-    }
-
     if (showLedgerPicker) {
         LedgerPickerDialog(
             ledgers = selectableLedgers,
@@ -2013,17 +1708,6 @@ fun QuickRecordSheet(
                 showLedgerPicker = false
             },
             onDismiss = { showLedgerPicker = false }
-        )
-    }
-
-    if (showMerchantDialog) {
-        MerchantEditDialog(
-            initialMerchant = merchant,
-            onConfirm = { value ->
-                merchant = value
-                showMerchantDialog = false
-            },
-            onDismiss = { showMerchantDialog = false }
         )
     }
 
@@ -2191,209 +1875,389 @@ fun QuickRecordSheet(
             onDismiss = { showDeleteConfirm = false }
         )
     }
+}
 
-    if (showQuickCreateTagDialog) {
-        QuickCreateTagDialog(
-            onConfirm = { name, colorHex ->
-                localCreatedTagColors = localCreatedTagColors + (name to colorHex)
-                tags = TagTextCodec.merge(tags, name)
-                onQuickCreateTag?.invoke(name, colorHex)
-                showQuickCreateTagDialog = false
-            },
-            onDismiss = { showQuickCreateTagDialog = false }
+@Composable
+private fun PanelHeaderRow(
+    title: String,
+    onDone: () -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.Bold
         )
+        Surface(
+            shape = CircleShape,
+            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            modifier = Modifier
+                .clip(CircleShape)
+                .clickable(onClick = onDone)
+        ) {
+            Text(
+                text = "返回分类",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.primary,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+            )
+        }
     }
 }
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun QuickCreateTagDialog(
-    onConfirm: (name: String, colorHex: Long) -> Unit,
-    onDismiss: () -> Unit
+private fun DateTimeQuickPanel(
+    timestampMillis: Long,
+    onUpdateTimestamp: (Long) -> Unit,
+    onOpenDatePicker: () -> Unit,
+    onOpenTimePicker: () -> Unit,
+    onDone: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
-    var name by remember { mutableStateOf("") }
-    var selectedColor by remember { mutableStateOf(KairoIcons.selectableColorPalette.first()) }
-    var nameError by remember { mutableStateOf(false) }
+    val zone = ZoneId.systemDefault()
+    val currentTime = remember(timestampMillis) {
+        Instant.ofEpochMilli(timestampMillis).atZone(zone).toLocalDateTime().toLocalTime()
+    }
+    val today = remember { LocalDate.now(zone) }
 
-    YubraeDialog(
-        onDismissRequest = onDismiss,
-        title = "新建标签",
-        icon = Icons.AutoMirrored.Rounded.Label,
-        iconTint = Color(selectedColor),
-        iconContainerColor = Color(selectedColor).copy(alpha = 0.14f),
-        confirmButton = {
-            Button(
-                onClick = {
-                    val trimmed = name.trim()
-                    if (trimmed.isEmpty()) {
-                        nameError = true
-                    } else {
-                        onConfirm(trimmed, selectedColor)
-                    }
-                },
-                shape = RoundedCornerShape(12.dp)
-            ) {
-                Text("创建并选中")
-            }
-        },
-        dismissButton = {
-            TextButton(
-                onClick = onDismiss,
-                shape = RoundedCornerShape(12.dp)
-            ) { Text("取消") }
-        }
+    Column(
+        modifier = modifier.verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            OutlinedTextField(
-                value = name,
-                onValueChange = {
-                    name = it
-                    if (it.isNotBlank()) nameError = false
-                },
-                label = { Text("标签名称") },
-                placeholder = { Text("如：聚会、咖啡") },
-                isError = nameError,
-                supportingText = if (nameError) {
-                    { Text("请输入标签名称") }
-                } else null,
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth()
+        PanelHeaderRow(title = "日期与时间", onDone = onDone)
+
+        Surface(
+            shape = RoundedCornerShape(14.dp),
+            color = MaterialTheme.colorScheme.surfaceContainerLow,
+            border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(
+                modifier = Modifier.padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Text(
+                    text = "当前记账时间",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    text = KairoFormats.formatDateTime(timestampMillis),
+                    style = MaterialTheme.typography.titleLarge.tabular(),
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+        }
+
+        Text(
+            text = "快捷切换",
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            val presets = listOf(
+                "此刻" to { System.currentTimeMillis() },
+                "今天" to { LocalDateTime.of(today, currentTime).atZone(zone).toInstant().toEpochMilli() },
+                "昨天" to { LocalDateTime.of(today.minusDays(1), currentTime).atZone(zone).toInstant().toEpochMilli() },
+                "前天" to { LocalDateTime.of(today.minusDays(2), currentTime).atZone(zone).toInstant().toEpochMilli() }
             )
+            presets.forEach { (label, resolver) ->
+                Surface(
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    modifier = Modifier
+                        .clip(CircleShape)
+                        .clickable { onUpdateTimestamp(resolver()) }
+                ) {
+                    Text(
+                        text = label,
+                        style = MaterialTheme.typography.labelLarge,
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp)
+                    )
+                }
+            }
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            FilledTonalButton(
+                onClick = onOpenDatePicker,
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.weight(1f)
+            ) {
+                Icon(Icons.Rounded.CalendarMonth, null, modifier = Modifier.size(17.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("自选日期")
+            }
+            FilledTonalButton(
+                onClick = onOpenTimePicker,
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.weight(1f)
+            ) {
+                Icon(Icons.Rounded.Schedule, null, modifier = Modifier.size(17.dp))
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("自选时间")
+            }
+        }
+    }
+}
+
+@Composable
+private fun MoreAttributesPanel(
+    txType: String,
+    merchant: String,
+    onMerchantChange: (String) -> Unit,
+    reimburseStatus: String,
+    onReimburseChange: (String) -> Unit,
+    excludeFromStats: Boolean,
+    onExcludeStatsChange: (Boolean) -> Unit,
+    excludeFromBudget: Boolean,
+    onExcludeBudgetChange: (Boolean) -> Unit,
+    selectableLedgers: List<LedgerEntity>,
+    selectedLedgerId: Long,
+    onOpenLedgerPicker: () -> Unit,
+    attachmentPaths: List<String>,
+    isAnalyzingReceipt: Boolean,
+    onAddAttachment: () -> Unit,
+    onRemoveAttachment: (String) -> Unit,
+    onPreviewAttachment: (String) -> Unit,
+    onAnalyzeReceipt: (() -> Unit)?,
+    onRequestImeFocus: () -> Unit,
+    onDone: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val focusManager = LocalFocusManager.current
+
+    Column(
+        modifier = modifier.verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        PanelHeaderRow(title = "商户、报销与高级设置", onDone = onDone)
+
+        // 商户直输（无需二级 Dialog）
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(
-                text = "选择颜色",
+                text = "商户或交易对象",
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            FlowRow(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                KairoIcons.selectableColorPalette.forEach { hex ->
-                    val isSelected = selectedColor == hex
-                    Box(
-                        modifier = Modifier
-                            .size(28.dp)
-                            .clip(CircleShape)
-                            .background(Color(hex))
-                            .then(
-                                if (isSelected) {
-                                    Modifier.border(
-                                        BorderStroke(2.dp, MaterialTheme.colorScheme.onSurface),
-                                        CircleShape
-                                    )
+            InlineSearchInputBar(
+                query = merchant,
+                onQueryChange = onMerchantChange,
+                placeholder = "如：星巴克、京东超市、房东",
+                leadingIcon = Icons.Rounded.Storefront,
+                onFocusGained = onRequestImeFocus,
+                onDone = { focusManager.clearFocus() },
+                height = 38.dp
+            )
+        }
+
+        if (txType == TransactionType.EXPENSE) {
+            Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                Text(
+                    text = "报销状态",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    listOf(
+                        ReimburseStatus.NONE to "不报销",
+                        ReimburseStatus.PENDING to "待报销",
+                        ReimburseStatus.REIMBURSED to "已报销"
+                    ).forEach { (code, label) ->
+                        val selected = reimburseStatus == code
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = if (selected) {
+                                MaterialTheme.colorScheme.primaryContainer
+                            } else {
+                                MaterialTheme.colorScheme.surfaceContainerLow
+                            },
+                            border = BorderStroke(
+                                width = if (selected) 1.dp else 0.5.dp,
+                                color = if (selected) {
+                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.65f)
                                 } else {
-                                    Modifier
+                                    MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)
                                 }
-                            )
-                            .clickable { selectedColor = hex },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        if (isSelected) {
-                            Icon(
-                                imageVector = Icons.Rounded.Check,
-                                contentDescription = "已选颜色",
-                                tint = Color.White,
-                                modifier = Modifier.size(15.dp)
-                            )
+                            ),
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(10.dp))
+                                .clickable { onReimburseChange(code) }
+                        ) {
+                            Box(
+                                modifier = Modifier.padding(vertical = 8.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = label,
+                                    style = MaterialTheme.typography.labelLarge,
+                                    color = if (selected) {
+                                        MaterialTheme.colorScheme.onPrimaryContainer
+                                    } else {
+                                        MaterialTheme.colorScheme.onSurface
+                                    },
+                                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
+                                )
+                            }
                         }
                     }
                 }
             }
         }
-    }
-}
 
-private fun formatCompactDateChip(epochMillis: Long): String {
-    val zone = ZoneId.systemDefault()
-    val date = Instant.ofEpochMilli(epochMillis).atZone(zone).toLocalDate()
-    val today = LocalDate.now(zone)
-    return when (date) {
-        today -> "今天"
-        today.minusDays(1) -> "昨天"
-        else -> if (date.year == today.year) {
-            "${date.monthValue}/${date.dayOfMonth}"
-        } else {
-            "${date.year % 100}/${date.monthValue}/${date.dayOfMonth}"
-        }
-    }
-}
-
-@Composable
-private fun CategoryGridCell(
-    category: CategoryEntity,
-    selected: Boolean,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    val catColor = Color(category.colorHex)
-    Column(
-        modifier = modifier
-            .clip(RoundedCornerShape(9.dp))
-            .background(if (selected) catColor.copy(alpha = 0.08f) else Color.Transparent)
-            .clickable(onClick = onClick)
-            .padding(vertical = 2.5.dp, horizontal = 2.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(2.dp)
-    ) {
-        CategoryIconBadge(
-            iconKey = category.icon,
-            colorHex = category.colorHex,
-            size = 32.dp,
-            iconSize = 16.dp,
-            selected = selected
-        )
-        Text(
-            text = category.name,
-            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.5.sp, lineHeight = 13.sp),
-            color = if (selected) catColor else MaterialTheme.colorScheme.onSurfaceVariant,
-            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            textAlign = TextAlign.Center
-        )
-    }
-}
-
-@Composable
-private fun CategorySelectChip(
-    category: CategoryEntity,
-    selected: Boolean,
-    compact: Boolean = false,
-    onClick: () -> Unit
-) {
-    val catColor = Color(category.colorHex)
-    Surface(
-        shape = CircleShape,
-        color = if (selected) catColor.copy(alpha = 0.16f) else MaterialTheme.colorScheme.surfaceContainerHigh,
-        border = if (selected) BorderStroke(1.dp, catColor.copy(alpha = 0.85f)) else null,
-        modifier = Modifier
-            .clip(CircleShape)
-            .clickable(onClick = onClick)
-    ) {
-        Row(
-            modifier = Modifier.padding(
-                horizontal = if (compact) 8.dp else 11.dp,
-                vertical = if (compact) 3.5.dp else 6.dp
-            ),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp)
+        Surface(
+            shape = RoundedCornerShape(12.dp),
+            color = MaterialTheme.colorScheme.surfaceContainerLow,
+            border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)),
+            modifier = Modifier.fillMaxWidth()
         ) {
-            Icon(
-                imageVector = KairoIcons.iconFor(category.icon),
-                contentDescription = null,
-                tint = if (selected) catColor else MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(if (compact) 13.dp else 15.dp)
-            )
-            Text(
-                text = category.name,
-                style = MaterialTheme.typography.labelMedium.copy(
-                    fontSize = if (compact) 11.5.sp else 12.sp
-                ),
-                color = if (selected) catColor else MaterialTheme.colorScheme.onSurface,
-                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
+            Column(modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)) {
+                CompactSwitchRow(
+                    title = "不计入收支统计",
+                    detail = "常见于转账垫付、内部资金调拨",
+                    checked = excludeFromStats,
+                    onCheckedChange = onExcludeStatsChange
+                )
+                CompactHairlineDivider(startIndent = 0.dp)
+                CompactSwitchRow(
+                    title = "不计入预算消耗",
+                    detail = "保留账单明细，但不扣减月度预算",
+                    checked = excludeFromBudget,
+                    onCheckedChange = onExcludeBudgetChange
+                )
+            }
+        }
+
+        if (selectableLedgers.size > 1) {
+            val currentLedger = selectableLedgers.firstOrNull { it.id == selectedLedgerId }
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerLow,
+                border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .clickable(onClick = onOpenLedgerPicker)
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Icon(
+                        imageVector = currentLedger?.let { KairoIcons.ledgerIcon(it.icon) }
+                            ?: Icons.AutoMirrored.Rounded.MenuBook,
+                        contentDescription = null,
+                        tint = currentLedger?.let { Color(it.colorHex) } ?: MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Text(
+                        text = "所属账本",
+                        style = MaterialTheme.typography.titleSmall,
+                        modifier = Modifier.weight(1f)
+                    )
+                    Text(
+                        text = currentLedger?.name ?: "默认账本",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+            }
+        }
+
+        // 小票附件与 AI 识图管理
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = "票据照片 (${attachmentPaths.size})",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (attachmentPaths.isNotEmpty() && onAnalyzeReceipt != null) {
+                        FilledTonalButton(
+                            onClick = onAnalyzeReceipt,
+                            enabled = !isAnalyzingReceipt,
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                            modifier = Modifier.height(30.dp)
+                        ) {
+                            if (isAnalyzingReceipt) {
+                                CircularProgressIndicator(modifier = Modifier.size(12.dp), strokeWidth = 1.6.dp)
+                            } else {
+                                Icon(Icons.Rounded.AutoAwesome, null, modifier = Modifier.size(13.dp))
+                            }
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(if (isAnalyzingReceipt) "识别中" else "AI识图填单", style = MaterialTheme.typography.labelSmall)
+                        }
+                    }
+                    FilledTonalButton(
+                        onClick = onAddAttachment,
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                        modifier = Modifier.height(30.dp)
+                    ) {
+                        Icon(Icons.Rounded.Add, null, modifier = Modifier.size(13.dp))
+                        Spacer(modifier = Modifier.width(3.dp))
+                        Text("添加图片", style = MaterialTheme.typography.labelSmall)
+                    }
+                }
+            }
+
+            if (attachmentPaths.isNotEmpty()) {
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(attachmentPaths, key = { "more_img_$it" }) { path ->
+                        Box(modifier = Modifier.size(56.dp)) {
+                            ReceiptThumbnailImage(
+                                path = path,
+                                maxSizePx = 220,
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .clickable { onPreviewAttachment(path) }
+                            )
+                            Surface(
+                                shape = CircleShape,
+                                color = Color.Black.copy(alpha = 0.65f),
+                                modifier = Modifier
+                                    .align(Alignment.TopEnd)
+                                    .padding(2.dp)
+                                    .size(16.dp)
+                                    .clickable { onRemoveAttachment(path) }
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Close,
+                                        contentDescription = "移除图片",
+                                        tint = Color.White,
+                                        modifier = Modifier.size(11.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -2405,10 +2269,13 @@ private fun TransferModePanel(
     selectedToAccount: AccountEntity?,
     onSelectFrom: (AccountEntity) -> Unit,
     onSelectTo: (AccountEntity) -> Unit,
-    onSwap: () -> Unit
+    onSwap: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        // 紧致转出 / 互换 / 转入双格卡
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
@@ -2422,9 +2289,9 @@ private fun TransferModePanel(
             Surface(
                 shape = CircleShape,
                 color = MaterialTheme.colorScheme.primaryContainer,
-                border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)),
+                border = BorderStroke(0.6.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)),
                 modifier = Modifier
-                    .size(34.dp)
+                    .size(36.dp)
                     .clip(CircleShape)
                     .clickable(enabled = selectedAccount != null && selectedToAccount != null, onClick = onSwap)
             ) {
@@ -2433,7 +2300,7 @@ private fun TransferModePanel(
                         imageVector = Icons.Rounded.SwapHoriz,
                         contentDescription = "互换账户",
                         tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(18.dp)
+                        modifier = Modifier.size(19.dp)
                     )
                 }
             }
@@ -2446,7 +2313,7 @@ private fun TransferModePanel(
 
         if (accounts.size < 2) {
             Text(
-                text = "至少需要 2 个账户",
+                text = "至少需要 2 个账户才能记录转账",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.error
             )
@@ -2480,8 +2347,8 @@ private fun TransferSummaryTile(
         cornerRadius = 12.dp
     ) {
         Column(
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
-            verticalArrangement = Arrangement.spacedBy(3.dp)
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
             Text(
                 text = title,
@@ -2493,11 +2360,11 @@ private fun TransferSummaryTile(
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 if (account != null) {
-                    CategoryIconBadge(
+                    CartoonAccountIcon(
                         iconKey = account.icon,
+                        accountName = account.name,
                         colorHex = account.colorHex,
-                        size = 24.dp,
-                        iconSize = 13.dp
+                        size = 26.dp
                     )
                 }
                 Column(modifier = Modifier.weight(1f)) {
@@ -2528,7 +2395,7 @@ private fun TransferAccountRow(
     selectedId: Long?,
     onSelect: (AccountEntity) -> Unit
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Text(
             text = label,
             style = MaterialTheme.typography.labelSmall,
@@ -2546,7 +2413,7 @@ private fun TransferAccountRow(
                         color = if (selected) accColor else MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)
                     ),
                     modifier = Modifier
-                        .height(29.dp)
+                        .height(32.dp)
                         .clip(CircleShape)
                         .clickable { onSelect(acc) }
                 ) {
@@ -2555,11 +2422,11 @@ private fun TransferAccountRow(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(5.dp)
                     ) {
-                        Icon(
-                            imageVector = KairoIcons.iconFor(acc.icon),
-                            contentDescription = null,
-                            tint = accColor,
-                            modifier = Modifier.size(14.dp)
+                        CartoonAccountIcon(
+                            iconKey = acc.icon,
+                            accountName = acc.name,
+                            colorHex = acc.colorHex,
+                            size = 18.dp
                         )
                         Text(
                             text = "${acc.name} · ${acc.currencyCode}",
@@ -2577,11 +2444,13 @@ private fun TransferAccountRow(
 
 @Composable
 private fun WorkbenchAttrChip(
-    icon: androidx.compose.ui.graphics.vector.ImageVector?,
+    icon: ImageVector?,
     label: String,
     selected: Boolean,
     accentColor: Color = MaterialTheme.colorScheme.primary,
-    onClick: () -> Unit
+    customLeading: (@Composable () -> Unit)? = null,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
     val bgColor = if (selected) {
         accentColor.copy(alpha = 0.13f)
@@ -2598,17 +2467,19 @@ private fun WorkbenchAttrChip(
         shape = CircleShape,
         color = bgColor,
         border = border,
-        modifier = Modifier
-            .height(28.dp)
+        modifier = modifier
+            .height(30.dp)
             .clip(CircleShape)
             .clickable(onClick = onClick)
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 9.dp),
+            modifier = Modifier.padding(horizontal = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp)
+            horizontalArrangement = Arrangement.spacedBy(4.dp, Alignment.CenterHorizontally)
         ) {
-            if (icon != null) {
+            if (customLeading != null) {
+                customLeading()
+            } else if (icon != null) {
                 Icon(
                     imageVector = icon,
                     contentDescription = null,
@@ -2618,223 +2489,12 @@ private fun WorkbenchAttrChip(
             }
             Text(
                 text = label,
-                style = MaterialTheme.typography.labelMedium.copy(fontSize = 11.5.sp),
+                style = MaterialTheme.typography.labelMedium.copy(fontSize = 11.sp),
                 color = if (selected) accentColor else MaterialTheme.colorScheme.onSurface,
                 fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
                 maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.widthIn(max = 110.dp)
+                overflow = TextOverflow.Ellipsis
             )
-        }
-    }
-}
-
-@OptIn(ExperimentalLayoutApi::class)
-@Composable
-private fun TagSelectorPanel(
-    selectedTagNames: List<String>,
-    availableTags: List<TagEntity>,
-    localCreatedTagColors: Map<String, Long>,
-    allTransactions: List<TransactionEntity>,
-    onToggleTag: (String) -> Unit,
-    onClearTags: () -> Unit,
-    onNewTag: () -> Unit,
-    onCollapse: () -> Unit
-) {
-    val selectedTagSet = remember(selectedTagNames) { selectedTagNames.toSet() }
-    val tagColorMap = remember(availableTags, localCreatedTagColors) {
-        val map = LinkedHashMap<String, Long>(availableTags.size + localCreatedTagColors.size)
-        availableTags.forEach { map[it.name] = it.colorHex }
-        localCreatedTagColors.forEach { (k, v) -> map[k] = v }
-        map
-    }
-    val tagIconMap = remember(availableTags) {
-        availableTags.associate { it.name to it.icon }
-    }
-    val displayTagNames = remember(selectedTagNames, availableTags, allTransactions, localCreatedTagColors) {
-        val ordered = LinkedHashSet<String>()
-        ordered.addAll(selectedTagNames)
-        availableTags.sortedWith(compareBy({ it.sortOrder }, { it.id })).forEach { ordered.add(it.name) }
-        localCreatedTagColors.keys.forEach { ordered.add(it) }
-        allTransactions.forEach { tx ->
-            if (tx.tags.isNotBlank()) {
-                TagTextCodec.parse(tx.tags).forEach { ordered.add(it) }
-            }
-        }
-        ordered.toList()
-    }
-
-    Surface(
-        shape = RoundedCornerShape(12.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
-        border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)),
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 12.dp)
-            .padding(bottom = 4.dp)
-    ) {
-        Column(
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Text(
-                    text = if (selectedTagNames.isEmpty()) "标签" else "已选 ${selectedTagNames.size} 个",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    if (selectedTagNames.isNotEmpty()) {
-                        Text(
-                            text = "清空",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.error,
-                            modifier = Modifier
-                                .clip(CircleShape)
-                                .clickable(onClick = onClearTags)
-                                .padding(horizontal = 6.dp, vertical = 2.dp)
-                        )
-                    }
-                    Text(
-                        text = "+ 新建",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier
-                            .clip(CircleShape)
-                            .clickable(onClick = onNewTag)
-                            .padding(horizontal = 6.dp, vertical = 2.dp)
-                    )
-                    Text(
-                        text = "收起",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier
-                            .clip(CircleShape)
-                            .clickable(onClick = onCollapse)
-                            .padding(horizontal = 6.dp, vertical = 2.dp)
-                    )
-                }
-            }
-
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(max = 98.dp)
-                    .verticalScroll(rememberScrollState())
-            ) {
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    displayTagNames.forEach { tagName ->
-                        val isSelected = tagName in selectedTagSet
-                        val tagColorHex = tagColorMap[tagName] ?: KairoIcons.fallbackTagColorHex(tagName)
-                        TagBadgeChip(
-                            name = tagName,
-                            colorHex = tagColorHex,
-                            selected = isSelected,
-                            onClick = { onToggleTag(tagName) },
-                            iconKey = tagIconMap[tagName].orEmpty()
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun AccountPickerDialog(
-    accounts: List<AccountEntity>,
-    selectedAccountId: Long,
-    onSelect: (AccountEntity) -> Unit,
-    onDismiss: () -> Unit
-) {
-    YubraeDialog(
-        onDismissRequest = onDismiss,
-        title = "选择账户",
-        icon = Icons.Rounded.AccountBalanceWallet,
-        confirmButton = {
-            TextButton(
-                onClick = onDismiss,
-                shape = RoundedCornerShape(12.dp)
-            ) { Text("关闭") }
-        }
-    ) {
-        if (accounts.isEmpty()) {
-            Text(
-                text = "暂无可用账户",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.error
-            )
-        } else {
-            LazyColumn(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(max = 360.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                items(accounts, key = { it.id }) { acc ->
-                    val isSelected = acc.id == selectedAccountId
-                    Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = if (isSelected) {
-                            MaterialTheme.colorScheme.primaryContainer
-                        } else {
-                            MaterialTheme.colorScheme.surfaceContainerLow
-                        },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(12.dp))
-                            .clickable { onSelect(acc) }
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 12.dp, vertical = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            CategoryIconBadge(
-                                iconKey = acc.icon,
-                                colorHex = acc.colorHex,
-                                size = 32.dp,
-                                iconSize = 16.dp
-                            )
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = acc.name,
-                                    style = MaterialTheme.typography.titleSmall,
-                                    color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                                Text(
-                                    text = "${acc.currencyCode} · 余额 ${MoneyAmount.format(acc.balanceMicros, acc.currencyCode)}",
-                                    style = MaterialTheme.typography.bodySmall.tabular(),
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                            if (isSelected) {
-                                Icon(
-                                    imageVector = Icons.Rounded.Check,
-                                    contentDescription = "已选中",
-                                    tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                            }
-                        }
-                    }
-                }
-            }
         }
     }
 }
@@ -2910,55 +2570,6 @@ private fun LedgerPickerDialog(
                 }
             }
         }
-    }
-}
-
-@Composable
-private fun MerchantEditDialog(
-    initialMerchant: String,
-    onConfirm: (String) -> Unit,
-    onDismiss: () -> Unit
-) {
-    var text by remember(initialMerchant) { mutableStateOf(initialMerchant) }
-    YubraeDialog(
-        onDismissRequest = onDismiss,
-        title = "商户",
-        icon = Icons.Rounded.Storefront,
-        confirmButton = {
-            Button(
-                onClick = { onConfirm(text.trim()) },
-                shape = RoundedCornerShape(12.dp)
-            ) {
-                Text("确定")
-            }
-        },
-        dismissButton = {
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                if (text.isNotEmpty()) {
-                    TextButton(
-                        onClick = { onConfirm("") },
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Text("清空")
-                    }
-                }
-                TextButton(
-                    onClick = onDismiss,
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Text("取消")
-                }
-            }
-        }
-    ) {
-        OutlinedTextField(
-            value = text,
-            onValueChange = { text = it },
-            label = { Text("商户名称") },
-            placeholder = { Text("如：星巴克") },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth()
-        )
     }
 }
 
@@ -3085,163 +2696,6 @@ private fun ExchangeRateOverrideDialog(
                     )
                 }
             }
-        }
-    }
-}
-
-@Composable
-private fun CalculatorKeypad(
-    hasOperator: Boolean,
-    onDigit: (String) -> Unit,
-    onDot: () -> Unit,
-    onOperator: (Char) -> Unit,
-    onEquals: () -> Unit,
-    onBackspace: () -> Unit,
-    onClear: () -> Unit,
-    onHideKeypad: () -> Unit,
-    onSave: () -> Unit,
-    saveLabel: String
-) {
-    val gap = 4.dp
-    val keyHeight = 38.dp
-    BoxWithConstraints(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(MaterialTheme.colorScheme.surfaceContainerLowest)
-            .padding(horizontal = 10.dp, vertical = 5.dp)
-    ) {
-        val colWidth = (maxWidth - gap * 3) / 4
-        val leftGroupWidth = colWidth * 3 + gap * 2
-
-        Column(verticalArrangement = Arrangement.spacedBy(gap)) {
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(gap)) {
-                CalcKey("清零", Modifier.width(colWidth), height = keyHeight, isSecondary = true, onClick = onClear)
-                CalcKey("÷", Modifier.width(colWidth), height = keyHeight, isOperator = true) { onOperator('÷') }
-                CalcKey("×", Modifier.width(colWidth), height = keyHeight, isOperator = true) { onOperator('×') }
-                CalcIconKey(Icons.AutoMirrored.Rounded.Backspace, "退格", Modifier.width(colWidth), height = keyHeight, onClick = onBackspace)
-            }
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(gap)) {
-                CalcKey("7", Modifier.width(colWidth), height = keyHeight) { onDigit("7") }
-                CalcKey("8", Modifier.width(colWidth), height = keyHeight) { onDigit("8") }
-                CalcKey("9", Modifier.width(colWidth), height = keyHeight) { onDigit("9") }
-                CalcKey("-", Modifier.width(colWidth), height = keyHeight, isOperator = true) { onOperator('-') }
-            }
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(gap)) {
-                CalcKey("4", Modifier.width(colWidth), height = keyHeight) { onDigit("4") }
-                CalcKey("5", Modifier.width(colWidth), height = keyHeight) { onDigit("5") }
-                CalcKey("6", Modifier.width(colWidth), height = keyHeight) { onDigit("6") }
-                CalcKey("+", Modifier.width(colWidth), height = keyHeight, isOperator = true) { onOperator('+') }
-            }
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(gap)) {
-                Column(
-                    modifier = Modifier.width(leftGroupWidth),
-                    verticalArrangement = Arrangement.spacedBy(gap)
-                ) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(gap)) {
-                        CalcKey("1", Modifier.width(colWidth), height = keyHeight) { onDigit("1") }
-                        CalcKey("2", Modifier.width(colWidth), height = keyHeight) { onDigit("2") }
-                        CalcKey("3", Modifier.width(colWidth), height = keyHeight) { onDigit("3") }
-                    }
-                    Row(horizontalArrangement = Arrangement.spacedBy(gap)) {
-                        CalcIconKey(Icons.Rounded.KeyboardHide, "收起键盘", Modifier.width(colWidth), height = keyHeight, onClick = onHideKeypad)
-                        CalcKey("0", Modifier.width(colWidth), height = keyHeight) { onDigit("0") }
-                        CalcKey(".", Modifier.width(colWidth), height = keyHeight, onClick = onDot)
-                    }
-                }
-                Button(
-                    onClick = if (hasOperator) onEquals else onSave,
-                    shape = RoundedCornerShape(10.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.primary,
-                        contentColor = MaterialTheme.colorScheme.onPrimary
-                    ),
-                    contentPadding = PaddingValues(0.dp),
-                    modifier = Modifier
-                        .width(colWidth)
-                        .height(keyHeight * 2 + gap)
-                ) {
-                    Text(
-                        text = if (hasOperator) "=" else saveLabel,
-                        style = if (hasOperator) {
-                            MaterialTheme.typography.headlineSmall.tabular()
-                        } else {
-                            MaterialTheme.typography.titleMedium
-                        },
-                        fontWeight = FontWeight.Bold,
-                        maxLines = 1
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun CalcKey(
-    label: String,
-    modifier: Modifier = Modifier,
-    height: Dp = 38.dp,
-    isOperator: Boolean = false,
-    isSecondary: Boolean = false,
-    onClick: () -> Unit
-) {
-    val bg = when {
-        isOperator -> MaterialTheme.colorScheme.secondaryContainer
-        isSecondary -> MaterialTheme.colorScheme.surfaceContainerHigh
-        else -> MaterialTheme.colorScheme.surfaceContainerLow
-    }
-    val fg = when {
-        isOperator -> MaterialTheme.colorScheme.onSecondaryContainer
-        isSecondary -> MaterialTheme.colorScheme.onSurfaceVariant
-        else -> MaterialTheme.colorScheme.onSurface
-    }
-    Surface(
-        shape = RoundedCornerShape(10.dp),
-        color = bg,
-        modifier = modifier
-            .height(height)
-            .clip(RoundedCornerShape(10.dp))
-            .clickable(onClick = onClick)
-    ) {
-        Box(contentAlignment = Alignment.Center) {
-            Text(
-                text = label,
-                style = if (isSecondary) {
-                    MaterialTheme.typography.labelLarge
-                } else {
-                    MaterialTheme.typography.titleLarge.copy(fontSize = 17.sp).tabular()
-                },
-                color = fg,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 1
-            )
-        }
-    }
-}
-
-@Composable
-private fun CalcIconKey(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    contentDescription: String,
-    modifier: Modifier = Modifier,
-    height: Dp = 38.dp,
-    onClick: () -> Unit
-) {
-    Surface(
-        shape = RoundedCornerShape(10.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-        modifier = modifier
-            .height(height)
-            .clip(RoundedCornerShape(10.dp))
-            .clickable(onClick = onClick)
-    ) {
-        Box(contentAlignment = Alignment.Center) {
-            Icon(
-                imageVector = icon,
-                contentDescription = contentDescription,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.size(19.dp)
-            )
         }
     }
 }

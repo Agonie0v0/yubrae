@@ -63,6 +63,7 @@ import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -99,6 +100,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.yubrae.app.BuildConfig
 import com.yubrae.app.capture.DeviceRomProfile
+import com.yubrae.app.capture.FloatingConfirmService
 import com.yubrae.app.core.contract.DevicePermissionReport
 import com.yubrae.app.data.prefs.ThemeMode
 import com.yubrae.app.ui.components.CompactHairlineDivider
@@ -930,6 +932,29 @@ fun AutoCaptureSettingsScreen(
                                             label = { Text(label) }
                                         )
                                     }
+                                }
+                                FilledTonalButton(
+                                    onClick = {
+                                        if (!Settings.canDrawOverlays(context)) {
+                                            viewModel.showMessage("请先开启悬浮窗权限后再预览")
+                                            safeStartActivity(
+                                                context,
+                                                Intent(
+                                                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                                    Uri.parse("package:${context.packageName}")
+                                                )
+                                            ) || safeStartActivity(
+                                                context,
+                                                Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION)
+                                            )
+                                        } else if (!FloatingConfirmService.showPreviewOverlay(context)) {
+                                            viewModel.showMessage("预览悬浮窗唤起失败，请检查悬浮窗权限")
+                                        }
+                                    },
+                                    shape = RoundedCornerShape(12.dp),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text("预览自动记账弹窗", fontWeight = FontWeight.SemiBold)
                                 }
                             }
                         }

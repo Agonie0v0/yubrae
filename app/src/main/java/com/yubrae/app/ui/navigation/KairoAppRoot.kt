@@ -832,6 +832,9 @@ fun KairoAppRoot(
                             )
                         )
                     },
+                    onQuickCreateCategory = { category ->
+                        viewModel.createCategoryAndReturnId(category)
+                    },
                     onDismiss = {
                         showQuickRecord = false
                         editingTransaction = null
