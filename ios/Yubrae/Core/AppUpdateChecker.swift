@@ -139,7 +139,7 @@ public final class AppUpdateChecker: Sendable {
 
     public static var currentAppVersion: String {
         (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String)?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? "1.1.0"
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? "1.2.0"
     }
 
     private let session: URLSession
