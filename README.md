@@ -18,22 +18,25 @@
 
 ## 自动构建与双端发版
 
-每次推送至 `main`、`pull_request` 或发布 `v*` 标签都会触发 GitHub Actions 工作流（[android-build.yml](.github/workflows/android-build.yml) — `Yubrae Release CI (Android + iOS)`）：
+每次推送至 `main`、`pull_request` 或手动触发，都会运行单一 GitHub Actions 工作流（[android-build.yml](.github/workflows/android-build.yml) — `Yubrae Release CI (Android + iOS)`），彻底消除分支与标签双重触发的重复构建：
 
-1. **Android Job (`ubuntu-latest`)**：
+1. **Meta Job (`Detect Release Metadata`)**：
+   - 自动校验 `app/build.gradle.kts` 的 `versionName` 与 `ios/project.yml` 的 `MARKETING_VERSION`；
+   - 推送至 `main` 且远端尚未存在对应 `v<version>` 标签时（且双端版本号一致），自动标记为发版构建；日常代码提交则仅执行构建校验、不重复发版。
+2. **Android Job (`ubuntu-latest`)**：
    - 运行全部 JVM 单元测试（`testDebugUnitTest`）并上传测试报告。
    - **仅构建正式 Release APK**（`assembleRelease`，不再产出多余的 `debug` / `perf` 发版包）。
-   - 发布 `v*` 标签时强制要求配置正式签名 Secrets，产出 `yubrae-<tag>-release.apk`；普通分支或 PR 无签名密钥时仅构建未签名包校验 R8 编译。
-2. **iOS Job (`macos-latest`)**：
+   - 触发新版本发布时强制要求配置正式签名 Secrets，产出 `yubrae-<tag>-release.apk`；日常提交或 PR 若无签名密钥则构建未签名包校验 R8 编译。
+3. **iOS Job (`macos-latest`)**：
    - 通过 `xcodegen generate` 由 `ios/project.yml` 生成 `ios/Yubrae.xcodeproj`。
    - 自动选择最新可用 iPhone Simulator 运行 `YubraeTests` 单元测试。
    - 构建真机 Release App 并打包为标准未签名 IPA（`yubrae-<tag>-ios-unsigned.ipa`，可通过 AltStore / SideStore / Sideloadly / 巨魔等工具自签安装）。
-3. **Release Job (`refs/tags/v*`)**：
+4. **Release Job（检测到新版本号时自动触发）**：
    - 合并双端产物并生成统一 `SHA256SUMS.txt`（仅含 `yubrae-<tag>-release.apk` 与 `yubrae-<tag>-ios-unsigned.ipa`）。
-   - 自动发布 GitHub Release 并生成版本更新日志。
+   - 自动创建 `v<version>` 标签、生成更新日志并发布 GitHub Release（后续发版只需升级双端版本号并推送 `main`，无需再手动推送标签）。
 
 > **仓库 Secrets 配置说明（`Settings -> Secrets and variables -> Actions`）**：
-> - **Android 正式签名（发布 `v*` 标签必填）**：`ANDROID_KEYSTORE_BASE64`、`SIGNING_STORE_PASSWORD`、`SIGNING_KEY_ALIAS`、`SIGNING_KEY_PASSWORD`。
+> - **Android 正式签名（发布新版本必填）**：`ANDROID_KEYSTORE_BASE64`、`SIGNING_STORE_PASSWORD`、`SIGNING_KEY_ALIAS`、`SIGNING_KEY_PASSWORD`。
 > - **iOS 正式签名（可选预留）**：工作流已预留 `IOS_P12_BASE64` 与 `IOS_PROVISION_PROFILE_BASE64` 检测入口，后续接入 Apple 开发者证书即可扩展输出已签名 IPA。
 
 ## 本地开发与构建
