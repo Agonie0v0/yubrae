@@ -21,8 +21,10 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.ReceiptLong
@@ -30,7 +32,6 @@ import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.DoneAll
 import androidx.compose.material.icons.rounded.Payments
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -77,6 +78,7 @@ import com.yubrae.app.ui.components.EmptyStateCard
 import com.yubrae.app.ui.components.KairoFormats
 import com.yubrae.app.ui.components.LocalPrivacyMasked
 import com.yubrae.app.ui.components.YimuCard
+import com.yubrae.app.ui.components.YubraeDialog
 import com.yubrae.app.ui.components.formatPrivacyAmount
 import com.yubrae.app.ui.theme.KairoTheme
 import com.yubrae.app.ui.theme.tabular
@@ -888,83 +890,10 @@ private fun SettleReimburseDialog(
         }
     }
 
-    AlertDialog(
+    YubraeDialog(
         onDismissRequest = onDismiss,
-        title = { Text("一键报销入账") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text(
-                    text = "回款账户 · ${selectedTransactions.size} 笔",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-
-                if (activeAccounts.isEmpty()) {
-                    Text(
-                        text = "暂无可用账户",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.error
-                    )
-                } else {
-                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        items(activeAccounts, key = { it.id }) { acc ->
-                            val selected = acc.id == targetAccountId
-                            FilterChip(
-                                selected = selected,
-                                onClick = { targetAccountId = acc.id },
-                                label = {
-                                    Text("${acc.name} (${acc.currencyCode})")
-                                }
-                            )
-                        }
-                    }
-                }
-
-                if (selectedAccount != null) {
-                    Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Column(
-                            modifier = Modifier.padding(10.dp),
-                            verticalArrangement = Arrangement.spacedBy(3.dp)
-                        ) {
-                            Text(
-                                text = "入账「${selectedAccount.name}」",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onPrimaryContainer
-                            )
-                            Text(
-                                text = formatPrivacyAmount(
-                                    privacyMasked,
-                                    MoneyAmount.format(
-                                        estimatedTargetMicros,
-                                        selectedAccount.currencyCode,
-                                        showCurrencyCode = !selectedAccount.currencyCode.equals(baseCurrency, true)
-                                    )
-                                ),
-                                style = MaterialTheme.typography.titleMedium.tabular(),
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                        }
-                    }
-                }
-
-                OutlinedTextField(
-                    value = note,
-                    onValueChange = { note = it },
-                    label = { Text("备注") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-
-                errorMsg?.let {
-                    Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
-                }
-            }
-        },
+        title = "一键报销入账",
+        icon = Icons.AutoMirrored.Rounded.ReceiptLong,
         confirmButton = {
             Button(
                 enabled = targetAccountId != null && selectedTransactions.isNotEmpty(),
@@ -975,15 +904,98 @@ private fun SettleReimburseDialog(
                     } else {
                         onConfirm(chosen, note.trim().ifEmpty { "报销核销 (${selectedTransactions.size} 笔)" })
                     }
-                }
+                },
+                shape = RoundedCornerShape(12.dp)
             ) {
                 Text("确认入账")
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("取消") }
+            TextButton(
+                onClick = onDismiss,
+                shape = RoundedCornerShape(12.dp)
+            ) { Text("取消") }
         }
-    )
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Text(
+                text = "回款账户 · ${selectedTransactions.size} 笔",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            if (activeAccounts.isEmpty()) {
+                Text(
+                    text = "暂无可用账户",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error
+                )
+            } else {
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(activeAccounts, key = { it.id }) { acc ->
+                        val selected = acc.id == targetAccountId
+                        FilterChip(
+                            selected = selected,
+                            onClick = { targetAccountId = acc.id },
+                            label = {
+                                Text("${acc.name} (${acc.currencyCode})")
+                            }
+                        )
+                    }
+                }
+            }
+
+            if (selectedAccount != null) {
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(
+                        modifier = Modifier.padding(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(3.dp)
+                    ) {
+                        Text(
+                            text = "入账「${selectedAccount.name}」",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                        Text(
+                            text = formatPrivacyAmount(
+                                privacyMasked,
+                                MoneyAmount.format(
+                                    estimatedTargetMicros,
+                                    selectedAccount.currencyCode,
+                                    showCurrencyCode = !selectedAccount.currencyCode.equals(baseCurrency, true)
+                                )
+                            ),
+                            style = MaterialTheme.typography.titleMedium.tabular(),
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
+                }
+            }
+
+            OutlinedTextField(
+                value = note,
+                onValueChange = { note = it },
+                label = { Text("备注") },
+                singleLine = true,
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            errorMsg?.let {
+                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+            }
+        }
+    }
 }
 
 private fun resolveRateFromEntities(

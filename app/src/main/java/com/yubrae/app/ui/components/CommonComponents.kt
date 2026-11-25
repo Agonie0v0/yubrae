@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
@@ -30,6 +31,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.AirplaneTicket
 import androidx.compose.material.icons.automirrored.rounded.Assignment
 import androidx.compose.material.icons.automirrored.rounded.Chat
+import androidx.compose.material.icons.automirrored.rounded.HelpOutline
 import androidx.compose.material.icons.automirrored.rounded.Label
 import androidx.compose.material.icons.automirrored.rounded.MenuBook
 import androidx.compose.material.icons.automirrored.rounded.MultilineChart
@@ -257,6 +259,7 @@ import androidx.compose.material.icons.rounded.Verified
 import androidx.compose.material.icons.rounded.VerifiedUser
 import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.material.icons.rounded.VolunteerActivism
+import androidx.compose.material.icons.rounded.WarningAmber
 import androidx.compose.material.icons.rounded.Watch
 import androidx.compose.material.icons.rounded.WaterDrop
 import androidx.compose.material.icons.rounded.Weekend
@@ -264,7 +267,6 @@ import androidx.compose.material.icons.rounded.Wifi
 import androidx.compose.material.icons.rounded.WineBar
 import androidx.compose.material.icons.rounded.Work
 import androidx.compose.material.icons.rounded.Yard
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.FilledTonalButton
@@ -295,6 +297,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import com.yubrae.app.core.model.CurrencyCatalog
 import com.yubrae.app.data.db.CaptureChannel
 import com.yubrae.app.data.db.ParseStatus
@@ -1183,6 +1187,129 @@ fun CompactSwitchRow(
     }
 }
 
+val YubraeDialogShape = RoundedCornerShape(24.dp)
+val YubraeSheetShape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
+
+@Composable
+fun yubraeDialogContainerColor(): Color = MaterialTheme.colorScheme.surfaceContainerLowest
+
+@Composable
+fun yubraeSheetContainerColor(): Color = MaterialTheme.colorScheme.surfaceContainerLowest
+
+/**
+ * 余白全局统一弹窗容器：24dp 圆角、柔和边框与头部徽章，正文保持非滚动以兼容内部 LazyColumn。
+ */
+@Composable
+fun YubraeDialog(
+    onDismissRequest: () -> Unit,
+    title: String,
+    subtitle: String? = null,
+    icon: ImageVector? = null,
+    iconTint: Color = MaterialTheme.colorScheme.primary,
+    iconContainerColor: Color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.72f),
+    leadingBadge: (@Composable () -> Unit)? = null,
+    dismissOnBackPress: Boolean = true,
+    dismissOnClickOutside: Boolean = true,
+    confirmButton: @Composable () -> Unit,
+    dismissButton: (@Composable () -> Unit)? = null,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    Dialog(
+        onDismissRequest = onDismissRequest,
+        properties = DialogProperties(
+            dismissOnBackPress = dismissOnBackPress,
+            dismissOnClickOutside = dismissOnClickOutside,
+            usePlatformDefaultWidth = false
+        )
+    ) {
+        Surface(
+            modifier = Modifier
+                .padding(horizontal = 20.dp, vertical = 24.dp)
+                .widthIn(max = 420.dp)
+                .fillMaxWidth(),
+            shape = YubraeDialogShape,
+            color = yubraeDialogContainerColor(),
+            border = BorderStroke(0.8.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f)),
+            shadowElevation = 10.dp
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp, vertical = 20.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    if (leadingBadge != null) {
+                        leadingBadge()
+                    } else if (icon != null) {
+                        Surface(
+                            modifier = Modifier.size(40.dp),
+                            shape = RoundedCornerShape(12.dp),
+                            color = iconContainerColor
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    imageVector = icon,
+                                    contentDescription = null,
+                                    tint = iconTint,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                            }
+                        }
+                    }
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(2.dp)
+                    ) {
+                        Text(
+                            text = title,
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        if (!subtitle.isNullOrBlank()) {
+                            Text(
+                                text = subtitle,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f, fill = false),
+                    content = content
+                )
+
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    HorizontalDivider(
+                        thickness = 0.5.dp,
+                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        dismissButton?.invoke()
+                        confirmButton()
+                    }
+                }
+            }
+        }
+    }
+}
+
 @Composable
 fun ConfirmActionDialog(
     title: String,
@@ -1192,13 +1319,24 @@ fun ConfirmActionDialog(
     onConfirm: () -> Unit,
     onDismiss: () -> Unit
 ) {
-    AlertDialog(
+    YubraeDialog(
         onDismissRequest = onDismiss,
-        title = { Text(title, style = MaterialTheme.typography.titleLarge) },
-        text = { Text(message, style = MaterialTheme.typography.bodyMedium) },
+        title = title,
+        icon = if (isDestructive) Icons.Rounded.WarningAmber else Icons.AutoMirrored.Rounded.HelpOutline,
+        iconTint = if (isDestructive) {
+            MaterialTheme.colorScheme.error
+        } else {
+            MaterialTheme.colorScheme.primary
+        },
+        iconContainerColor = if (isDestructive) {
+            MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.72f)
+        } else {
+            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.72f)
+        },
         confirmButton = {
             Button(
                 onClick = onConfirm,
+                shape = RoundedCornerShape(12.dp),
                 colors = if (isDestructive) {
                     ButtonDefaults.buttonColors(
                         containerColor = MaterialTheme.colorScheme.error,
@@ -1212,11 +1350,20 @@ fun ConfirmActionDialog(
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) {
+            TextButton(
+                onClick = onDismiss,
+                shape = RoundedCornerShape(12.dp)
+            ) {
                 Text("取消")
             }
         }
-    )
+    ) {
+        Text(
+            text = message,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
 }
 
 @Composable
@@ -1227,76 +1374,80 @@ fun CurrencyPickerDialog(
     onDismiss: () -> Unit
 ) {
     val ordered = CurrencyCatalog.orderedCodes(pinnedCodes)
-    AlertDialog(
+    YubraeDialog(
         onDismissRequest = onDismiss,
-        title = { Text("选择币种", style = MaterialTheme.typography.titleLarge) },
-        text = {
-            LazyColumn(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(max = 380.dp),
-                contentPadding = PaddingValues(vertical = 4.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
+        title = "选择币种",
+        subtitle = "当前已选 ${selectedCode.uppercase(Locale.ROOT)}",
+        icon = Icons.Rounded.CurrencyExchange,
+        confirmButton = {
+            TextButton(
+                onClick = onDismiss,
+                shape = RoundedCornerShape(12.dp)
             ) {
-                items(ordered, key = { it }) { code ->
-                    val info = CurrencyCatalog.find(code)
-                    val isSelected = code.equals(selectedCode, ignoreCase = true)
-                    Surface(
+                Text("关闭")
+            }
+        }
+    ) {
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = 380.dp),
+            contentPadding = PaddingValues(vertical = 4.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            items(ordered, key = { it }) { code ->
+                val info = CurrencyCatalog.find(code)
+                val isSelected = code.equals(selectedCode, ignoreCase = true)
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable {
+                            onSelect(info.code)
+                            onDismiss()
+                        },
+                    shape = RoundedCornerShape(14.dp),
+                    color = if (isSelected) {
+                        MaterialTheme.colorScheme.primaryContainer
+                    } else {
+                        MaterialTheme.colorScheme.surfaceContainerLow
+                    }
+                ) {
+                    Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clickable {
-                                onSelect(info.code)
-                                onDismiss()
-                            },
-                        shape = RoundedCornerShape(14.dp),
-                        color = if (isSelected) {
-                            MaterialTheme.colorScheme.primaryContainer
-                        } else {
-                            MaterialTheme.colorScheme.surfaceContainerLow
-                        }
+                            .padding(horizontal = 14.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 14.dp, vertical = 12.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(text = info.flag, style = MaterialTheme.typography.titleLarge)
-                            Spacer(modifier = Modifier.width(12.dp))
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = "${info.code} · ${info.nameZh}",
-                                    style = MaterialTheme.typography.titleMedium,
-                                    color = if (isSelected) {
-                                        MaterialTheme.colorScheme.onPrimaryContainer
-                                    } else {
-                                        MaterialTheme.colorScheme.onSurface
-                                    }
-                                )
-                                Text(
-                                    text = "符号 ${info.symbol} · 小数位 ${info.minorDigits}",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                            if (isSelected) {
-                                Icon(
-                                    imageVector = Icons.Rounded.Check,
-                                    contentDescription = "已选中",
-                                    tint = MaterialTheme.colorScheme.primary
-                                )
-                            }
+                        Text(text = info.flag, style = MaterialTheme.typography.titleLarge)
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "${info.code} · ${info.nameZh}",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = if (isSelected) {
+                                    MaterialTheme.colorScheme.onPrimaryContainer
+                                } else {
+                                    MaterialTheme.colorScheme.onSurface
+                                }
+                            )
+                            Text(
+                                text = "符号 ${info.symbol} · 小数位 ${info.minorDigits}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        if (isSelected) {
+                            Icon(
+                                imageVector = Icons.Rounded.Check,
+                                contentDescription = "已选中",
+                                tint = MaterialTheme.colorScheme.primary
+                            )
                         }
                     }
                 }
             }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) {
-                Text("关闭")
-            }
         }
-    )
+    }
 }
 
 @Composable

@@ -26,8 +26,8 @@ import androidx.compose.material.icons.automirrored.rounded.Rule
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.Fingerprint
 import androidx.compose.material.icons.rounded.PlayArrow
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -69,6 +69,7 @@ import com.yubrae.app.ui.components.CompactSwitchRow
 import com.yubrae.app.ui.components.ConfirmActionDialog
 import com.yubrae.app.ui.components.EmptyStateCard
 import com.yubrae.app.ui.components.KairoFormats
+import com.yubrae.app.ui.components.YubraeDialog
 import com.yubrae.app.ui.theme.KairoTheme
 import com.yubrae.app.ui.theme.tabular
 import com.yubrae.app.ui.viewmodel.KairoMainViewModel
@@ -581,62 +582,10 @@ private fun AliasEditorDialog(
     var enabled by remember { mutableStateOf(existing?.enabled ?: true) }
     var errorMsg by remember { mutableStateOf<String?>(null) }
 
-    AlertDialog(
+    YubraeDialog(
         onDismissRequest = onDismiss,
-        title = { Text(if (existing == null) "新增账户指纹" else "编辑账户指纹") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text("目标账户：", style = MaterialTheme.typography.labelMedium)
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    items(accounts, key = { it.id }) { acc ->
-                        FilterChip(
-                            selected = selectedAccountId == acc.id,
-                            onClick = { selectedAccountId = acc.id },
-                            label = { Text("${acc.name}(${acc.currencyCode})") }
-                        )
-                    }
-                }
-                Text("匹配方式：", style = MaterialTheme.typography.labelMedium)
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    items(
-                        listOf(
-                            AliasMatchType.CARD_LAST4 to "卡尾号",
-                            AliasMatchType.PACKAGE to "包名",
-                            AliasMatchType.KEYWORD to "关键词",
-                            AliasMatchType.REGEX to "正则"
-                        )
-                    ) { (type, label) ->
-                        FilterChip(
-                            selected = matchType == type,
-                            onClick = { matchType = type },
-                            label = { Text(label) }
-                        )
-                    }
-                }
-                OutlinedTextField(
-                    value = pattern,
-                    onValueChange = { pattern = it },
-                    label = { Text("匹配模式") },
-                    placeholder = { Text("如 6688 或 com.tencent.mm") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                OutlinedTextField(
-                    value = priorityInput,
-                    onValueChange = { priorityInput = it },
-                    label = { Text("优先级") },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                CompactSwitchRow(
-                    title = "启用",
-                    checked = enabled,
-                    onCheckedChange = { enabled = it }
-                )
-                errorMsg?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
-            }
-        },
+        title = if (existing == null) "新增账户指纹" else "编辑账户指纹",
+        icon = Icons.Rounded.Fingerprint,
         confirmButton = {
             Button(
                 onClick = {
@@ -654,11 +603,76 @@ private fun AliasEditorDialog(
                             )
                         )
                     }
-                }
+                },
+                shape = RoundedCornerShape(12.dp)
             ) { Text("保存") }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } }
-    )
+        dismissButton = {
+            TextButton(
+                onClick = onDismiss,
+                shape = RoundedCornerShape(12.dp)
+            ) { Text("取消") }
+        }
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Text("目标账户：", style = MaterialTheme.typography.labelMedium)
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                items(accounts, key = { it.id }) { acc ->
+                    FilterChip(
+                        selected = selectedAccountId == acc.id,
+                        onClick = { selectedAccountId = acc.id },
+                        label = { Text("${acc.name}(${acc.currencyCode})") }
+                    )
+                }
+            }
+            Text("匹配方式：", style = MaterialTheme.typography.labelMedium)
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                items(
+                    listOf(
+                        AliasMatchType.CARD_LAST4 to "卡尾号",
+                        AliasMatchType.PACKAGE to "包名",
+                        AliasMatchType.KEYWORD to "关键词",
+                        AliasMatchType.REGEX to "正则"
+                    )
+                ) { (type, label) ->
+                    FilterChip(
+                        selected = matchType == type,
+                        onClick = { matchType = type },
+                        label = { Text(label) }
+                    )
+                }
+            }
+            OutlinedTextField(
+                value = pattern,
+                onValueChange = { pattern = it },
+                label = { Text("匹配模式") },
+                placeholder = { Text("如 6688 或 com.tencent.mm") },
+                singleLine = true,
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier.fillMaxWidth()
+            )
+            OutlinedTextField(
+                value = priorityInput,
+                onValueChange = { priorityInput = it },
+                label = { Text("优先级") },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                singleLine = true,
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier.fillMaxWidth()
+            )
+            CompactSwitchRow(
+                title = "启用",
+                checked = enabled,
+                onCheckedChange = { enabled = it }
+            )
+            errorMsg?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+        }
+    }
 }
 
 @Composable
@@ -681,43 +695,10 @@ private fun RuleEditorDialog(
     var priority by remember { mutableStateOf((existing?.priority ?: 60).toString()) }
     var errorMsg by remember { mutableStateOf<String?>(null) }
 
-    AlertDialog(
+    YubraeDialog(
         onDismissRequest = onDismiss,
-        title = { Text(if (existing == null) "新增正则规则" else "编辑正则规则") },
-        text = {
-            Column(
-                modifier = Modifier.verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("规则名称") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(value = sourcePackage, onValueChange = { sourcePackage = it }, label = { Text("包名 (* 为任意)") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    listOf(TransactionType.EXPENSE to "支出", TransactionType.INCOME to "收入").forEach { (type, label) ->
-                        FilterChip(selected = txType == type, onClick = { txType = type }, label = { Text(label) })
-                    }
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    listOf("ANY", "NOTIFICATION", "SMS").forEach { ch ->
-                        FilterChip(selected = channelType == ch, onClick = { channelType = ch }, label = { Text(ch) })
-                    }
-                }
-                OutlinedTextField(value = regexPattern, onValueChange = { regexPattern = it }, label = { Text("正则表达式") }, minLines = 2, modifier = Modifier.fillMaxWidth())
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(value = amountGroup, onValueChange = { amountGroup = it }, label = { Text("金额组号") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), singleLine = true, modifier = Modifier.weight(1f))
-                    OutlinedTextField(value = currencyGroup, onValueChange = { currencyGroup = it }, label = { Text("币种组(0无)") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), singleLine = true, modifier = Modifier.weight(1f))
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(value = accountHintGroup, onValueChange = { accountHintGroup = it }, label = { Text("卡尾号组") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), singleLine = true, modifier = Modifier.weight(1f))
-                    OutlinedTextField(value = merchantGroup, onValueChange = { merchantGroup = it }, label = { Text("商户组") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), singleLine = true, modifier = Modifier.weight(1f))
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(value = defaultCurrency, onValueChange = { defaultCurrency = it.uppercase() }, label = { Text("默认币种") }, singleLine = true, modifier = Modifier.weight(1f))
-                    OutlinedTextField(value = priority, onValueChange = { priority = it }, label = { Text("优先级") }, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), singleLine = true, modifier = Modifier.weight(1f))
-                }
-                OutlinedTextField(value = defaultCategoryName, onValueChange = { defaultCategoryName = it }, label = { Text("默认分类名称") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                errorMsg?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
-            }
-        },
+        title = if (existing == null) "新增正则规则" else "编辑正则规则",
+        icon = Icons.AutoMirrored.Rounded.Rule,
         confirmButton = {
             Button(
                 onClick = {
@@ -745,9 +726,125 @@ private fun RuleEditorDialog(
                             )
                         )
                     }
-                }
+                },
+                shape = RoundedCornerShape(12.dp)
             ) { Text("保存") }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } }
-    )
+        dismissButton = {
+            TextButton(
+                onClick = onDismiss,
+                shape = RoundedCornerShape(12.dp)
+            ) { Text("取消") }
+        }
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            OutlinedTextField(
+                value = name,
+                onValueChange = { name = it },
+                label = { Text("规则名称") },
+                singleLine = true,
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier.fillMaxWidth()
+            )
+            OutlinedTextField(
+                value = sourcePackage,
+                onValueChange = { sourcePackage = it },
+                label = { Text("包名 (* 为任意)") },
+                singleLine = true,
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier.fillMaxWidth()
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                listOf(TransactionType.EXPENSE to "支出", TransactionType.INCOME to "收入").forEach { (type, label) ->
+                    FilterChip(selected = txType == type, onClick = { txType = type }, label = { Text(label) })
+                }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                listOf("ANY", "NOTIFICATION", "SMS").forEach { ch ->
+                    FilterChip(selected = channelType == ch, onClick = { channelType = ch }, label = { Text(ch) })
+                }
+            }
+            OutlinedTextField(
+                value = regexPattern,
+                onValueChange = { regexPattern = it },
+                label = { Text("正则表达式") },
+                minLines = 2,
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier.fillMaxWidth()
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = amountGroup,
+                    onValueChange = { amountGroup = it },
+                    label = { Text("金额组号") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    singleLine = true,
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.weight(1f)
+                )
+                OutlinedTextField(
+                    value = currencyGroup,
+                    onValueChange = { currencyGroup = it },
+                    label = { Text("币种组(0无)") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    singleLine = true,
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.weight(1f)
+                )
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = accountHintGroup,
+                    onValueChange = { accountHintGroup = it },
+                    label = { Text("卡尾号组") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    singleLine = true,
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.weight(1f)
+                )
+                OutlinedTextField(
+                    value = merchantGroup,
+                    onValueChange = { merchantGroup = it },
+                    label = { Text("商户组") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    singleLine = true,
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.weight(1f)
+                )
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = defaultCurrency,
+                    onValueChange = { defaultCurrency = it.uppercase() },
+                    label = { Text("默认币种") },
+                    singleLine = true,
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.weight(1f)
+                )
+                OutlinedTextField(
+                    value = priority,
+                    onValueChange = { priority = it },
+                    label = { Text("优先级") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    singleLine = true,
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.weight(1f)
+                )
+            }
+            OutlinedTextField(
+                value = defaultCategoryName,
+                onValueChange = { defaultCategoryName = it },
+                label = { Text("默认分类名称") },
+                singleLine = true,
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier.fillMaxWidth()
+            )
+            errorMsg?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+        }
+    }
 }

@@ -46,6 +46,7 @@ import androidx.compose.material.icons.rounded.AccountBalanceWallet
 import androidx.compose.material.icons.rounded.ArrowDropDown
 import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.CalendarMonth
+import androidx.compose.material.icons.rounded.Category
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.CheckBox
 import androidx.compose.material.icons.rounded.CheckBoxOutlineBlank
@@ -56,6 +57,7 @@ import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.ExpandLess
 import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.FilterList
+import androidx.compose.material.icons.rounded.Fingerprint
 import androidx.compose.material.icons.rounded.MarkEmailUnread
 import androidx.compose.material.icons.rounded.Replay
 import androidx.compose.material.icons.rounded.Search
@@ -63,7 +65,6 @@ import androidx.compose.material.icons.rounded.SelectAll
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.material.icons.rounded.VisibilityOff
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
@@ -81,10 +82,12 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -133,8 +136,11 @@ import com.yubrae.app.ui.components.ReceiptThumbnailImage
 import com.yubrae.app.ui.components.ReceiptZoomPreviewDialog
 import com.yubrae.app.ui.components.TagBadgeChip
 import com.yubrae.app.ui.components.YimuCard
+import com.yubrae.app.ui.components.YubraeDialog
+import com.yubrae.app.ui.components.YubraeSheetShape
 import com.yubrae.app.ui.components.formatPrivacyAmount
 import com.yubrae.app.ui.components.transactionAmountColor
+import com.yubrae.app.ui.components.yubraeSheetContainerColor
 import com.yubrae.app.ui.theme.KairoTheme
 import com.yubrae.app.ui.theme.tabular
 import com.yubrae.app.ui.viewmodel.DayTransactionGroup
@@ -173,7 +179,8 @@ fun TransactionsScreen(
     onTogglePrivacy: () -> Unit = {
         viewModel.updateSettings { it.copy(privacyMaskEnabled = !it.privacyMaskEnabled) }
     },
-    onOpenSmartInput: () -> Unit = {}
+    onOpenSmartInput: () -> Unit = {},
+    onMultiSelectModeChange: (Boolean) -> Unit = {}
 ) {
     val uiState by viewModel.transactionsUiState.collectAsStateWithLifecycle()
     val accounts by viewModel.allAccounts.collectAsStateWithLifecycle()
@@ -227,6 +234,16 @@ fun TransactionsScreen(
     var deleteCandidate by remember { mutableStateOf<TransactionEntity?>(null) }
     var showAccountFilterMenu by remember { mutableStateOf(false) }
     var showChannelFilterMenu by remember { mutableStateOf(false) }
+
+    val latestOnMultiSelectModeChange by rememberUpdatedState(onMultiSelectModeChange)
+    LaunchedEffect(isMultiSelectMode) {
+        latestOnMultiSelectModeChange(isMultiSelectMode)
+    }
+    DisposableEffect(Unit) {
+        onDispose {
+            latestOnMultiSelectModeChange(false)
+        }
+    }
 
     BackHandler(enabled = isMultiSelectMode) {
         isMultiSelectMode = false
@@ -2333,6 +2350,7 @@ private fun TransactionDetailSheet(
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var captureLog by remember(transaction.rawEventId) { mutableStateOf<RawCaptureLogEntity?>(null) }
+    var showRawCaptureLog by remember(transaction.id, transaction.rawEventId) { mutableStateOf(false) }
     var showPromoteDialog by remember { mutableStateOf(false) }
     var zoomImagePath by remember { mutableStateOf<String?>(null) }
 
@@ -2350,7 +2368,9 @@ private fun TransactionDetailSheet(
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
-        sheetState = sheetState
+        sheetState = sheetState,
+        shape = YubraeSheetShape,
+        containerColor = yubraeSheetContainerColor()
     ) {
         Column(
             modifier = Modifier
@@ -2541,36 +2561,84 @@ private fun TransactionDetailSheet(
                 }
             }
 
-            // 原始捕获报文溯源卡片
+            // 原始捕获报文溯源卡片（默认折叠，点击展开）
             captureLog?.let { log ->
                 Surface(
                     shape = RoundedCornerShape(14.dp),
                     color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.45f),
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(14.dp))
                 ) {
-                    Column(
-                        modifier = Modifier.padding(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        Text(
-                            text = "原始报文 #${log.id}",
-                            style = MaterialTheme.typography.titleSmall,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                        Text(
-                            text = "${log.sourcePackage} · ${log.parserUsed.ifBlank { "-" }}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        if (log.title.isNotBlank()) {
-                            Text("标题：${log.title}", style = MaterialTheme.typography.bodySmall)
-                        }
-                        Text("原文：${log.content}", style = MaterialTheme.typography.bodySmall)
-                        TextButton(
-                            onClick = { showPromoteDialog = true },
-                            contentPadding = PaddingValues(0.dp)
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { showRawCaptureLog = !showRawCaptureLog }
+                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
                         ) {
-                            Text("设为账户指纹")
+                            Row(
+                                modifier = Modifier.weight(1f),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Icon(
+                                    imageVector = KairoFormats.channelIcon(log.channel),
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Text(
+                                    text = "原始报文 #${log.id} · ${KairoFormats.channelLabel(log.channel)}",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(2.dp)
+                            ) {
+                                Text(
+                                    text = if (showRawCaptureLog) "收起" else "查看",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                Icon(
+                                    imageVector = if (showRawCaptureLog) Icons.Rounded.ExpandLess else Icons.Rounded.ExpandMore,
+                                    contentDescription = if (showRawCaptureLog) "收起原始报文" else "查看原始报文",
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                        }
+                        AnimatedVisibility(visible = showRawCaptureLog) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(start = 12.dp, end = 12.dp, bottom = 12.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Text(
+                                    text = "${log.sourcePackage} · ${log.parserUsed.ifBlank { "-" }}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                if (log.title.isNotBlank()) {
+                                    Text("标题：${log.title}", style = MaterialTheme.typography.bodySmall)
+                                }
+                                Text("原文：${log.content}", style = MaterialTheme.typography.bodySmall)
+                                TextButton(
+                                    onClick = { showPromoteDialog = true },
+                                    contentPadding = PaddingValues(0.dp)
+                                ) {
+                                    Text("设为账户指纹")
+                                }
+                            }
                         }
                     }
                 }
@@ -2639,60 +2707,64 @@ private fun TransactionDetailSheet(
         var selectedAccountId by remember { mutableStateOf(transaction.accountId) }
         var matchType by remember { mutableStateOf(AliasMatchType.PACKAGE) }
         var pattern by remember { mutableStateOf(log.sourcePackage) }
-        AlertDialog(
+        YubraeDialog(
             onDismissRequest = { showPromoteDialog = false },
-            title = { Text("沉淀为账户指纹") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("目标账户：", style = MaterialTheme.typography.labelMedium)
-                    LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        items(accounts, key = { it.id }) { acc ->
-                            FilterChip(
-                                selected = selectedAccountId == acc.id,
-                                onClick = { selectedAccountId = acc.id },
-                                label = { Text(acc.name) }
-                            )
-                        }
-                    }
-                    Text("匹配方式：", style = MaterialTheme.typography.labelMedium)
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        listOf(
-                            AliasMatchType.PACKAGE to "包名",
-                            AliasMatchType.CARD_LAST4 to "尾号",
-                            AliasMatchType.KEYWORD to "关键词"
-                        ).forEach { (type, label) ->
-                            FilterChip(
-                                selected = matchType == type,
-                                onClick = {
-                                    matchType = type
-                                    if (type == AliasMatchType.PACKAGE) pattern = log.sourcePackage
-                                },
-                                label = { Text(label) }
-                            )
-                        }
-                    }
-                    OutlinedTextField(
-                        value = pattern,
-                        onValueChange = { pattern = it },
-                        label = { Text("匹配模式") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-            },
+            title = "沉淀为账户指纹",
+            icon = Icons.Rounded.Fingerprint,
             confirmButton = {
                 Button(
                     onClick = {
                         viewModel.promoteLogToAlias(log.id, selectedAccountId, pattern.trim(), matchType) {
                             showPromoteDialog = false
                         }
-                    }
+                    },
+                    shape = RoundedCornerShape(12.dp)
                 ) { Text("保存指纹") }
             },
             dismissButton = {
-                TextButton(onClick = { showPromoteDialog = false }) { Text("取消") }
+                TextButton(
+                    onClick = { showPromoteDialog = false },
+                    shape = RoundedCornerShape(12.dp)
+                ) { Text("取消") }
             }
-        )
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("目标账户：", style = MaterialTheme.typography.labelMedium)
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    items(accounts, key = { it.id }) { acc ->
+                        FilterChip(
+                            selected = selectedAccountId == acc.id,
+                            onClick = { selectedAccountId = acc.id },
+                            label = { Text(acc.name) }
+                        )
+                    }
+                }
+                Text("匹配方式：", style = MaterialTheme.typography.labelMedium)
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf(
+                        AliasMatchType.PACKAGE to "包名",
+                        AliasMatchType.CARD_LAST4 to "尾号",
+                        AliasMatchType.KEYWORD to "关键词"
+                    ).forEach { (type, label) ->
+                        FilterChip(
+                            selected = matchType == type,
+                            onClick = {
+                                matchType = type
+                                if (type == AliasMatchType.PACKAGE) pattern = log.sourcePackage
+                            },
+                            label = { Text(label) }
+                        )
+                    }
+                }
+                OutlinedTextField(
+                    value = pattern,
+                    onValueChange = { pattern = it },
+                    label = { Text("匹配模式") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        }
     }
 }
 
@@ -2715,69 +2787,72 @@ private fun BatchCategoryPickerDialog(
         val orphans = typed.filter { it.parentId != null && it.parentId !in parentIds }
         treeList + orphans
     }
-    AlertDialog(
+    YubraeDialog(
         onDismissRequest = onDismiss,
-        title = { Text("批量修改分类 ($selectedCount 笔)") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilterChip(
-                        selected = filterType == TransactionType.EXPENSE,
-                        onClick = { filterType = TransactionType.EXPENSE },
-                        label = { Text("支出") }
-                    )
-                    FilterChip(
-                        selected = filterType == TransactionType.INCOME,
-                        onClick = { filterType = TransactionType.INCOME },
-                        label = { Text("收入") }
-                    )
-                }
-                LazyColumn(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(max = 320.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    items(filteredCats, key = { it.id }) { cat ->
-                        val isSub = cat.parentId != null
-                        Surface(
-                            shape = RoundedCornerShape(12.dp),
-                            color = MaterialTheme.colorScheme.surfaceContainerLow,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { onPickCategory(cat.id) }
+        title = "批量修改分类 ($selectedCount 笔)",
+        icon = Icons.Rounded.Category,
+        confirmButton = {
+            TextButton(
+                onClick = onDismiss,
+                shape = RoundedCornerShape(12.dp)
+            ) { Text("取消") }
+        }
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(
+                    selected = filterType == TransactionType.EXPENSE,
+                    onClick = { filterType = TransactionType.EXPENSE },
+                    label = { Text("支出") }
+                )
+                FilterChip(
+                    selected = filterType == TransactionType.INCOME,
+                    onClick = { filterType = TransactionType.INCOME },
+                    label = { Text("收入") }
+                )
+            }
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 320.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                items(filteredCats, key = { it.id }) { cat ->
+                    val isSub = cat.parentId != null
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.surfaceContainerLow,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onPickCategory(cat.id) }
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(
+                                start = if (isSub) 24.dp else 12.dp,
+                                end = 12.dp,
+                                top = 9.dp,
+                                bottom = 9.dp
+                            ),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
-                            Row(
-                                modifier = Modifier.padding(
-                                    start = if (isSub) 24.dp else 12.dp,
-                                    end = 12.dp,
-                                    top = 9.dp,
-                                    bottom = 9.dp
-                                ),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(10.dp)
-                            ) {
-                                CategoryIconBadge(
-                                    iconKey = cat.icon,
-                                    colorHex = cat.colorHex,
-                                    size = 32.dp,
-                                    iconSize = 16.dp
-                                )
-                                Text(
-                                    text = cat.name,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    fontWeight = if (isSub) FontWeight.Normal else FontWeight.SemiBold
-                                )
-                            }
+                            CategoryIconBadge(
+                                iconKey = cat.icon,
+                                colorHex = cat.colorHex,
+                                size = 32.dp,
+                                iconSize = 16.dp
+                            )
+                            Text(
+                                text = cat.name,
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = if (isSub) FontWeight.Normal else FontWeight.SemiBold
+                            )
                         }
                     }
                 }
             }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) { Text("取消") }
         }
-    )
+    }
 }
 
 @Composable

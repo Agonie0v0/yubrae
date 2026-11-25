@@ -1,12 +1,24 @@
 package com.yubrae.app.ui.components
 
+import android.Manifest
 import android.app.Activity
-import android.content.Intent
 import android.net.Uri
+import android.os.Bundle
+import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
+import android.speech.SpeechRecognizer
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -37,13 +49,18 @@ import androidx.compose.material.icons.rounded.CameraAlt
 import androidx.compose.material.icons.rounded.Category
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Mic
+import androidx.compose.material.icons.rounded.MicOff
 import androidx.compose.material.icons.rounded.PhotoLibrary
+import androidx.compose.material.icons.rounded.SettingsVoice
+import androidx.compose.material.icons.rounded.WarningAmber
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -59,9 +76,11 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -72,11 +91,18 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.yubrae.app.capture.DeviceRomProfile
+import com.yubrae.app.capture.SpeechEngineInfo
+import com.yubrae.app.capture.SpeechErrorDiagnosis
+import com.yubrae.app.capture.SpeechErrorKind
+import com.yubrae.app.capture.SpeechInputHelper
 import com.yubrae.app.core.contract.ParsedBillDraft
 import com.yubrae.app.core.model.CurrencyCatalog
 import com.yubrae.app.core.model.MoneyAmount
@@ -149,6 +175,18 @@ fun SmartInputSheet(
     var nextDraftUid by remember { mutableLongStateOf(1L) }
     var textDrafts by remember { mutableStateOf<List<IndexedDraft>>(emptyList()) }
 
+    // 语音识别状态
+    val isXiaomiRom = remember { DeviceRomProfile.detectCurrent().isXiaomiFamily }
+    var activeSpeechRecognizer by remember { mutableStateOf<SpeechRecognizer?>(null) }
+    var speechSessionGen by remember { mutableIntStateOf(0) }
+    var isListeningDialogVisible by remember { mutableStateOf(false) }
+    var isFinishingSpeech by remember { mutableStateOf(false) }
+    var listeningRmsDb by remember { mutableFloatStateOf(0f) }
+    var listeningPartialText by remember { mutableStateOf("") }
+    var activeSpeechEngine by remember { mutableStateOf<SpeechEngineInfo?>(null) }
+    var speechDiagnosis by remember { mutableStateOf<SpeechErrorDiagnosis?>(null) }
+    var canReRequestMicPermission by remember { mutableStateOf(false) }
+
     // Tab 1 状态：小票拍照 / 选图识别
     var currentImagePath by remember(initialImagePath) { mutableStateOf(initialImagePath) }
     var isParsingImage by remember { mutableStateOf(false) }
@@ -192,18 +230,231 @@ fun SmartInputSheet(
         }
     }
 
+    val appendRecognizedSpeech: (String) -> Unit = { raw ->
+        val spoken = raw.trim()
+        if (spoken.isNotEmpty()) {
+            inputText = if (inputText.isBlank()) spoken else "${inputText.trim()}，$spoken"
+            textParseError = null
+            speechDiagnosis = null
+            canReRequestMicPermission = false
+        }
+    }
+
+    val cleanupSpeechRecognizer: (Boolean) -> Unit = { cancelActive ->
+        speechSessionGen++
+        val recognizer = activeSpeechRecognizer
+        activeSpeechRecognizer = null
+        isListeningDialogVisible = false
+        isFinishingSpeech = false
+        listeningRmsDb = 0f
+        if (recognizer != null) {
+            runCatching {
+                if (cancelActive) recognizer.cancel()
+            }
+            runCatching { recognizer.destroy() }
+        }
+    }
+
+    DisposableEffect(selectedTab) {
+        onDispose {
+            cleanupSpeechRecognizer(true)
+        }
+    }
+
     val speechLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
     ) { result ->
+        val engine = SpeechInputHelper.resolveActiveSpeechEngine(context)
+        activeSpeechEngine = engine
         if (result.resultCode == Activity.RESULT_OK) {
             val spoken = result.data
                 ?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)
                 ?.firstOrNull()
                 ?.trim()
             if (!spoken.isNullOrEmpty()) {
-                inputText = if (inputText.isBlank()) spoken else "${inputText.trim()}，$spoken"
-                textParseError = null
+                appendRecognizedSpeech(spoken)
+            } else {
+                canReRequestMicPermission = false
+                speechDiagnosis = SpeechInputHelper.diagnoseActivityResultError(
+                    resultCode = RecognizerIntent.RESULT_NO_MATCH,
+                    engine = engine,
+                    isXiaomiRom = isXiaomiRom
+                )
             }
+        } else {
+            canReRequestMicPermission = false
+            speechDiagnosis = SpeechInputHelper.diagnoseActivityResultError(
+                resultCode = result.resultCode,
+                engine = engine,
+                isXiaomiRom = isXiaomiRom
+            )
+        }
+    }
+
+    val launchSystemSpeechDialog: () -> Unit = {
+        cleanupSpeechRecognizer(true)
+        val engine = SpeechInputHelper.resolveActiveSpeechEngine(context)
+        activeSpeechEngine = engine
+        speechDiagnosis = null
+        canReRequestMicPermission = false
+        val intent = SpeechInputHelper.buildRecognitionIntent(callingPackage = context.packageName)
+        runCatching {
+            speechLauncher.launch(intent)
+        }.onFailure {
+            speechDiagnosis = SpeechInputHelper.diagnoseSpeechRecognizerError(
+                errorCode = SpeechRecognizer.ERROR_CLIENT,
+                engine = engine,
+                isXiaomiRom = isXiaomiRom
+            ).copy(
+                title = "未找到可用的系统语音服务",
+                message = "当前设备未检测到可用的系统语音识别弹窗或服务，请检查语音引擎设置或直接使用输入法语音。",
+                showVoiceSettingsAction = true,
+                showSystemDialogFallback = false
+            )
+        }
+    }
+
+    val startInAppSpeechRecognition: () -> Unit = {
+        cleanupSpeechRecognizer(true)
+        val engine = SpeechInputHelper.resolveActiveSpeechEngine(context)
+        activeSpeechEngine = engine
+        speechDiagnosis = null
+        canReRequestMicPermission = false
+
+        if (!SpeechInputHelper.isInAppSpeechAvailable(context)) {
+            launchSystemSpeechDialog()
+        } else {
+            val sessionId = ++speechSessionGen
+            listeningPartialText = ""
+            listeningRmsDb = 0f
+            isFinishingSpeech = false
+            isListeningDialogVisible = true
+
+            val createRes = runCatching {
+                val recognizer = SpeechRecognizer.createSpeechRecognizer(context)
+                recognizer.setRecognitionListener(object : RecognitionListener {
+                    override fun onReadyForSpeech(params: Bundle?) {}
+
+                    override fun onBeginningOfSpeech() {}
+
+                    override fun onRmsChanged(rmsdB: Float) {
+                        if (sessionId == speechSessionGen) {
+                            listeningRmsDb = rmsdB
+                        }
+                    }
+
+                    override fun onBufferReceived(buffer: ByteArray?) {}
+
+                    override fun onEndOfSpeech() {
+                        if (sessionId == speechSessionGen) {
+                            isFinishingSpeech = true
+                        }
+                    }
+
+                    override fun onError(error: Int) {
+                        if (sessionId != speechSessionGen) return
+                        val partialFallback = listeningPartialText.trim()
+                        val shouldRescuePartial = isFinishingSpeech &&
+                            partialFallback.isNotEmpty() &&
+                            (error == SpeechRecognizer.ERROR_NO_MATCH ||
+                                error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT)
+                        cleanupSpeechRecognizer(false)
+                        if (shouldRescuePartial) {
+                            appendRecognizedSpeech(partialFallback)
+                        } else {
+                            speechDiagnosis = SpeechInputHelper.diagnoseSpeechRecognizerError(
+                                errorCode = error,
+                                engine = engine,
+                                isXiaomiRom = isXiaomiRom
+                            )
+                        }
+                    }
+
+                    override fun onResults(results: Bundle?) {
+                        if (sessionId != speechSessionGen) return
+                        val spoken = results
+                            ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                            ?.firstOrNull()
+                            ?.trim()
+                            ?.takeIf { it.isNotEmpty() }
+                            ?: listeningPartialText.trim()
+                        cleanupSpeechRecognizer(false)
+                        if (spoken.isNotEmpty()) {
+                            appendRecognizedSpeech(spoken)
+                        } else {
+                            speechDiagnosis = SpeechInputHelper.diagnoseSpeechRecognizerError(
+                                errorCode = SpeechRecognizer.ERROR_NO_MATCH,
+                                engine = engine,
+                                isXiaomiRom = isXiaomiRom
+                            )
+                        }
+                    }
+
+                    override fun onPartialResults(partialResults: Bundle?) {
+                        if (sessionId != speechSessionGen) return
+                        val partial = partialResults
+                            ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                            ?.firstOrNull()
+                            ?.trim()
+                        if (!partial.isNullOrEmpty()) {
+                            listeningPartialText = partial
+                        }
+                    }
+
+                    override fun onEvent(eventType: Int, params: Bundle?) {}
+                })
+                activeSpeechRecognizer = recognizer
+                recognizer.startListening(
+                    SpeechInputHelper.buildRecognitionIntent(
+                        callingPackage = context.packageName,
+                        partialResults = true
+                    )
+                )
+            }
+            createRes.onFailure {
+                cleanupSpeechRecognizer(true)
+                speechDiagnosis = SpeechInputHelper.diagnoseSpeechRecognizerError(
+                    errorCode = SpeechRecognizer.ERROR_CLIENT,
+                    engine = engine,
+                    isXiaomiRom = isXiaomiRom
+                )
+            }
+        }
+    }
+
+    val recordAudioPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted) {
+            canReRequestMicPermission = false
+            speechDiagnosis = null
+            startInAppSpeechRecognition()
+        } else {
+            val engine = SpeechInputHelper.resolveActiveSpeechEngine(context)
+            activeSpeechEngine = engine
+            canReRequestMicPermission = true
+            speechDiagnosis = SpeechErrorDiagnosis(
+                kind = SpeechErrorKind.PERMISSION_DENIED,
+                title = "需要麦克风录音权限",
+                message = "未获得录音权限，无法启动语音记账。请允许「余白」访问麦克风后继续。",
+                guideSteps = listOf(
+                    "1. 点击下方「重新申请」，在系统权限弹窗中选择「仅在使用中允许」",
+                    "2. 若系统已勾选不再询问，请点击「前往应用权限设置」手动开启「麦克风」权限"
+                ),
+                showAppPermissionAction = true,
+                showEngineSettingsAction = false,
+                showVoiceSettingsAction = false,
+                showSystemDialogFallback = false
+            )
+        }
+    }
+
+    val onVoiceInputClick: () -> Unit = {
+        textParseError = null
+        if (SpeechInputHelper.hasRecordAudioPermission(context)) {
+            startInAppSpeechRecognition()
+        } else {
+            recordAudioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
         }
     }
 
@@ -246,10 +497,14 @@ fun SmartInputSheet(
     }
 
     ModalBottomSheet(
-        onDismissRequest = onDismiss,
+        onDismissRequest = {
+            cleanupSpeechRecognizer(true)
+            onDismiss()
+        },
         sheetState = sheetState,
         dragHandle = null,
-        containerColor = MaterialTheme.colorScheme.surface
+        shape = YubraeSheetShape,
+        containerColor = yubraeSheetContainerColor()
     ) {
         Column(
             modifier = Modifier
@@ -299,7 +554,12 @@ fun SmartInputSheet(
                         }
                     }
                 }
-                IconButton(onClick = onDismiss) {
+                IconButton(
+                    onClick = {
+                        cleanupSpeechRecognizer(true)
+                        onDismiss()
+                    }
+                ) {
                     Icon(Icons.Rounded.Close, contentDescription = "关闭")
                 }
             }
@@ -410,21 +670,7 @@ fun SmartInputSheet(
                         horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
                         OutlinedButton(
-                            onClick = {
-                                val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-                                    putExtra(
-                                        RecognizerIntent.EXTRA_LANGUAGE_MODEL,
-                                        RecognizerIntent.LANGUAGE_MODEL_FREE_FORM
-                                    )
-                                    putExtra(RecognizerIntent.EXTRA_LANGUAGE, "zh-CN")
-                                    putExtra(RecognizerIntent.EXTRA_PROMPT, "请说出要记的账单，可连说多笔")
-                                }
-                                runCatching {
-                                    speechLauncher.launch(intent)
-                                }.onFailure {
-                                    textParseError = "当前设备未安装系统语音识别服务，请直接输入或使用输入法语音按钮。"
-                                }
-                            },
+                            onClick = onVoiceInputClick,
                             shape = RoundedCornerShape(14.dp)
                         ) {
                             Icon(Icons.Rounded.Mic, null, modifier = Modifier.size(18.dp))
@@ -475,6 +721,35 @@ fun SmartInputSheet(
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(if (isParsingText) "正在解析..." else "智能解析")
                         }
+                    }
+
+                    speechDiagnosis?.let { diagnosis ->
+                        SpeechDiagnosisCard(
+                            diagnosis = diagnosis,
+                            engine = activeSpeechEngine,
+                            showRequestPermission = canReRequestMicPermission &&
+                                !SpeechInputHelper.hasRecordAudioPermission(context),
+                            onDismiss = {
+                                speechDiagnosis = null
+                                canReRequestMicPermission = false
+                            },
+                            onRequestPermission = {
+                                recordAudioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                            },
+                            onOpenAppPermission = {
+                                SpeechInputHelper.openAppPermissionSettings(context)
+                            },
+                            onOpenEngineSettings = {
+                                SpeechInputHelper.openSpeechEngineAppDetails(
+                                    context = context,
+                                    packageName = activeSpeechEngine?.packageName
+                                )
+                            },
+                            onOpenVoiceSettings = {
+                                SpeechInputHelper.openVoiceInputSettings(context)
+                            },
+                            onFallbackSystemDialog = launchSystemSpeechDialog
+                        )
                     }
 
                     textParseError?.let { err ->
@@ -746,6 +1021,32 @@ fun SmartInputSheet(
                 }
             }
         }
+    }
+
+    if (isListeningDialogVisible) {
+        SpeechListeningDialog(
+            engineLabel = activeSpeechEngine?.label?.takeIf { it.isNotBlank() } ?: "系统语音引擎",
+            rmsDb = listeningRmsDb,
+            partialText = listeningPartialText,
+            isFinishing = isFinishingSpeech,
+            onCancel = { cleanupSpeechRecognizer(true) },
+            onFinish = {
+                val recognizer = activeSpeechRecognizer
+                if (recognizer == null) {
+                    cleanupSpeechRecognizer(false)
+                } else {
+                    isFinishingSpeech = true
+                    runCatching { recognizer.stopListening() }
+                        .onFailure {
+                            val rescued = listeningPartialText.trim()
+                            cleanupSpeechRecognizer(true)
+                            if (rescued.isNotEmpty()) {
+                                appendRecognizedSpeech(rescued)
+                            }
+                        }
+                }
+            }
+        )
     }
 
     zoomImagePath?.let { path ->
@@ -1051,6 +1352,323 @@ private fun DraftEditorCard(
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+        }
+    }
+}
+
+@Composable
+private fun SpeechListeningDialog(
+    engineLabel: String,
+    rmsDb: Float,
+    partialText: String,
+    isFinishing: Boolean,
+    onCancel: () -> Unit,
+    onFinish: () -> Unit
+) {
+    val infiniteTransition = rememberInfiniteTransition(label = "voice_pulse")
+    val idleBreath by infiniteTransition.animateFloat(
+        initialValue = 1.0f,
+        targetValue = 1.12f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 950, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "voice_idle_breath"
+    )
+    val normalizedRms = ((rmsDb.coerceIn(-2f, 12f) + 2f) / 14f)
+    val rmsScale by animateFloatAsState(
+        targetValue = 1.0f + normalizedRms * 0.42f,
+        animationSpec = tween(durationMillis = 120, easing = FastOutSlowInEasing),
+        label = "voice_rms_scale"
+    )
+    val outerScale = maxOf(idleBreath, rmsScale)
+    val innerScale = 1.0f + (outerScale - 1.0f) * 0.55f
+
+    YubraeDialog(
+        onDismissRequest = onCancel,
+        title = "正在聆听语音记账",
+        subtitle = engineLabel,
+        icon = Icons.Rounded.Mic,
+        confirmButton = {
+            Button(
+                onClick = onFinish,
+                enabled = !isFinishing,
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Text(if (isFinishing) "识别中..." else "说完了")
+            }
+        },
+        dismissButton = {
+            TextButton(
+                onClick = onCancel,
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Text("取消")
+            }
+        }
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            Box(
+                modifier = Modifier.size(112.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(84.dp)
+                        .graphicsLayer {
+                            scaleX = outerScale
+                            scaleY = outerScale
+                        }
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.14f))
+                )
+                Box(
+                    modifier = Modifier
+                        .size(68.dp)
+                        .graphicsLayer {
+                            scaleX = innerScale
+                            scaleY = innerScale
+                        }
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.24f))
+                )
+                Surface(
+                    modifier = Modifier.size(54.dp),
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.primary,
+                    shadowElevation = 4.dp
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = Icons.Rounded.Mic,
+                            contentDescription = "正在聆听",
+                            tint = MaterialTheme.colorScheme.onPrimary,
+                            modifier = Modifier.size(28.dp)
+                        )
+                    }
+                }
+            }
+
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(14.dp),
+                color = MaterialTheme.colorScheme.surfaceContainerLow,
+                border = BorderStroke(
+                    width = 0.6.dp,
+                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)
+                )
+            ) {
+                val hasText = partialText.isNotBlank()
+                Text(
+                    text = if (hasText) {
+                        partialText
+                    } else {
+                        "试试说：午饭花了35元，打车18元"
+                    },
+                    style = if (hasText) {
+                        MaterialTheme.typography.bodyLarge
+                    } else {
+                        MaterialTheme.typography.bodyMedium
+                    },
+                    color = if (hasText) {
+                        MaterialTheme.colorScheme.onSurface
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 14.dp, vertical = 14.dp)
+                )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun SpeechDiagnosisCard(
+    diagnosis: SpeechErrorDiagnosis,
+    engine: SpeechEngineInfo?,
+    showRequestPermission: Boolean,
+    onDismiss: () -> Unit,
+    onRequestPermission: () -> Unit,
+    onOpenAppPermission: () -> Unit,
+    onOpenEngineSettings: () -> Unit,
+    onOpenVoiceSettings: () -> Unit,
+    onFallbackSystemDialog: () -> Unit
+) {
+    val semantic = KairoTheme.semantic
+    val isHintOnly = diagnosis.kind == SpeechErrorKind.NO_SPEECH_OR_TIMEOUT
+    val isEngineAuth = diagnosis.kind == SpeechErrorKind.ENGINE_AUTHORIZATION_OR_SERVICE
+
+    val containerColor = when {
+        isHintOnly -> MaterialTheme.colorScheme.surfaceContainerLow
+        isEngineAuth -> semantic.warningContainer.copy(alpha = 0.62f)
+        else -> MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.55f)
+    }
+    val accentColor = when {
+        isHintOnly -> MaterialTheme.colorScheme.primary
+        isEngineAuth -> semantic.warning
+        else -> MaterialTheme.colorScheme.error
+    }
+    val headerIcon = when (diagnosis.kind) {
+        SpeechErrorKind.PERMISSION_DENIED -> Icons.Rounded.MicOff
+        SpeechErrorKind.ENGINE_AUTHORIZATION_OR_SERVICE -> Icons.Rounded.WarningAmber
+        SpeechErrorKind.NO_SPEECH_OR_TIMEOUT -> Icons.Rounded.Info
+        SpeechErrorKind.NETWORK_OR_UNAVAILABLE -> Icons.Rounded.SettingsVoice
+        SpeechErrorKind.UNKNOWN -> Icons.Rounded.WarningAmber
+    }
+
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        color = containerColor,
+        border = BorderStroke(
+            width = 0.6.dp,
+            color = accentColor.copy(alpha = 0.30f)
+        )
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Surface(
+                    modifier = Modifier.size(30.dp),
+                    shape = RoundedCornerShape(9.dp),
+                    color = accentColor.copy(alpha = 0.16f)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = headerIcon,
+                            contentDescription = null,
+                            tint = accentColor,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                }
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = diagnosis.title,
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    if (engine != null && !isHintOnly) {
+                        Text(
+                            text = "当前引擎：${engine.label} (${engine.packageName})",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+                IconButton(
+                    onClick = onDismiss,
+                    modifier = Modifier.size(26.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Close,
+                        contentDescription = "关闭提示",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+            }
+
+            Text(
+                text = diagnosis.message,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+
+            if (diagnosis.guideSteps.isNotEmpty()) {
+                Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                    diagnosis.guideSteps.forEach { step ->
+                        Text(
+                            text = step,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+
+            val hasActions = showRequestPermission ||
+                diagnosis.showAppPermissionAction ||
+                diagnosis.showEngineSettingsAction ||
+                diagnosis.showVoiceSettingsAction ||
+                diagnosis.showSystemDialogFallback
+
+            if (hasActions) {
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    if (showRequestPermission) {
+                        FilledTonalButton(
+                            onClick = onRequestPermission,
+                            shape = RoundedCornerShape(12.dp),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                            modifier = Modifier.height(34.dp)
+                        ) {
+                            Text("重新申请", style = MaterialTheme.typography.labelMedium)
+                        }
+                    }
+                    if (diagnosis.showAppPermissionAction) {
+                        OutlinedButton(
+                            onClick = onOpenAppPermission,
+                            shape = RoundedCornerShape(12.dp),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                            modifier = Modifier.height(34.dp)
+                        ) {
+                            Text("前往应用权限设置", style = MaterialTheme.typography.labelMedium)
+                        }
+                    }
+                    if (diagnosis.showEngineSettingsAction) {
+                        FilledTonalButton(
+                            onClick = onOpenEngineSettings,
+                            shape = RoundedCornerShape(12.dp),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                            modifier = Modifier.height(34.dp)
+                        ) {
+                            Text("去授权语音引擎", style = MaterialTheme.typography.labelMedium)
+                        }
+                    }
+                    if (diagnosis.showVoiceSettingsAction) {
+                        OutlinedButton(
+                            onClick = onOpenVoiceSettings,
+                            shape = RoundedCornerShape(12.dp),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                            modifier = Modifier.height(34.dp)
+                        ) {
+                            Text("系统语音设置", style = MaterialTheme.typography.labelMedium)
+                        }
+                    }
+                    if (diagnosis.showSystemDialogFallback) {
+                        OutlinedButton(
+                            onClick = onFallbackSystemDialog,
+                            shape = RoundedCornerShape(12.dp),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                            modifier = Modifier.height(34.dp)
+                        ) {
+                            Text("系统语音弹窗", style = MaterialTheme.typography.labelMedium)
+                        }
+                    }
+                }
+            }
         }
     }
 }

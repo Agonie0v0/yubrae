@@ -40,7 +40,6 @@ import androidx.compose.material.icons.rounded.Schedule
 import androidx.compose.material.icons.rounded.SwapHoriz
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material.icons.rounded.Unarchive
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
@@ -102,6 +101,7 @@ import com.yubrae.app.ui.components.EmptyStateCard
 import com.yubrae.app.ui.components.KairoFormats
 import com.yubrae.app.ui.components.LocalPrivacyMasked
 import com.yubrae.app.ui.components.YimuCard
+import com.yubrae.app.ui.components.YubraeDialog
 import com.yubrae.app.ui.components.formatPrivacyAmount
 import com.yubrae.app.ui.theme.KairoTheme
 import com.yubrae.app.ui.theme.tabular
@@ -1302,95 +1302,11 @@ private fun InstallmentEditorDialog(
     var selectedCategoryId by remember { mutableStateOf(rootExpenseCategories.firstOrNull()?.id) }
     var errorMsg by remember { mutableStateOf<String?>(null) }
 
-    AlertDialog(
+    YubraeDialog(
         onDismissRequest = onDismiss,
-        title = { Text("新建分期") },
-        text = {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                OutlinedTextField(
-                    value = name,
-                    onValueChange = { name = it },
-                    label = { Text("分期名称") },
-                    placeholder = { Text("如：手机分期") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                OutlinedTextField(
-                    value = totalAmountInput,
-                    onValueChange = { totalAmountInput = it },
-                    label = { Text("总金额 (${account.currencyCode})") },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                OutlinedTextField(
-                    value = feeInput,
-                    onValueChange = { feeInput = it },
-                    label = { Text("每期手续费 (${account.currencyCode})") },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-
-                Text("期数", style = MaterialTheme.typography.labelMedium)
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    listOf(3, 6, 12, 24).forEach { p ->
-                        FilterChip(
-                            selected = periodsInput == p.toString(),
-                            onClick = { periodsInput = p.toString() },
-                            label = { Text("${p}期") }
-                        )
-                    }
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(
-                        value = periodsInput,
-                        onValueChange = { periodsInput = it },
-                        label = { Text("总期数") },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        singleLine = true,
-                        modifier = Modifier.weight(1f)
-                    )
-                    OutlinedTextField(
-                        value = billingDayInput,
-                        onValueChange = { billingDayInput = it },
-                        label = { Text("每月记账日") },
-                        placeholder = { Text("1-31") },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        singleLine = true,
-                        modifier = Modifier.weight(1f)
-                    )
-                }
-
-                if (rootExpenseCategories.isNotEmpty()) {
-                    Text("分类", style = MaterialTheme.typography.labelMedium)
-                    FlowRow(
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        rootExpenseCategories.forEach { cat ->
-                            FilterChip(
-                                selected = selectedCategoryId == cat.id,
-                                onClick = { selectedCategoryId = cat.id },
-                                label = { Text(cat.name) }
-                            )
-                        }
-                    }
-                }
-
-                errorMsg?.let {
-                    Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
-                }
-            }
-        },
+        title = "新建分期",
+        subtitle = "${account.name} · ${account.currencyCode}",
+        icon = Icons.Rounded.CreditCard,
         confirmButton = {
             Button(
                 onClick = {
@@ -1424,15 +1340,109 @@ private fun InstallmentEditorDialog(
                             )
                         }
                     }
-                }
+                },
+                shape = RoundedCornerShape(12.dp)
             ) {
                 Text("保存")
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("取消") }
+            TextButton(
+                onClick = onDismiss,
+                shape = RoundedCornerShape(12.dp)
+            ) { Text("取消") }
         }
-    )
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            OutlinedTextField(
+                value = name,
+                onValueChange = { name = it },
+                label = { Text("分期名称") },
+                placeholder = { Text("如：手机分期") },
+                singleLine = true,
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier.fillMaxWidth()
+            )
+            OutlinedTextField(
+                value = totalAmountInput,
+                onValueChange = { totalAmountInput = it },
+                label = { Text("总金额 (${account.currencyCode})") },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                singleLine = true,
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier.fillMaxWidth()
+            )
+            OutlinedTextField(
+                value = feeInput,
+                onValueChange = { feeInput = it },
+                label = { Text("每期手续费 (${account.currencyCode})") },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                singleLine = true,
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            Text("期数", style = MaterialTheme.typography.labelMedium)
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                listOf(3, 6, 12, 24).forEach { p ->
+                    FilterChip(
+                        selected = periodsInput == p.toString(),
+                        onClick = { periodsInput = p.toString() },
+                        label = { Text("${p}期") }
+                    )
+                }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = periodsInput,
+                    onValueChange = { periodsInput = it },
+                    label = { Text("总期数") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    singleLine = true,
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.weight(1f)
+                )
+                OutlinedTextField(
+                    value = billingDayInput,
+                    onValueChange = { billingDayInput = it },
+                    label = { Text("每月记账日") },
+                    placeholder = { Text("1-31") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    singleLine = true,
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.weight(1f)
+                )
+            }
+
+            if (rootExpenseCategories.isNotEmpty()) {
+                Text("分类", style = MaterialTheme.typography.labelMedium)
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    rootExpenseCategories.forEach { cat ->
+                        FilterChip(
+                            selected = selectedCategoryId == cat.id,
+                            onClick = { selectedCategoryId = cat.id },
+                            label = { Text(cat.name) }
+                        )
+                    }
+                }
+            }
+
+            errorMsg?.let {
+                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+            }
+        }
+    }
 }
 
 @Composable

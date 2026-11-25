@@ -255,4 +255,42 @@ final class ExternalBillAndUpdateTests: XCTestCase {
         let upToDate = AppUpdateChecker.evaluateRelease(release, currentVersion: "1.2.0")
         XCTAssertEqual(upToDate, .upToDate(currentVersion: "1.2.0", latestTag: "v1.2.0"))
     }
+
+    // MARK: - RootTab Navigation & YubraeTab Tests
+
+    func testYubraeTabOrderingMetadataAndShiftedBounds() {
+        XCTAssertEqual(YubraeTab.allCases, [.transactions, .assets, .stats, .mine])
+        XCTAssertEqual(YubraeTab.allCases.map(\.rawValue), [0, 1, 2, 3])
+
+        for tab in YubraeTab.allCases {
+            XCTAssertFalse(tab.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            XCTAssertFalse(tab.systemImage.isEmpty)
+            XCTAssertFalse(tab.selectedSystemImage.isEmpty)
+        }
+
+        XCTAssertEqual(YubraeTab.transactions.title, "明细")
+        XCTAssertEqual(YubraeTab.assets.title, "资产")
+        XCTAssertEqual(YubraeTab.stats.title, "统计")
+        XCTAssertEqual(YubraeTab.mine.title, "我的")
+
+        // 首尾越界钳制
+        XCTAssertEqual(YubraeTab.transactions.shifted(by: -1), .transactions)
+        XCTAssertEqual(YubraeTab.transactions.shifted(by: -99), .transactions)
+        XCTAssertEqual(YubraeTab.transactions.shifted(by: Int.min), .transactions)
+        XCTAssertEqual(YubraeTab.mine.shifted(by: 1), .mine)
+        XCTAssertEqual(YubraeTab.mine.shifted(by: 99), .mine)
+        XCTAssertEqual(YubraeTab.mine.shifted(by: Int.max), .mine)
+
+        // 中间下标与跨步切换
+        XCTAssertEqual(YubraeTab.transactions.shifted(by: 1), .assets)
+        XCTAssertEqual(YubraeTab.transactions.shifted(by: 3), .mine)
+        XCTAssertEqual(YubraeTab.transactions.shifted(by: 10), .mine)
+        XCTAssertEqual(YubraeTab.assets.shifted(by: -1), .transactions)
+        XCTAssertEqual(YubraeTab.assets.shifted(by: 0), .assets)
+        XCTAssertEqual(YubraeTab.assets.shifted(by: 1), .stats)
+        XCTAssertEqual(YubraeTab.stats.shifted(by: -1), .assets)
+        XCTAssertEqual(YubraeTab.stats.shifted(by: 1), .mine)
+        XCTAssertEqual(YubraeTab.mine.shifted(by: -1), .stats)
+        XCTAssertEqual(YubraeTab.mine.shifted(by: -10), .transactions)
+    }
 }

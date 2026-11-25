@@ -49,7 +49,6 @@ import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material.icons.rounded.Unarchive
 import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.material.icons.rounded.VisibilityOff
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -111,6 +110,7 @@ import com.yubrae.app.ui.components.GroupedIconPicker
 import com.yubrae.app.ui.components.KairoIcons
 import com.yubrae.app.ui.components.LocalPrivacyMasked
 import com.yubrae.app.ui.components.YimuCard
+import com.yubrae.app.ui.components.YubraeDialog
 import com.yubrae.app.ui.components.formatPrivacyAmount
 import com.yubrae.app.ui.theme.KairoTheme
 import com.yubrae.app.ui.theme.tabular
@@ -535,89 +535,85 @@ fun AssetsScreen(
             privacyMasked,
             MoneyAmount.format(acc.balanceMicros, acc.currencyCode, showCurrencyCode = true)
         )
-        AlertDialog(
+        YubraeDialog(
             onDismissRequest = { actionAccount = null },
-            title = {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    CartoonAccountIcon(
-                        iconKey = acc.icon,
-                        accountName = acc.name,
-                        colorHex = acc.colorHex,
-                        size = 36.dp
-                    )
-                    Column {
-                        Text(acc.name, style = MaterialTheme.typography.titleMedium)
-                        Text(
-                            text = "${AccountGroup.labelZh(acc.groupType)} · ${acc.currencyCode}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-            },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (hasDetailCallback) {
-                        AccountActionRow(
-                            icon = Icons.Rounded.AccountBalanceWallet,
-                            label = "账户详情",
-                            onClick = {
-                                actionAccount = null
-                                onOpenAccountDetail(acc)
-                            }
-                        )
-                    }
-                    AccountActionRow(
-                        icon = Icons.Rounded.Add,
-                        label = "记一笔",
-                        onClick = {
-                            actionAccount = null
-                            onOpenQuickRecordForAccount(acc.id)
-                        }
-                    )
-                    AccountActionRow(
-                        icon = Icons.Rounded.Tune,
-                        label = "余额校准 · $balanceFormatted",
-                        onClick = {
-                            actionAccount = null
-                            calibrateTarget = acc
-                        }
-                    )
-                    AccountActionRow(
-                        icon = Icons.Rounded.VisibilityOff,
-                        label = "隐藏此账户（下拉资产页可管理）",
-                        onClick = {
-                            actionAccount = null
-                            viewModel.toggleAccountHidden(acc.id, acc.name)
-                        }
-                    )
-                    AccountActionRow(
-                        icon = Icons.Rounded.Edit,
-                        label = "编辑账户",
-                        onClick = {
-                            actionAccount = null
-                            editingAccount = acc
-                        }
-                    )
-                    AccountActionRow(
-                        icon = if (acc.archived) Icons.Rounded.Unarchive else Icons.Rounded.Archive,
-                        label = if (acc.archived) "取消归档" else "归档",
-                        onClick = {
-                            actionAccount = null
-                            viewModel.archiveAccount(acc.id, !acc.archived)
-                        }
-                    )
-                }
+            title = acc.name,
+            subtitle = "${AccountGroup.labelZh(acc.groupType)} · ${acc.currencyCode}",
+            leadingBadge = {
+                CartoonAccountIcon(
+                    iconKey = acc.icon,
+                    accountName = acc.name,
+                    colorHex = acc.colorHex,
+                    size = 40.dp
+                )
             },
             confirmButton = {
-                TextButton(onClick = { actionAccount = null }) {
+                TextButton(
+                    onClick = { actionAccount = null },
+                    shape = RoundedCornerShape(12.dp)
+                ) {
                     Text("关闭")
                 }
             }
-        )
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                if (hasDetailCallback) {
+                    AccountActionRow(
+                        icon = Icons.Rounded.AccountBalanceWallet,
+                        label = "账户详情",
+                        onClick = {
+                            actionAccount = null
+                            onOpenAccountDetail(acc)
+                        }
+                    )
+                }
+                AccountActionRow(
+                    icon = Icons.Rounded.Add,
+                    label = "记一笔",
+                    onClick = {
+                        actionAccount = null
+                        onOpenQuickRecordForAccount(acc.id)
+                    }
+                )
+                AccountActionRow(
+                    icon = Icons.Rounded.Tune,
+                    label = "余额校准 · $balanceFormatted",
+                    onClick = {
+                        actionAccount = null
+                        calibrateTarget = acc
+                    }
+                )
+                AccountActionRow(
+                    icon = Icons.Rounded.VisibilityOff,
+                    label = "隐藏此账户（下拉资产页可管理）",
+                    onClick = {
+                        actionAccount = null
+                        viewModel.toggleAccountHidden(acc.id, acc.name)
+                    }
+                )
+                AccountActionRow(
+                    icon = Icons.Rounded.Edit,
+                    label = "编辑账户",
+                    onClick = {
+                        actionAccount = null
+                        editingAccount = acc
+                    }
+                )
+                AccountActionRow(
+                    icon = if (acc.archived) Icons.Rounded.Unarchive else Icons.Rounded.Archive,
+                    label = if (acc.archived) "取消归档" else "归档",
+                    onClick = {
+                        actionAccount = null
+                        viewModel.archiveAccount(acc.id, !acc.archived)
+                    }
+                )
+            }
+        }
     }
 
     // 新建或编辑账户对话框
@@ -1241,155 +1237,10 @@ internal fun AccountEditorDialog(
     var showMoreCurrencies by remember { mutableStateOf(false) }
     var errorMsg by remember { mutableStateOf<String?>(null) }
 
-    AlertDialog(
+    YubraeDialog(
         onDismissRequest = onDismiss,
-        title = { Text(if (existing == null) "新建账户" else "编辑账户") },
-        text = {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                OutlinedTextField(
-                    value = name,
-                    onValueChange = { name = it },
-                    label = { Text("账户名称") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-
-                Text("分组", style = MaterialTheme.typography.labelMedium)
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    AccountGroup.all.forEach { g ->
-                        FilterChip(
-                            selected = groupType == g,
-                            onClick = { groupType = g },
-                            label = { Text(AccountGroup.labelZh(g)) }
-                        )
-                    }
-                }
-
-                Text("币种", style = MaterialTheme.typography.labelMedium)
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    val quickCodes = if (pinnedCurrencies.contains(currencyCode)) pinnedCurrencies else pinnedCurrencies + currencyCode
-                    items(quickCodes, key = { it }) { code ->
-                        CurrencyBadge(
-                            currencyCode = code,
-                            selected = code.equals(currencyCode, true),
-                            onClick = { currencyCode = code }
-                        )
-                    }
-                    item(key = "more") {
-                        FilterChip(
-                            selected = false,
-                            onClick = { showMoreCurrencies = true },
-                            label = { Text("更多") }
-                        )
-                    }
-                }
-
-                if (existing == null) {
-                    OutlinedTextField(
-                        value = balanceInput,
-                        onValueChange = { balanceInput = it },
-                        label = { Text("期初余额 ($currencyCode，负债填负数)") },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-
-                if (groupType == AccountGroup.CREDIT) {
-                    OutlinedTextField(
-                        value = creditLimitInput,
-                        onValueChange = { creditLimitInput = it },
-                        label = { Text("信用额度 ($currencyCode)") },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedTextField(
-                            value = billingDayInput,
-                            onValueChange = { billingDayInput = it },
-                            label = { Text("账单日") },
-                            placeholder = { Text("1-31") },
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                            singleLine = true,
-                            modifier = Modifier.weight(1f)
-                        )
-                        OutlinedTextField(
-                            value = repaymentDayInput,
-                            onValueChange = { repaymentDayInput = it },
-                            label = { Text("还款日") },
-                            placeholder = { Text("1-31") },
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                            singleLine = true,
-                            modifier = Modifier.weight(1f)
-                        )
-                    }
-                }
-
-                Text("图标", style = MaterialTheme.typography.labelMedium)
-                GroupedIconPicker(
-                    groups = KairoIcons.accountIconGroups,
-                    selectedKey = iconKey,
-                    onSelect = { iconKey = it },
-                    accentColor = Color(colorHex),
-                    gridMaxHeight = 220.dp,
-                    useCartoonAccountIcons = true
-                )
-
-                Text("颜色", style = MaterialTheme.typography.labelMedium)
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    KairoIcons.selectableColorPalette.forEach { hex ->
-                        val selected = colorHex == hex
-                        Box(
-                            contentAlignment = Alignment.Center,
-                            modifier = Modifier
-                                .size(30.dp)
-                                .clip(CircleShape)
-                                .background(Color(hex))
-                                .then(
-                                    if (selected) {
-                                        Modifier.border(
-                                            BorderStroke(2.5.dp, MaterialTheme.colorScheme.onSurface),
-                                            CircleShape
-                                        )
-                                    } else {
-                                        Modifier
-                                    }
-                                )
-                                .clickable { colorHex = hex }
-                        ) {
-                            if (selected) {
-                                Icon(Icons.Rounded.Check, null, tint = Color.White, modifier = Modifier.size(16.dp))
-                            }
-                        }
-                    }
-                }
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text("计入净资产", style = MaterialTheme.typography.bodyMedium)
-                    Switch(checked = includeInNetWorth, onCheckedChange = { includeInNetWorth = it })
-                }
-
-                errorMsg?.let {
-                    Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
-                }
-            }
-        },
+        title = if (existing == null) "新建账户" else "编辑账户",
+        icon = Icons.Rounded.AccountBalanceWallet,
         confirmButton = {
             Button(
                 onClick = {
@@ -1430,15 +1281,169 @@ internal fun AccountEditorDialog(
                             updatedAt = System.currentTimeMillis()
                         )
                     )
-                }
+                },
+                shape = RoundedCornerShape(12.dp)
             ) {
                 Text("保存")
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("取消") }
+            TextButton(
+                onClick = onDismiss,
+                shape = RoundedCornerShape(12.dp)
+            ) { Text("取消") }
         }
-    )
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            OutlinedTextField(
+                value = name,
+                onValueChange = { name = it },
+                label = { Text("账户名称") },
+                singleLine = true,
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            Text("分组", style = MaterialTheme.typography.labelMedium)
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                AccountGroup.all.forEach { g ->
+                    FilterChip(
+                        selected = groupType == g,
+                        onClick = { groupType = g },
+                        label = { Text(AccountGroup.labelZh(g)) }
+                    )
+                }
+            }
+
+            Text("币种", style = MaterialTheme.typography.labelMedium)
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                val quickCodes = if (pinnedCurrencies.contains(currencyCode)) pinnedCurrencies else pinnedCurrencies + currencyCode
+                items(quickCodes, key = { it }) { code ->
+                    CurrencyBadge(
+                        currencyCode = code,
+                        selected = code.equals(currencyCode, true),
+                        onClick = { currencyCode = code }
+                    )
+                }
+                item(key = "more") {
+                    FilterChip(
+                        selected = false,
+                        onClick = { showMoreCurrencies = true },
+                        label = { Text("更多") }
+                    )
+                }
+            }
+
+            if (existing == null) {
+                OutlinedTextField(
+                    value = balanceInput,
+                    onValueChange = { balanceInput = it },
+                    label = { Text("期初余额 ($currencyCode，负债填负数)") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    singleLine = true,
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+
+            if (groupType == AccountGroup.CREDIT) {
+                OutlinedTextField(
+                    value = creditLimitInput,
+                    onValueChange = { creditLimitInput = it },
+                    label = { Text("信用额度 ($currencyCode)") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    singleLine = true,
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = billingDayInput,
+                        onValueChange = { billingDayInput = it },
+                        label = { Text("账单日") },
+                        placeholder = { Text("1-31") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        singleLine = true,
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier.weight(1f)
+                    )
+                    OutlinedTextField(
+                        value = repaymentDayInput,
+                        onValueChange = { repaymentDayInput = it },
+                        label = { Text("还款日") },
+                        placeholder = { Text("1-31") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        singleLine = true,
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            }
+
+            Text("图标", style = MaterialTheme.typography.labelMedium)
+            GroupedIconPicker(
+                groups = KairoIcons.accountIconGroups,
+                selectedKey = iconKey,
+                onSelect = { iconKey = it },
+                accentColor = Color(colorHex),
+                gridMaxHeight = 220.dp,
+                useCartoonAccountIcons = true
+            )
+
+            Text("颜色", style = MaterialTheme.typography.labelMedium)
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                KairoIcons.selectableColorPalette.forEach { hex ->
+                    val selected = colorHex == hex
+                    Box(
+                        contentAlignment = Alignment.Center,
+                        modifier = Modifier
+                            .size(30.dp)
+                            .clip(CircleShape)
+                            .background(Color(hex))
+                            .then(
+                                if (selected) {
+                                    Modifier.border(
+                                        BorderStroke(2.5.dp, MaterialTheme.colorScheme.onSurface),
+                                        CircleShape
+                                    )
+                                } else {
+                                    Modifier
+                                }
+                            )
+                            .clickable { colorHex = hex }
+                    ) {
+                        if (selected) {
+                            Icon(Icons.Rounded.Check, null, tint = Color.White, modifier = Modifier.size(16.dp))
+                        }
+                    }
+                }
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("计入净资产", style = MaterialTheme.typography.bodyMedium)
+                Switch(checked = includeInNetWorth, onCheckedChange = { includeInNetWorth = it })
+            }
+
+            errorMsg?.let {
+                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+            }
+        }
+    }
 
     if (showMoreCurrencies) {
         CurrencyPickerDialog(
@@ -1466,36 +1471,11 @@ internal fun CalibrateBalanceDialog(
     var noteInput by remember { mutableStateOf("余额校准") }
     var errorMsg by remember { mutableStateOf<String?>(null) }
 
-    AlertDialog(
+    YubraeDialog(
         onDismissRequest = onDismiss,
-        title = { Text("余额校准 · ${account.name}") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text(
-                    text = "当前余额：${formatPrivacyAmount(privacyMasked, MoneyAmount.format(account.balanceMicros, account.currencyCode, showCurrencyCode = true))}",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                OutlinedTextField(
-                    value = targetInput,
-                    onValueChange = { targetInput = it },
-                    label = { Text("实际余额 (${account.currencyCode})") },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                OutlinedTextField(
-                    value = noteInput,
-                    onValueChange = { noteInput = it },
-                    label = { Text("备注") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                errorMsg?.let {
-                    Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
-                }
-            }
-        },
+        title = "余额校准",
+        subtitle = "${account.name} · ${account.currencyCode}",
+        icon = Icons.Rounded.Tune,
         confirmButton = {
             Button(
                 onClick = {
@@ -1505,14 +1485,51 @@ internal fun CalibrateBalanceDialog(
                     } else {
                         onConfirm(targetMicros, noteInput.trim().ifEmpty { "余额校准" })
                     }
-                }
+                },
+                shape = RoundedCornerShape(12.dp)
             ) {
                 Text("确认")
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("取消") }
+            TextButton(
+                onClick = onDismiss,
+                shape = RoundedCornerShape(12.dp)
+            ) { Text("取消") }
         }
-    )
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Text(
+                text = "当前余额：${formatPrivacyAmount(privacyMasked, MoneyAmount.format(account.balanceMicros, account.currencyCode, showCurrencyCode = true))}",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            OutlinedTextField(
+                value = targetInput,
+                onValueChange = { targetInput = it },
+                label = { Text("实际余额 (${account.currencyCode})") },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                singleLine = true,
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier.fillMaxWidth()
+            )
+            OutlinedTextField(
+                value = noteInput,
+                onValueChange = { noteInput = it },
+                label = { Text("备注") },
+                singleLine = true,
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier.fillMaxWidth()
+            )
+            errorMsg?.let {
+                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+            }
+        }
+    }
 }
 

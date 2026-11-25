@@ -27,10 +27,10 @@ import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.EventRepeat
 import androidx.compose.material.icons.rounded.PlayArrow
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DatePicker
+import androidx.compose.material3.DatePickerDefaults
 import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
@@ -70,7 +70,10 @@ import com.yubrae.app.ui.components.CurrencyBadge
 import com.yubrae.app.ui.components.CurrencyPickerDialog
 import com.yubrae.app.ui.components.EmptyStateCard
 import com.yubrae.app.ui.components.KairoFormats
+import com.yubrae.app.ui.components.YubraeDialog
+import com.yubrae.app.ui.components.YubraeDialogShape
 import com.yubrae.app.ui.components.transactionAmountColor
+import com.yubrae.app.ui.components.yubraeDialogContainerColor
 import com.yubrae.app.ui.theme.tabular
 import com.yubrae.app.ui.viewmodel.KairoMainViewModel
 import java.time.Instant
@@ -327,149 +330,10 @@ private fun RecurringRuleEditorDialog(
     var showDatePicker by remember { mutableStateOf(false) }
     var errorMsg by remember { mutableStateOf<String?>(null) }
 
-    AlertDialog(
+    YubraeDialog(
         onDismissRequest = onDismiss,
-        title = { Text(if (existing == null) "新增周期订阅" else "编辑周期订阅") },
-        text = {
-            Column(
-                modifier = Modifier.verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                OutlinedTextField(
-                    value = name,
-                    onValueChange = { name = it },
-                    label = { Text("名称") },
-                    placeholder = { Text("如 ChatGPT Plus") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    listOf(
-                        TransactionType.EXPENSE to "支出",
-                        TransactionType.INCOME to "收入",
-                        TransactionType.TRANSFER to "转账"
-                    ).forEach { (type, label) ->
-                        FilterChip(
-                            selected = txType == type,
-                            onClick = {
-                                txType = type
-                                if (type != TransactionType.TRANSFER) {
-                                    selectedCategoryId = categories.firstOrNull { it.type == type && it.parentId == null }?.id
-                                }
-                            },
-                            label = { Text(label) }
-                        )
-                    }
-                }
-
-                Text("扣款/入账账户", style = MaterialTheme.typography.labelMedium)
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    items(accounts, key = { it.id }) { acc ->
-                        FilterChip(
-                            selected = selectedAccountId == acc.id,
-                            onClick = {
-                                selectedAccountId = acc.id
-                                currencyCode = acc.currencyCode
-                            },
-                            label = { Text("${acc.name}(${acc.currencyCode})") }
-                        )
-                    }
-                }
-
-                if (txType == TransactionType.TRANSFER) {
-                    Text("转入目标账户", style = MaterialTheme.typography.labelMedium)
-                    LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        items(accounts.filter { it.id != selectedAccountId }, key = { it.id }) { acc ->
-                            FilterChip(
-                                selected = toAccountId == acc.id,
-                                onClick = { toAccountId = acc.id },
-                                label = { Text("${acc.name}(${acc.currencyCode})") }
-                            )
-                        }
-                    }
-                }
-
-                Text("订阅币种", style = MaterialTheme.typography.labelMedium)
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    val codes = if (pinnedCurrencies.contains(currencyCode)) pinnedCurrencies else pinnedCurrencies + currencyCode
-                    items(codes, key = { it }) { code ->
-                        CurrencyBadge(
-                            currencyCode = code,
-                            selected = code.equals(currencyCode, true),
-                            onClick = { currencyCode = code }
-                        )
-                    }
-                    item(key = "more") {
-                        FilterChip(selected = false, onClick = { showMoreCurrencies = true }, label = { Text("更多") })
-                    }
-                }
-
-                OutlinedTextField(
-                    value = amountInput,
-                    onValueChange = { amountInput = it },
-                    label = { Text("周期金额 ($currencyCode)") },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-
-                if (txType != TransactionType.TRANSFER) {
-                    Text("分类", style = MaterialTheme.typography.labelMedium)
-                    FlowRow(
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        categories.filter { it.type == txType && it.parentId == null }.forEach { cat ->
-                            FilterChip(
-                                selected = selectedCategoryId == cat.id,
-                                onClick = { selectedCategoryId = cat.id },
-                                label = { Text(cat.name) }
-                            )
-                        }
-                    }
-                }
-
-                Text("周期类型", style = MaterialTheme.typography.labelMedium)
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    listOf("WEEKLY" to "每周", "MONTHLY" to "每月", "YEARLY" to "每年").forEach { (code, label) ->
-                        FilterChip(selected = cycleType == code, onClick = { cycleType = code }, label = { Text(label) })
-                    }
-                }
-
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(
-                        value = dayOfCycleInput,
-                        onValueChange = { dayOfCycleInput = it },
-                        label = { Text(if (cycleType == "WEEKLY") "周几(1-7)" else "几号(1-31)") },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        singleLine = true,
-                        modifier = Modifier.weight(1f)
-                    )
-                    OutlinedButton(
-                        onClick = { showDatePicker = true },
-                        modifier = Modifier.weight(1.2f)
-                    ) {
-                        Icon(Icons.Rounded.CalendarMonth, null, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text(KairoFormats.formatDate(nextRunMillis))
-                    }
-                }
-
-                OutlinedTextField(value = merchant, onValueChange = { merchant = it }, label = { Text("商户（可选）") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(value = note, onValueChange = { note = it }, label = { Text("备注（可选）") }, singleLine = true, modifier = Modifier.fillMaxWidth())
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text("启用", style = MaterialTheme.typography.bodyMedium)
-                    Switch(checked = enabled, onCheckedChange = { enabled = it })
-                }
-
-                errorMsg?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
-            }
-        },
+        title = if (existing == null) "新增周期订阅" else "编辑周期订阅",
+        icon = Icons.Rounded.EventRepeat,
         confirmButton = {
             Button(
                 onClick = {
@@ -499,11 +363,176 @@ private fun RecurringRuleEditorDialog(
                             )
                         )
                     }
-                }
+                },
+                shape = RoundedCornerShape(12.dp)
             ) { Text("保存") }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } }
-    )
+        dismissButton = {
+            TextButton(
+                onClick = onDismiss,
+                shape = RoundedCornerShape(12.dp)
+            ) { Text("取消") }
+        }
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            OutlinedTextField(
+                value = name,
+                onValueChange = { name = it },
+                label = { Text("名称") },
+                placeholder = { Text("如 ChatGPT Plus") },
+                singleLine = true,
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier.fillMaxWidth()
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                listOf(
+                    TransactionType.EXPENSE to "支出",
+                    TransactionType.INCOME to "收入",
+                    TransactionType.TRANSFER to "转账"
+                ).forEach { (type, label) ->
+                    FilterChip(
+                        selected = txType == type,
+                        onClick = {
+                            txType = type
+                            if (type != TransactionType.TRANSFER) {
+                                selectedCategoryId = categories.firstOrNull { it.type == type && it.parentId == null }?.id
+                            }
+                        },
+                        label = { Text(label) }
+                    )
+                }
+            }
+
+            Text("扣款/入账账户", style = MaterialTheme.typography.labelMedium)
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                items(accounts, key = { it.id }) { acc ->
+                    FilterChip(
+                        selected = selectedAccountId == acc.id,
+                        onClick = {
+                            selectedAccountId = acc.id
+                            currencyCode = acc.currencyCode
+                        },
+                        label = { Text("${acc.name}(${acc.currencyCode})") }
+                    )
+                }
+            }
+
+            if (txType == TransactionType.TRANSFER) {
+                Text("转入目标账户", style = MaterialTheme.typography.labelMedium)
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    items(accounts.filter { it.id != selectedAccountId }, key = { it.id }) { acc ->
+                        FilterChip(
+                            selected = toAccountId == acc.id,
+                            onClick = { toAccountId = acc.id },
+                            label = { Text("${acc.name}(${acc.currencyCode})") }
+                        )
+                    }
+                }
+            }
+
+            Text("订阅币种", style = MaterialTheme.typography.labelMedium)
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                val codes = if (pinnedCurrencies.contains(currencyCode)) pinnedCurrencies else pinnedCurrencies + currencyCode
+                items(codes, key = { it }) { code ->
+                    CurrencyBadge(
+                        currencyCode = code,
+                        selected = code.equals(currencyCode, true),
+                        onClick = { currencyCode = code }
+                    )
+                }
+                item(key = "more") {
+                    FilterChip(selected = false, onClick = { showMoreCurrencies = true }, label = { Text("更多") })
+                }
+            }
+
+            OutlinedTextField(
+                value = amountInput,
+                onValueChange = { amountInput = it },
+                label = { Text("周期金额 ($currencyCode)") },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                singleLine = true,
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            if (txType != TransactionType.TRANSFER) {
+                Text("分类", style = MaterialTheme.typography.labelMedium)
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    categories.filter { it.type == txType && it.parentId == null }.forEach { cat ->
+                        FilterChip(
+                            selected = selectedCategoryId == cat.id,
+                            onClick = { selectedCategoryId = cat.id },
+                            label = { Text(cat.name) }
+                        )
+                    }
+                }
+            }
+
+            Text("周期类型", style = MaterialTheme.typography.labelMedium)
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                listOf("WEEKLY" to "每周", "MONTHLY" to "每月", "YEARLY" to "每年").forEach { (code, label) ->
+                    FilterChip(selected = cycleType == code, onClick = { cycleType = code }, label = { Text(label) })
+                }
+            }
+
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = dayOfCycleInput,
+                    onValueChange = { dayOfCycleInput = it },
+                    label = { Text(if (cycleType == "WEEKLY") "周几(1-7)" else "几号(1-31)") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    singleLine = true,
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.weight(1f)
+                )
+                OutlinedButton(
+                    onClick = { showDatePicker = true },
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.weight(1.2f)
+                ) {
+                    Icon(Icons.Rounded.CalendarMonth, null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(KairoFormats.formatDate(nextRunMillis))
+                }
+            }
+
+            OutlinedTextField(
+                value = merchant,
+                onValueChange = { merchant = it },
+                label = { Text("商户（可选）") },
+                singleLine = true,
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier.fillMaxWidth()
+            )
+            OutlinedTextField(
+                value = note,
+                onValueChange = { note = it },
+                label = { Text("备注（可选）") },
+                singleLine = true,
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("启用", style = MaterialTheme.typography.bodyMedium)
+                Switch(checked = enabled, onCheckedChange = { enabled = it })
+            }
+
+            errorMsg?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+        }
+    }
 
     if (showMoreCurrencies) {
         CurrencyPickerDialog(
@@ -521,6 +550,8 @@ private fun RecurringRuleEditorDialog(
         val pickerState = rememberDatePickerState(initialSelectedDateMillis = utcMillis)
         DatePickerDialog(
             onDismissRequest = { showDatePicker = false },
+            shape = YubraeDialogShape,
+            colors = DatePickerDefaults.colors(containerColor = yubraeDialogContainerColor()),
             confirmButton = {
                 TextButton(
                     onClick = {
@@ -529,11 +560,15 @@ private fun RecurringRuleEditorDialog(
                             nextRunMillis = pickedDate.atTime(LocalTime.of(9, 0)).atZone(zone).toInstant().toEpochMilli()
                         }
                         showDatePicker = false
-                    }
+                    },
+                    shape = RoundedCornerShape(12.dp)
                 ) { Text("确定") }
             },
             dismissButton = {
-                TextButton(onClick = { showDatePicker = false }) { Text("取消") }
+                TextButton(
+                    onClick = { showDatePicker = false },
+                    shape = RoundedCornerShape(12.dp)
+                ) { Text("取消") }
             }
         ) {
             DatePicker(state = pickerState)

@@ -36,7 +36,6 @@ import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.SubdirectoryArrowRight
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
@@ -75,6 +74,7 @@ import com.yubrae.app.ui.components.EmptyStateCard
 import com.yubrae.app.ui.components.GroupedIconPicker
 import com.yubrae.app.ui.components.KairoIcons
 import com.yubrae.app.ui.components.YimuCard
+import com.yubrae.app.ui.components.YubraeDialog
 
 private data class CategoryEditorTarget(
     val editing: CategoryEntity? = null,
@@ -555,131 +555,14 @@ private fun CategoryEditorDialog(
     }
     var nameError by remember { mutableStateOf(false) }
 
-    AlertDialog(
+    YubraeDialog(
         onDismissRequest = onDismiss,
-        title = {
-            Text(
-                text = when {
-                    isEditing -> "编辑${if (type == TransactionType.EXPENSE) "支出" else "收入"}分类"
-                    selectedParentId != null -> "新建二级分类"
-                    else -> "新建一级分类"
-                }
-            )
+        title = when {
+            isEditing -> "编辑${if (type == TransactionType.EXPENSE) "支出" else "收入"}分类"
+            selectedParentId != null -> "新建二级分类"
+            else -> "新建一级分类"
         },
-        text = {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                OutlinedTextField(
-                    value = name,
-                    onValueChange = {
-                        name = it
-                        if (it.isNotBlank()) nameError = false
-                    },
-                    label = { Text("分类名称") },
-                    isError = nameError,
-                    supportingText = if (nameError) {
-                        { Text("请输入分类名称") }
-                    } else null,
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-
-                Text(
-                    text = "所属父级",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    item(key = "as_root") {
-                        FilterChip(
-                            selected = selectedParentId == null,
-                            onClick = { selectedParentId = null },
-                            label = { Text("作为一级分类") }
-                        )
-                    }
-                    items(parentCandidates, key = { it.id }) { parent ->
-                        FilterChip(
-                            selected = selectedParentId == parent.id,
-                            onClick = { selectedParentId = parent.id },
-                            leadingIcon = {
-                                Icon(
-                                    imageVector = KairoIcons.iconFor(parent.icon),
-                                    contentDescription = null,
-                                    tint = Color(parent.colorHex),
-                                    modifier = Modifier.size(15.dp)
-                                )
-                            },
-                            label = { Text(parent.name) }
-                        )
-                    }
-                }
-
-                Text(
-                    text = "图标",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                GroupedIconPicker(
-                    groups = KairoIcons.categoryIconGroups,
-                    selectedKey = selectedIcon,
-                    onSelect = { selectedIcon = it },
-                    accentColor = Color(selectedColor),
-                    gridMaxHeight = 230.dp,
-                    useCartoonCategoryIcons = true
-                )
-
-                Text(
-                    text = "颜色",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    KairoIcons.selectableColorPalette.forEach { hex ->
-                        val isSelected = selectedColor == hex
-                        Box(
-                            modifier = Modifier
-                                .size(32.dp)
-                                .clip(CircleShape)
-                                .background(Color(hex))
-                                .then(
-                                    if (isSelected) {
-                                        Modifier.border(BorderStroke(2.5.dp, MaterialTheme.colorScheme.onSurface), CircleShape)
-                                    } else {
-                                        Modifier
-                                    }
-                                )
-                                .clickable { selectedColor = hex },
-                            contentAlignment = Alignment.Center
-                        ) {
-                            if (isSelected) {
-                                Icon(
-                                    imageVector = Icons.Rounded.Check,
-                                    contentDescription = "已选颜色",
-                                    tint = Color.White,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                            }
-                        }
-                    }
-                }
-
-                OutlinedTextField(
-                    value = sortOrderText,
-                    onValueChange = { sortOrderText = it.filter { ch -> ch.isDigit() || ch == '-' } },
-                    label = { Text("排序值") },
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    modifier = Modifier.fillMaxWidth()
-                )
-            }
-        },
+        icon = Icons.Rounded.Category,
         confirmButton = {
             Button(
                 onClick = {
@@ -701,13 +584,132 @@ private fun CategoryEditorDialog(
                             isSystem = editing?.isSystem ?: false
                         )
                     )
-                }
+                },
+                shape = RoundedCornerShape(12.dp)
             ) {
                 Text("保存")
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("取消") }
+            TextButton(
+                onClick = onDismiss,
+                shape = RoundedCornerShape(12.dp)
+            ) { Text("取消") }
         }
-    )
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            OutlinedTextField(
+                value = name,
+                onValueChange = {
+                    name = it
+                    if (it.isNotBlank()) nameError = false
+                },
+                label = { Text("分类名称") },
+                isError = nameError,
+                supportingText = if (nameError) {
+                    { Text("请输入分类名称") }
+                } else null,
+                singleLine = true,
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            Text(
+                text = "所属父级",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                item(key = "as_root") {
+                    FilterChip(
+                        selected = selectedParentId == null,
+                        onClick = { selectedParentId = null },
+                        label = { Text("作为一级分类") }
+                    )
+                }
+                items(parentCandidates, key = { it.id }) { parent ->
+                    FilterChip(
+                        selected = selectedParentId == parent.id,
+                        onClick = { selectedParentId = parent.id },
+                        leadingIcon = {
+                            Icon(
+                                imageVector = KairoIcons.iconFor(parent.icon),
+                                contentDescription = null,
+                                tint = Color(parent.colorHex),
+                                modifier = Modifier.size(15.dp)
+                            )
+                        },
+                        label = { Text(parent.name) }
+                    )
+                }
+            }
+
+            Text(
+                text = "图标",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            GroupedIconPicker(
+                groups = KairoIcons.categoryIconGroups,
+                selectedKey = selectedIcon,
+                onSelect = { selectedIcon = it },
+                accentColor = Color(selectedColor),
+                gridMaxHeight = 230.dp,
+                useCartoonCategoryIcons = true
+            )
+
+            Text(
+                text = "颜色",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                KairoIcons.selectableColorPalette.forEach { hex ->
+                    val isSelected = selectedColor == hex
+                    Box(
+                        modifier = Modifier
+                            .size(32.dp)
+                            .clip(CircleShape)
+                            .background(Color(hex))
+                            .then(
+                                if (isSelected) {
+                                    Modifier.border(BorderStroke(2.5.dp, MaterialTheme.colorScheme.onSurface), CircleShape)
+                                } else {
+                                    Modifier
+                                }
+                            )
+                            .clickable { selectedColor = hex },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (isSelected) {
+                            Icon(
+                                imageVector = Icons.Rounded.Check,
+                                contentDescription = "已选颜色",
+                                tint = Color.White,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
+                }
+            }
+
+            OutlinedTextField(
+                value = sortOrderText,
+                onValueChange = { sortOrderText = it.filter { ch -> ch.isDigit() || ch == '-' } },
+                label = { Text("排序值") },
+                singleLine = true,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+    }
 }

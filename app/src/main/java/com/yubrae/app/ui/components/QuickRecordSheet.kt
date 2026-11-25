@@ -69,11 +69,11 @@ import androidx.compose.material.icons.rounded.Schedule
 import androidx.compose.material.icons.rounded.Storefront
 import androidx.compose.material.icons.rounded.SwapHoriz
 import androidx.compose.material.icons.rounded.Tune
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DatePicker
+import androidx.compose.material3.DatePickerDefaults
 import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -1043,7 +1043,8 @@ fun QuickRecordSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
         dragHandle = null,
-        containerColor = MaterialTheme.colorScheme.surface
+        shape = YubraeSheetShape,
+        containerColor = yubraeSheetContainerColor()
     ) {
         Column(
             modifier = Modifier
@@ -2106,6 +2107,8 @@ fun QuickRecordSheet(
         val datePickerState = rememberDatePickerState(initialSelectedDateMillis = utcMidnight)
         DatePickerDialog(
             onDismissRequest = { showDatePicker = false },
+            shape = YubraeDialogShape,
+            colors = DatePickerDefaults.colors(containerColor = yubraeDialogContainerColor()),
             confirmButton = {
                 TextButton(
                     onClick = {
@@ -2116,14 +2119,21 @@ fun QuickRecordSheet(
                             timestampMillis = combined.atZone(zone).toInstant().toEpochMilli()
                         }
                         showDatePicker = false
-                    }
+                    },
+                    shape = RoundedCornerShape(12.dp)
                 ) { Text("确定") }
             },
             dismissButton = {
-                TextButton(onClick = { showDatePicker = false }) { Text("取消") }
+                TextButton(
+                    onClick = { showDatePicker = false },
+                    shape = RoundedCornerShape(12.dp)
+                ) { Text("取消") }
             }
         ) {
-            DatePicker(state = datePickerState)
+            DatePicker(
+                state = datePickerState,
+                colors = DatePickerDefaults.colors(containerColor = yubraeDialogContainerColor())
+            )
         }
     }
 
@@ -2135,12 +2145,12 @@ fun QuickRecordSheet(
             initialMinute = currentLocalDateTime.minute,
             is24Hour = true
         )
-        AlertDialog(
+        YubraeDialog(
             onDismissRequest = { showTimePicker = false },
-            title = { Text("选择时间") },
-            text = { TimePicker(state = timePickerState) },
+            title = "选择时间",
+            icon = Icons.Rounded.Schedule,
             confirmButton = {
-                TextButton(
+                Button(
                     onClick = {
                         val combined = LocalDateTime.of(
                             currentLocalDateTime.toLocalDate(),
@@ -2148,13 +2158,24 @@ fun QuickRecordSheet(
                         )
                         timestampMillis = combined.atZone(zone).toInstant().toEpochMilli()
                         showTimePicker = false
-                    }
+                    },
+                    shape = RoundedCornerShape(12.dp)
                 ) { Text("确定") }
             },
             dismissButton = {
-                TextButton(onClick = { showTimePicker = false }) { Text("取消") }
+                TextButton(
+                    onClick = { showTimePicker = false },
+                    shape = RoundedCornerShape(12.dp)
+                ) { Text("取消") }
             }
-        )
+        ) {
+            Box(
+                modifier = Modifier.fillMaxWidth(),
+                contentAlignment = Alignment.Center
+            ) {
+                TimePicker(state = timePickerState)
+            }
+        }
     }
 
     if (showDeleteConfirm && existingTransaction != null) {
@@ -2194,68 +2215,12 @@ private fun QuickCreateTagDialog(
     var selectedColor by remember { mutableStateOf(KairoIcons.selectableColorPalette.first()) }
     var nameError by remember { mutableStateOf(false) }
 
-    AlertDialog(
+    YubraeDialog(
         onDismissRequest = onDismiss,
-        title = { Text("新建标签") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                OutlinedTextField(
-                    value = name,
-                    onValueChange = {
-                        name = it
-                        if (it.isNotBlank()) nameError = false
-                    },
-                    label = { Text("标签名称") },
-                    placeholder = { Text("如：聚会、咖啡") },
-                    isError = nameError,
-                    supportingText = if (nameError) {
-                        { Text("请输入标签名称") }
-                    } else null,
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                Text(
-                    text = "选择颜色",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    KairoIcons.selectableColorPalette.forEach { hex ->
-                        val isSelected = selectedColor == hex
-                        Box(
-                            modifier = Modifier
-                                .size(28.dp)
-                                .clip(CircleShape)
-                                .background(Color(hex))
-                                .then(
-                                    if (isSelected) {
-                                        Modifier.border(
-                                            BorderStroke(2.dp, MaterialTheme.colorScheme.onSurface),
-                                            CircleShape
-                                        )
-                                    } else {
-                                        Modifier
-                                    }
-                                )
-                                .clickable { selectedColor = hex },
-                            contentAlignment = Alignment.Center
-                        ) {
-                            if (isSelected) {
-                                Icon(
-                                    imageVector = Icons.Rounded.Check,
-                                    contentDescription = "已选颜色",
-                                    tint = Color.White,
-                                    modifier = Modifier.size(15.dp)
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        },
+        title = "新建标签",
+        icon = Icons.AutoMirrored.Rounded.Label,
+        iconTint = Color(selectedColor),
+        iconContainerColor = Color(selectedColor).copy(alpha = 0.14f),
         confirmButton = {
             Button(
                 onClick = {
@@ -2265,15 +2230,77 @@ private fun QuickCreateTagDialog(
                     } else {
                         onConfirm(trimmed, selectedColor)
                     }
-                }
+                },
+                shape = RoundedCornerShape(12.dp)
             ) {
                 Text("创建并选中")
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("取消") }
+            TextButton(
+                onClick = onDismiss,
+                shape = RoundedCornerShape(12.dp)
+            ) { Text("取消") }
         }
-    )
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            OutlinedTextField(
+                value = name,
+                onValueChange = {
+                    name = it
+                    if (it.isNotBlank()) nameError = false
+                },
+                label = { Text("标签名称") },
+                placeholder = { Text("如：聚会、咖啡") },
+                isError = nameError,
+                supportingText = if (nameError) {
+                    { Text("请输入标签名称") }
+                } else null,
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Text(
+                text = "选择颜色",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                KairoIcons.selectableColorPalette.forEach { hex ->
+                    val isSelected = selectedColor == hex
+                    Box(
+                        modifier = Modifier
+                            .size(28.dp)
+                            .clip(CircleShape)
+                            .background(Color(hex))
+                            .then(
+                                if (isSelected) {
+                                    Modifier.border(
+                                        BorderStroke(2.dp, MaterialTheme.colorScheme.onSurface),
+                                        CircleShape
+                                    )
+                                } else {
+                                    Modifier
+                                }
+                            )
+                            .clickable { selectedColor = hex },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (isSelected) {
+                            Icon(
+                                imageVector = Icons.Rounded.Check,
+                                contentDescription = "已选颜色",
+                                tint = Color.White,
+                                modifier = Modifier.size(15.dp)
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 private fun formatCompactDateChip(epochMillis: Long): String {
@@ -2731,82 +2758,85 @@ private fun AccountPickerDialog(
     onSelect: (AccountEntity) -> Unit,
     onDismiss: () -> Unit
 ) {
-    AlertDialog(
+    YubraeDialog(
         onDismissRequest = onDismiss,
-        title = { Text("选择账户", style = MaterialTheme.typography.titleLarge) },
-        text = {
-            if (accounts.isEmpty()) {
-                Text(
-                    text = "暂无可用账户",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.error
-                )
-            } else {
-                LazyColumn(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(max = 360.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    items(accounts, key = { it.id }) { acc ->
-                        val isSelected = acc.id == selectedAccountId
-                        Surface(
-                            shape = RoundedCornerShape(12.dp),
-                            color = if (isSelected) {
-                                MaterialTheme.colorScheme.primaryContainer
-                            } else {
-                                MaterialTheme.colorScheme.surfaceContainerLow
-                            },
+        title = "选择账户",
+        icon = Icons.Rounded.AccountBalanceWallet,
+        confirmButton = {
+            TextButton(
+                onClick = onDismiss,
+                shape = RoundedCornerShape(12.dp)
+            ) { Text("关闭") }
+        }
+    ) {
+        if (accounts.isEmpty()) {
+            Text(
+                text = "暂无可用账户",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.error
+            )
+        } else {
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 360.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                items(accounts, key = { it.id }) { acc ->
+                    val isSelected = acc.id == selectedAccountId
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = if (isSelected) {
+                            MaterialTheme.colorScheme.primaryContainer
+                        } else {
+                            MaterialTheme.colorScheme.surfaceContainerLow
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .clickable { onSelect(acc) }
+                    ) {
+                        Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clip(RoundedCornerShape(12.dp))
-                                .clickable { onSelect(acc) }
+                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 12.dp, vertical = 10.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(10.dp)
-                            ) {
-                                CategoryIconBadge(
-                                    iconKey = acc.icon,
-                                    colorHex = acc.colorHex,
-                                    size = 32.dp,
-                                    iconSize = 16.dp
+                            CategoryIconBadge(
+                                iconKey = acc.icon,
+                                colorHex = acc.colorHex,
+                                size = 32.dp,
+                                iconSize = 16.dp
+                            )
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = acc.name,
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
                                 )
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = acc.name,
-                                        style = MaterialTheme.typography.titleSmall,
-                                        color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                    Text(
-                                        text = "${acc.currencyCode} · 余额 ${MoneyAmount.format(acc.balanceMicros, acc.currencyCode)}",
-                                        style = MaterialTheme.typography.bodySmall.tabular(),
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                                    )
-                                }
-                                if (isSelected) {
-                                    Icon(
-                                        imageVector = Icons.Rounded.Check,
-                                        contentDescription = "已选中",
-                                        tint = MaterialTheme.colorScheme.primary,
-                                        modifier = Modifier.size(18.dp)
-                                    )
-                                }
+                                Text(
+                                    text = "${acc.currencyCode} · 余额 ${MoneyAmount.format(acc.balanceMicros, acc.currencyCode)}",
+                                    style = MaterialTheme.typography.bodySmall.tabular(),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            if (isSelected) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Check,
+                                    contentDescription = "已选中",
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(18.dp)
+                                )
                             }
                         }
                     }
                 }
             }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) { Text("关闭") }
         }
-    )
+    }
 }
 
 @Composable
@@ -2816,68 +2846,71 @@ private fun LedgerPickerDialog(
     onSelect: (LedgerEntity) -> Unit,
     onDismiss: () -> Unit
 ) {
-    AlertDialog(
+    YubraeDialog(
         onDismissRequest = onDismiss,
-        title = { Text("选择账本", style = MaterialTheme.typography.titleLarge) },
-        text = {
-            LazyColumn(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(max = 320.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                items(ledgers, key = { it.id }) { ledger ->
-                    val isSelected = ledger.id == selectedLedgerId
-                    val ledgerColor = Color(ledger.colorHex)
-                    Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = if (isSelected) {
-                            ledgerColor.copy(alpha = 0.14f)
-                        } else {
-                            MaterialTheme.colorScheme.surfaceContainerLow
-                        },
-                        border = if (isSelected) BorderStroke(1.dp, ledgerColor.copy(alpha = 0.6f)) else null,
+        title = "选择账本",
+        icon = Icons.AutoMirrored.Rounded.MenuBook,
+        confirmButton = {
+            TextButton(
+                onClick = onDismiss,
+                shape = RoundedCornerShape(12.dp)
+            ) { Text("关闭") }
+        }
+    ) {
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = 320.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            items(ledgers, key = { it.id }) { ledger ->
+                val isSelected = ledger.id == selectedLedgerId
+                val ledgerColor = Color(ledger.colorHex)
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = if (isSelected) {
+                        ledgerColor.copy(alpha = 0.14f)
+                    } else {
+                        MaterialTheme.colorScheme.surfaceContainerLow
+                    },
+                    border = if (isSelected) BorderStroke(1.dp, ledgerColor.copy(alpha = 0.6f)) else null,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .clickable { onSelect(ledger) }
+                ) {
+                    Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clip(RoundedCornerShape(12.dp))
-                            .clickable { onSelect(ledger) }
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 12.dp, vertical = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
+                        Icon(
+                            imageVector = KairoIcons.ledgerIcon(ledger.icon),
+                            contentDescription = null,
+                            tint = ledgerColor,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Text(
+                            text = ledger.name,
+                            style = MaterialTheme.typography.titleSmall,
+                            color = if (isSelected) ledgerColor else MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.weight(1f)
+                        )
+                        if (isSelected) {
                             Icon(
-                                imageVector = KairoIcons.ledgerIcon(ledger.icon),
-                                contentDescription = null,
+                                imageVector = Icons.Rounded.Check,
+                                contentDescription = "已选中",
                                 tint = ledgerColor,
-                                modifier = Modifier.size(20.dp)
+                                modifier = Modifier.size(18.dp)
                             )
-                            Text(
-                                text = ledger.name,
-                                style = MaterialTheme.typography.titleSmall,
-                                color = if (isSelected) ledgerColor else MaterialTheme.colorScheme.onSurface,
-                                modifier = Modifier.weight(1f)
-                            )
-                            if (isSelected) {
-                                Icon(
-                                    imageVector = Icons.Rounded.Check,
-                                    contentDescription = "已选中",
-                                    tint = ledgerColor,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                            }
                         }
                     }
                 }
             }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) { Text("关闭") }
         }
-    )
+    }
 }
 
 @Composable
@@ -2887,37 +2920,46 @@ private fun MerchantEditDialog(
     onDismiss: () -> Unit
 ) {
     var text by remember(initialMerchant) { mutableStateOf(initialMerchant) }
-    AlertDialog(
+    YubraeDialog(
         onDismissRequest = onDismiss,
-        title = { Text("商户", style = MaterialTheme.typography.titleLarge) },
-        text = {
-            OutlinedTextField(
-                value = text,
-                onValueChange = { text = it },
-                label = { Text("商户名称") },
-                placeholder = { Text("如：星巴克") },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth()
-            )
-        },
+        title = "商户",
+        icon = Icons.Rounded.Storefront,
         confirmButton = {
-            Button(onClick = { onConfirm(text.trim()) }) {
+            Button(
+                onClick = { onConfirm(text.trim()) },
+                shape = RoundedCornerShape(12.dp)
+            ) {
                 Text("确定")
             }
         },
         dismissButton = {
             Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 if (text.isNotEmpty()) {
-                    TextButton(onClick = { onConfirm("") }) {
+                    TextButton(
+                        onClick = { onConfirm("") },
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
                         Text("清空")
                     }
                 }
-                TextButton(onClick = onDismiss) {
+                TextButton(
+                    onClick = onDismiss,
+                    shape = RoundedCornerShape(12.dp)
+                ) {
                     Text("取消")
                 }
             }
         }
-    )
+    ) {
+        OutlinedTextField(
+            value = text,
+            onValueChange = { text = it },
+            label = { Text("商户名称") },
+            placeholder = { Text("如：星巴克") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+    }
 }
 
 @Composable
@@ -2945,111 +2987,106 @@ private fun ExchangeRateOverrideDialog(
     onReset: () -> Unit,
     onDismiss: () -> Unit
 ) {
-    AlertDialog(
+    YubraeDialog(
         onDismissRequest = onDismiss,
-        title = {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Rounded.CurrencyExchange,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(20.dp)
-                )
-                Text("汇率与折算", style = MaterialTheme.typography.titleLarge)
-            }
-        },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                if (needsSourceConversion && selectedAccount != null) {
-                    val acctCode = selectedAccount.currencyCode
-                    val actionLabel = if (txType == TransactionType.INCOME) "实际入账($acctCode)" else "实际扣款($acctCode)"
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        OutlinedTextField(
-                            value = accountAmountText,
-                            onValueChange = onAccountAmountChange,
-                            label = { Text(actionLabel, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                            singleLine = true,
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                            textStyle = MaterialTheme.typography.bodyLarge.tabular(),
-                            modifier = Modifier
-                                .weight(1.1f)
-                                .onFocusChanged { onAccountAmountFocusChange(it.isFocused) }
-                        )
-                        OutlinedTextField(
-                            value = rateText,
-                            onValueChange = onRateChange,
-                            label = { Text("1 $origCurrency → $acctCode", maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                            singleLine = true,
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                            textStyle = MaterialTheme.typography.bodyLarge.tabular(),
-                            modifier = Modifier
-                                .weight(0.9f)
-                                .onFocusChanged { onRateFocusChange(it.isFocused) }
-                        )
-                    }
-                    val rateSourceLabel = when (rateSource) {
-                        "MANUAL_AMOUNT" -> "按实扣金额反算"
-                        "MANUAL_RATE" -> "手动汇率"
-                        else -> "市场参考汇率"
-                    }
-                    Text(
-                        text = rateSourceLabel,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-
-                if (needsTransferConversion && selectedToAccount != null) {
-                    val toCode = selectedToAccount.currencyCode
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        OutlinedTextField(
-                            value = transferToAmountText,
-                            onValueChange = onTransferToAmountChange,
-                            label = { Text("转入到账($toCode)", maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                            singleLine = true,
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                            textStyle = MaterialTheme.typography.bodyLarge.tabular(),
-                            modifier = Modifier
-                                .weight(1.1f)
-                                .onFocusChanged { onTransferToAmountFocusChange(it.isFocused) }
-                        )
-                        OutlinedTextField(
-                            value = transferRateText,
-                            onValueChange = onTransferRateChange,
-                            label = { Text("1 $origCurrency → $toCode", maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                            singleLine = true,
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                            textStyle = MaterialTheme.typography.bodyLarge.tabular(),
-                            modifier = Modifier
-                                .weight(0.9f)
-                                .onFocusChanged { onTransferRateFocusChange(it.isFocused) }
-                        )
-                    }
-                }
-            }
-        },
+        title = "汇率与折算",
+        icon = Icons.Rounded.CurrencyExchange,
         confirmButton = {
-            Button(onClick = onDismiss) { Text("确定") }
+            Button(
+                onClick = onDismiss,
+                shape = RoundedCornerShape(12.dp)
+            ) { Text("确定") }
         },
-        dismissButton = {
-            if (hasManualOverride) {
-                TextButton(onClick = onReset) {
+        dismissButton = if (hasManualOverride) {
+            {
+                TextButton(
+                    onClick = onReset,
+                    shape = RoundedCornerShape(12.dp)
+                ) {
                     Icon(Icons.Rounded.Refresh, null, modifier = Modifier.size(15.dp))
                     Spacer(modifier = Modifier.width(4.dp))
                     Text("重置汇率")
                 }
             }
+        } else {
+            null
         }
-    )
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            if (needsSourceConversion && selectedAccount != null) {
+                val acctCode = selectedAccount.currencyCode
+                val actionLabel = if (txType == TransactionType.INCOME) "实际入账($acctCode)" else "实际扣款($acctCode)"
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedTextField(
+                        value = accountAmountText,
+                        onValueChange = onAccountAmountChange,
+                        label = { Text(actionLabel, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        textStyle = MaterialTheme.typography.bodyLarge.tabular(),
+                        modifier = Modifier
+                            .weight(1.1f)
+                            .onFocusChanged { onAccountAmountFocusChange(it.isFocused) }
+                    )
+                    OutlinedTextField(
+                        value = rateText,
+                        onValueChange = onRateChange,
+                        label = { Text("1 $origCurrency → $acctCode", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        textStyle = MaterialTheme.typography.bodyLarge.tabular(),
+                        modifier = Modifier
+                            .weight(0.9f)
+                            .onFocusChanged { onRateFocusChange(it.isFocused) }
+                    )
+                }
+                val rateSourceLabel = when (rateSource) {
+                    "MANUAL_AMOUNT" -> "按实扣金额反算"
+                    "MANUAL_RATE" -> "手动汇率"
+                    else -> "市场参考汇率"
+                }
+                Text(
+                    text = rateSourceLabel,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            if (needsTransferConversion && selectedToAccount != null) {
+                val toCode = selectedToAccount.currencyCode
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedTextField(
+                        value = transferToAmountText,
+                        onValueChange = onTransferToAmountChange,
+                        label = { Text("转入到账($toCode)", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        textStyle = MaterialTheme.typography.bodyLarge.tabular(),
+                        modifier = Modifier
+                            .weight(1.1f)
+                            .onFocusChanged { onTransferToAmountFocusChange(it.isFocused) }
+                    )
+                    OutlinedTextField(
+                        value = transferRateText,
+                        onValueChange = onTransferRateChange,
+                        label = { Text("1 $origCurrency → $toCode", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        textStyle = MaterialTheme.typography.bodyLarge.tabular(),
+                        modifier = Modifier
+                            .weight(0.9f)
+                            .onFocusChanged { onTransferRateFocusChange(it.isFocused) }
+                    )
+                }
+            }
+        }
+    }
 }
 
 @Composable

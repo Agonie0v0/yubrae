@@ -30,11 +30,11 @@ import androidx.compose.material.icons.rounded.CloudDone
 import androidx.compose.material.icons.rounded.CloudDownload
 import androidx.compose.material.icons.rounded.CloudUpload
 import androidx.compose.material.icons.rounded.Download
+import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.UploadFile
 import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.material.icons.rounded.VisibilityOff
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -70,6 +70,7 @@ import com.yubrae.app.ui.components.CompactSwitchRow
 import com.yubrae.app.ui.components.ConfirmActionDialog
 import com.yubrae.app.ui.components.KairoFormats
 import com.yubrae.app.ui.components.YimuCard
+import com.yubrae.app.ui.components.YubraeDialog
 import com.yubrae.app.ui.theme.KairoTheme
 import com.yubrae.app.ui.viewmodel.KairoMainViewModel
 import kotlinx.coroutines.Dispatchers
@@ -530,132 +531,19 @@ fun ImportAndBackupScreen(
 
     // 账单预览与确认导入弹窗
     csvDialog?.let { state ->
-        AlertDialog(
+        YubraeDialog(
             onDismissRequest = { if (!state.isProcessing) viewModel.dismissCsvImportDialog() },
-            title = { Text("账单导入预览 · ${state.fileName}") },
-            text = {
-                when {
-                    state.isProcessing -> {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            CircularProgressIndicator(modifier = Modifier.size(22.dp), strokeWidth = 2.dp)
-                            Text("正在解析并匹配账本、账户与重复交易...")
-                        }
-                    }
-                    state.error != null -> {
-                        Text(state.error, color = MaterialTheme.colorScheme.error)
-                    }
-                    state.preview != null -> {
-                        val p = state.preview
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .heightIn(max = 380.dp)
-                                .verticalScroll(rememberScrollState()),
-                            verticalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            Text(
-                                text = "识别格式：${p.formatName}",
-                                style = MaterialTheme.typography.titleSmall,
-                                fontWeight = FontWeight.Bold
-                            )
-                            Text(
-                                text = "总记录行：${p.totalRows} · 有效入账：${p.validRows} · 去重跳过：${p.skippedDuplicateRows}",
-                                style = MaterialTheme.typography.bodyMedium
-                            )
-                            if (p.detectedCurrencies.isNotEmpty()) {
-                                Text(
-                                    text = "检测到币种：${p.detectedCurrencies.joinToString(", ")}",
-                                    style = MaterialTheme.typography.bodySmall
-                                )
-                            }
-                            if (p.newLedgerNames.isNotEmpty()) {
-                                Text(
-                                    text = "将自动新建账本：${p.newLedgerNames.joinToString(", ")}",
-                                    style = MaterialTheme.typography.bodySmall
-                                )
-                            }
-                            if (p.newAccountNames.isNotEmpty()) {
-                                Text(
-                                    text = "将自动新建账户：${p.newAccountNames.joinToString(", ")}",
-                                    style = MaterialTheme.typography.bodySmall
-                                )
-                            }
-                            if (p.newCategoryNames.isNotEmpty()) {
-                                Text(
-                                    text = "将自动新建分类：${p.newCategoryNames.joinToString(", ")}",
-                                    style = MaterialTheme.typography.bodySmall
-                                )
-                            }
-                            if (p.newTagNames.isNotEmpty()) {
-                                Text(
-                                    text = "将同步新增标签：${p.newTagNames.joinToString(", ")}",
-                                    style = MaterialTheme.typography.bodySmall
-                                )
-                            }
-                            val featureStats = buildList {
-                                if (p.reimburseCount > 0) add("含报销 ${p.reimburseCount} 笔")
-                                if (p.excludedStatsCount > 0) add("不计收支 ${p.excludedStatsCount} 笔")
-                                if (p.refundGeneratedCount > 0) add("自动生成关联退款 ${p.refundGeneratedCount} 笔")
-                                if (p.attachedImageCount > 0) add("提取附件图 ${p.attachedImageCount} 张")
-                            }
-                            if (featureStats.isNotEmpty()) {
-                                Text(
-                                    text = featureStats.joinToString(" · "),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.primary,
-                                    fontWeight = FontWeight.Medium
-                                )
-                            }
-                            if (p.warnings.isNotEmpty()) {
-                                Spacer(modifier = Modifier.height(2.dp))
-                                val displayWarnings = p.warnings.take(8)
-                                val remainingCount = p.warnings.size - displayWarnings.size
-                                Surface(
-                                    shape = RoundedCornerShape(10.dp),
-                                    color = semantic.warning.copy(alpha = 0.08f),
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
-                                    Column(
-                                        modifier = Modifier.padding(10.dp),
-                                        verticalArrangement = Arrangement.spacedBy(3.dp)
-                                    ) {
-                                        Text(
-                                            text = if (remainingCount > 0) {
-                                                "注意事项（共 ${p.warnings.size} 条，显示前 8 条）："
-                                            } else {
-                                                "注意事项（${p.warnings.size} 条）："
-                                            },
-                                            style = MaterialTheme.typography.labelMedium,
-                                            fontWeight = FontWeight.SemiBold,
-                                            color = semantic.warning
-                                        )
-                                        displayWarnings.forEach { warning ->
-                                            Text(
-                                                text = "• $warning",
-                                                style = MaterialTheme.typography.bodySmall,
-                                                color = semantic.warning
-                                            )
-                                        }
-                                        if (remainingCount > 0) {
-                                            Text(
-                                                text = "…其余 $remainingCount 条提示省略",
-                                                style = MaterialTheme.typography.labelSmall,
-                                                color = semantic.warning.copy(alpha = 0.85f)
-                                            )
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            },
+            title = "账单导入预览",
+            subtitle = state.fileName,
+            icon = Icons.Rounded.UploadFile,
+            dismissOnBackPress = !state.isProcessing,
+            dismissOnClickOutside = !state.isProcessing,
             confirmButton = {
                 if (state.preview != null && !state.isProcessing) {
-                    Button(onClick = { viewModel.confirmCsvImport() }) {
+                    Button(
+                        onClick = { viewModel.confirmCsvImport() },
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
                         Icon(Icons.Rounded.Check, null, modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(4.dp))
                         Text("确认导入 (${state.preview.validRows} 笔)")
@@ -665,12 +553,132 @@ fun ImportAndBackupScreen(
             dismissButton = {
                 TextButton(
                     onClick = { viewModel.dismissCsvImportDialog() },
-                    enabled = !state.isProcessing
+                    enabled = !state.isProcessing,
+                    shape = RoundedCornerShape(12.dp)
                 ) {
                     Text("取消")
                 }
             }
-        )
+        ) {
+            when {
+                state.isProcessing -> {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        CircularProgressIndicator(modifier = Modifier.size(22.dp), strokeWidth = 2.dp)
+                        Text("正在解析并匹配账本、账户与重复交易...")
+                    }
+                }
+                state.error != null -> {
+                    Text(state.error, color = MaterialTheme.colorScheme.error)
+                }
+                state.preview != null -> {
+                    val p = state.preview
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 380.dp)
+                            .verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Text(
+                            text = "识别格式：${p.formatName}",
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.Bold
+                        )
+                        Text(
+                            text = "总记录行：${p.totalRows} · 有效入账：${p.validRows} · 去重跳过：${p.skippedDuplicateRows}",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                        if (p.detectedCurrencies.isNotEmpty()) {
+                            Text(
+                                text = "检测到币种：${p.detectedCurrencies.joinToString(", ")}",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                        if (p.newLedgerNames.isNotEmpty()) {
+                            Text(
+                                text = "将自动新建账本：${p.newLedgerNames.joinToString(", ")}",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                        if (p.newAccountNames.isNotEmpty()) {
+                            Text(
+                                text = "将自动新建账户：${p.newAccountNames.joinToString(", ")}",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                        if (p.newCategoryNames.isNotEmpty()) {
+                            Text(
+                                text = "将自动新建分类：${p.newCategoryNames.joinToString(", ")}",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                        if (p.newTagNames.isNotEmpty()) {
+                            Text(
+                                text = "将同步新增标签：${p.newTagNames.joinToString(", ")}",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
+                        val featureStats = buildList {
+                            if (p.reimburseCount > 0) add("含报销 ${p.reimburseCount} 笔")
+                            if (p.excludedStatsCount > 0) add("不计收支 ${p.excludedStatsCount} 笔")
+                            if (p.refundGeneratedCount > 0) add("自动生成关联退款 ${p.refundGeneratedCount} 笔")
+                            if (p.attachedImageCount > 0) add("提取附件图 ${p.attachedImageCount} 张")
+                        }
+                        if (featureStats.isNotEmpty()) {
+                            Text(
+                                text = featureStats.joinToString(" · "),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.primary,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                        if (p.warnings.isNotEmpty()) {
+                            Spacer(modifier = Modifier.height(2.dp))
+                            val displayWarnings = p.warnings.take(8)
+                            val remainingCount = p.warnings.size - displayWarnings.size
+                            Surface(
+                                shape = RoundedCornerShape(10.dp),
+                                color = semantic.warning.copy(alpha = 0.08f),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(10.dp),
+                                    verticalArrangement = Arrangement.spacedBy(3.dp)
+                                ) {
+                                    Text(
+                                        text = if (remainingCount > 0) {
+                                            "注意事项（共 ${p.warnings.size} 条，显示前 8 条）："
+                                        } else {
+                                            "注意事项（${p.warnings.size} 条）："
+                                        },
+                                        style = MaterialTheme.typography.labelMedium,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = semantic.warning
+                                    )
+                                    displayWarnings.forEach { warning ->
+                                        Text(
+                                            text = "• $warning",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = semantic.warning
+                                        )
+                                    }
+                                    if (remainingCount > 0) {
+                                        Text(
+                                            text = "…其余 $remainingCount 条提示省略",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = semantic.warning.copy(alpha = 0.85f)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     // 云端恢复二次确认
@@ -691,18 +699,10 @@ fun ImportAndBackupScreen(
     // 导出本地备份输入口令弹窗（当尚未配置全局加密口令时）
     if (showExportPassphrasePrompt) {
         var tempPass by remember { mutableStateOf("") }
-        AlertDialog(
+        YubraeDialog(
             onDismissRequest = { showExportPassphrasePrompt = false },
-            title = { Text("设置备份加密口令") },
-            text = {
-                OutlinedTextField(
-                    value = tempPass,
-                    onValueChange = { tempPass = it },
-                    label = { Text("输入 AES-256-GCM 加密口令") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-            },
+            title = "设置备份加密口令",
+            icon = Icons.Rounded.Lock,
             confirmButton = {
                 Button(
                     onClick = {
@@ -712,48 +712,66 @@ fun ImportAndBackupScreen(
                             showExportPassphrasePrompt = false
                             viewModel.exportLocalBackup(tempPass, launchKlbkCreate)
                         }
-                    }
+                    },
+                    shape = RoundedCornerShape(12.dp)
                 ) { Text("导出") }
             },
             dismissButton = {
-                TextButton(onClick = { showExportPassphrasePrompt = false }) { Text("取消") }
+                TextButton(
+                    onClick = { showExportPassphrasePrompt = false },
+                    shape = RoundedCornerShape(12.dp)
+                ) { Text("取消") }
             }
-        )
+        ) {
+            OutlinedTextField(
+                value = tempPass,
+                onValueChange = { tempPass = it },
+                label = { Text("输入 AES-256-GCM 加密口令") },
+                singleLine = true,
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
     }
 
     // 本地 .klbk 恢复输入口令并确认
     pendingLocalRestoreBytes?.let { bytes ->
         var passInput by remember { mutableStateOf(backupPassphrase) }
-        AlertDialog(
+        YubraeDialog(
             onDismissRequest = { pendingLocalRestoreBytes = null },
-            title = { Text("解密并恢复本地备份") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(
-                        text = "恢复备份将覆盖当前本地全部数据，请输入该备份文件对应的加密口令：",
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                    OutlinedTextField(
-                        value = passInput,
-                        onValueChange = { passInput = it },
-                        label = { Text("解密口令") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-            },
+            title = "解密并恢复本地备份",
+            icon = Icons.Rounded.Lock,
             confirmButton = {
                 Button(
                     onClick = {
                         pendingLocalRestoreBytes = null
                         viewModel.importLocalBackup(bytes, passInput)
-                    }
+                    },
+                    shape = RoundedCornerShape(12.dp)
                 ) { Text("解密恢复") }
             },
             dismissButton = {
-                TextButton(onClick = { pendingLocalRestoreBytes = null }) { Text("取消") }
+                TextButton(
+                    onClick = { pendingLocalRestoreBytes = null },
+                    shape = RoundedCornerShape(12.dp)
+                ) { Text("取消") }
             }
-        )
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    text = "恢复备份将覆盖当前本地全部数据，请输入该备份文件对应的加密口令：",
+                    style = MaterialTheme.typography.bodySmall
+                )
+                OutlinedTextField(
+                    value = passInput,
+                    onValueChange = { passInput = it },
+                    label = { Text("解密口令") },
+                    singleLine = true,
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        }
     }
 }
 

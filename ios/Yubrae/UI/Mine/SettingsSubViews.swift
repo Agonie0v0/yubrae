@@ -7,6 +7,7 @@ import UniformTypeIdentifiers
 
 public struct LedgerManagementView: View {
     @ObservedObject public var store: LedgerStore
+    @Environment(\.colorScheme) private var colorScheme
     @State private var showAddSheet = false
     @State private var newLedgerName = ""
     @State private var newLedgerCurrency = CurrencyCatalog.defaultBaseCurrency
@@ -15,6 +16,10 @@ public struct LedgerManagementView: View {
 
     public init(store: LedgerStore) {
         self.store = store
+    }
+
+    private var palette: YubraePalette {
+        YubraeTheme.palette(for: store.settings, colorScheme: colorScheme)
     }
 
     public var body: some View {
@@ -125,6 +130,7 @@ public struct LedgerManagementView: View {
                 }
             }
             .presentationDetents([.medium])
+            .yubraeSheetStyle(palette: palette)
         }
         .sheet(item: $deletingLedger) { ledger in
             NavigationStack {
@@ -158,6 +164,7 @@ public struct LedgerManagementView: View {
                 }
             }
             .presentationDetents([.medium])
+            .yubraeSheetStyle(palette: palette)
         }
     }
 }
@@ -166,6 +173,7 @@ public struct LedgerManagementView: View {
 
 public struct CategoryManagementView: View {
     @ObservedObject public var store: LedgerStore
+    @Environment(\.colorScheme) private var colorScheme
     @State private var selectedType: String = TransactionType.EXPENSE
     @State private var showAddSheet = false
     @State private var newName = ""
@@ -177,6 +185,10 @@ public struct CategoryManagementView: View {
 
     public init(store: LedgerStore) {
         self.store = store
+    }
+
+    private var palette: YubraePalette {
+        YubraeTheme.palette(for: store.settings, colorScheme: colorScheme)
     }
 
     public var body: some View {
@@ -308,6 +320,7 @@ public struct CategoryManagementView: View {
                 }
             }
             .presentationDetents([.medium])
+            .yubraeSheetStyle(palette: palette)
         }
     }
 }
@@ -392,6 +405,7 @@ public struct TagManagementView: View {
 
 public struct BudgetAndRecurringView: View {
     @ObservedObject public var store: LedgerStore
+    @Environment(\.colorScheme) private var colorScheme
     @State private var showAddRule = false
     @State private var ruleName = ""
     @State private var ruleAmount = ""
@@ -402,6 +416,10 @@ public struct BudgetAndRecurringView: View {
 
     public init(store: LedgerStore) {
         self.store = store
+    }
+
+    private var palette: YubraePalette {
+        YubraeTheme.palette(for: store.settings, colorScheme: colorScheme)
     }
 
     public var body: some View {
@@ -531,6 +549,7 @@ public struct BudgetAndRecurringView: View {
                 }
             }
             .presentationDetents([.medium])
+            .yubraeSheetStyle(palette: palette)
         }
     }
 }
@@ -851,12 +870,17 @@ public struct LlmSettingsView: View {
 
 public struct ExchangeRateCenterView: View {
     @ObservedObject public var store: LedgerStore
+    @Environment(\.colorScheme) private var colorScheme
     @State private var isRefreshing = false
     @State private var editingCurrency: CurrencyInfo?
     @State private var customRateInput = ""
 
     public init(store: LedgerStore) {
         self.store = store
+    }
+
+    private var palette: YubraePalette {
+        YubraeTheme.palette(for: store.settings, colorScheme: colorScheme)
     }
 
     private var baseCurrency: String {
@@ -976,6 +1000,7 @@ public struct ExchangeRateCenterView: View {
                 }
             }
             .presentationDetents([.medium])
+            .yubraeSheetStyle(palette: palette)
         }
     }
 
@@ -1008,6 +1033,11 @@ public struct ExchangeRateCenterView: View {
 
 public struct BackupAndSyncView: View {
     @ObservedObject public var store: LedgerStore
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var palette: YubraePalette {
+        YubraeTheme.palette(for: store.settings, colorScheme: colorScheme)
+    }
 
     @State private var passphrase: String
     @State private var webDavUrl: String
@@ -1174,16 +1204,24 @@ public struct BackupAndSyncView: View {
         ) { result in
             handleFileImport(result)
         }
-        .alert("确认从云端备份恢复？", isPresented: $showRestoreConfirmAlert) {
-            Button("取消", role: .cancel) { restoringRemoteFile = nil }
-            Button("覆盖恢复", role: .destructive) {
+        .yubraeConfirmDialog(
+            isPresented: $showRestoreConfirmAlert,
+            palette: palette,
+            icon: "icloud.and.arrow.down.fill",
+            title: "确认从云端备份恢复？",
+            message: "将解密「\(restoringRemoteFile?.name ?? "")」并覆盖本机当前全部账本数据，请确认加密口令一致。",
+            confirmTitle: "覆盖恢复",
+            cancelTitle: "取消",
+            isDestructive: true,
+            onCancel: {
+                restoringRemoteFile = nil
+            },
+            onConfirm: {
                 if let file = restoringRemoteFile {
                     Task { await restoreRemote(file) }
                 }
             }
-        } message: {
-            Text("将解密「\(restoringRemoteFile?.name ?? "")」并覆盖本机当前全部账本数据，请确认加密口令一致。")
-        }
+        )
     }
 
     private func persistInputs() {

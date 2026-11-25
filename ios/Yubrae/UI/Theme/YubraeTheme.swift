@@ -425,6 +425,203 @@ public struct YubraeToastBanner: View {
     }
 }
 
+/// iOS 16+ 统一居中确认弹窗，替代原生简陋 `.alert`。
+public struct YubraeConfirmDialog: View {
+    @Binding public var isPresented: Bool
+    public let palette: YubraePalette
+    public let icon: String
+    public let title: String
+    public let message: String
+    public var confirmTitle: String
+    public var cancelTitle: String
+    public var isDestructive: Bool
+    public var onCancel: (() -> Void)?
+    public let onConfirm: () -> Void
+
+    public init(
+        isPresented: Binding<Bool>,
+        palette: YubraePalette,
+        icon: String,
+        title: String,
+        message: String,
+        confirmTitle: String = "确认",
+        cancelTitle: String = "取消",
+        isDestructive: Bool = false,
+        onCancel: (() -> Void)? = nil,
+        onConfirm: @escaping () -> Void
+    ) {
+        self._isPresented = isPresented
+        self.palette = palette
+        self.icon = icon
+        self.title = title
+        self.message = message
+        self.confirmTitle = confirmTitle
+        self.cancelTitle = cancelTitle
+        self.isDestructive = isDestructive
+        self.onCancel = onCancel
+        self.onConfirm = onConfirm
+    }
+
+    public var body: some View {
+        ZStack {
+            if isPresented {
+                Color.black.opacity(0.42)
+                    .ignoresSafeArea()
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        dismissDialog(invokeCancel: true)
+                    }
+                    .transition(.opacity)
+
+                dialogCard
+                    .padding(.horizontal, 24)
+                    .transition(.scale(scale: 0.92).combined(with: .opacity))
+                    .zIndex(1)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .allowsHitTesting(isPresented)
+        .animation(.spring(response: 0.28, dampingFraction: 0.86), value: isPresented)
+    }
+
+    private var dialogCard: some View {
+        let accent = isDestructive ? palette.dangerColor : palette.primary
+        let confirmFill = LinearGradient(
+            colors: isDestructive
+                ? [palette.dangerColor, palette.dangerColor.opacity(0.88)]
+                : [palette.primary, palette.primary.opacity(0.86)],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
+
+        return VStack(spacing: 16) {
+            ZStack {
+                Circle()
+                    .fill(accent.opacity(palette.isDark ? 0.22 : 0.14))
+                    .frame(width: 52, height: 52)
+                Image(systemName: icon)
+                    .font(.system(size: 22, weight: .semibold))
+                    .foregroundColor(accent)
+            }
+
+            VStack(spacing: 8) {
+                Text(title)
+                    .font(.headline.weight(.bold))
+                    .foregroundColor(palette.textPrimary)
+                    .multilineTextAlignment(.center)
+
+                Text(message)
+                    .font(.subheadline)
+                    .foregroundColor(palette.textSecondary)
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            HStack(spacing: 12) {
+                Button {
+                    dismissDialog(invokeCancel: true)
+                } label: {
+                    Text(cancelTitle)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundColor(palette.textPrimary)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .background(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .fill(palette.surfaceSecondary)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .strokeBorder(palette.outline.opacity(0.65), lineWidth: 0.6)
+                        )
+                }
+                .buttonStyle(.plain)
+
+                Button {
+                    dismissDialog(invokeCancel: false)
+                    onConfirm()
+                } label: {
+                    Text(confirmTitle)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundColor(isDestructive ? .white : palette.onPrimary)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .background(
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .fill(confirmFill)
+                        )
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.top, 4)
+        }
+        .padding(22)
+        .frame(maxWidth: 340)
+        .background(
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .fill(palette.surface)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .strokeBorder(palette.outline, lineWidth: 0.9)
+        )
+        .shadow(color: Color.black.opacity(palette.isDark ? 0.45 : 0.18), radius: 22, x: 0, y: 10)
+    }
+
+    private func dismissDialog(invokeCancel: Bool) {
+        withAnimation(.spring(response: 0.28, dampingFraction: 0.86)) {
+            isPresented = false
+        }
+        if invokeCancel {
+            onCancel?()
+        }
+    }
+}
+
+public extension View {
+    func yubraeConfirmDialog(
+        isPresented: Binding<Bool>,
+        palette: YubraePalette,
+        icon: String,
+        title: String,
+        message: String,
+        confirmTitle: String = "确认",
+        cancelTitle: String = "取消",
+        isDestructive: Bool = false,
+        onCancel: (() -> Void)? = nil,
+        onConfirm: @escaping () -> Void
+    ) -> some View {
+        overlay {
+            YubraeConfirmDialog(
+                isPresented: isPresented,
+                palette: palette,
+                icon: icon,
+                title: title,
+                message: message,
+                confirmTitle: confirmTitle,
+                cancelTitle: cancelTitle,
+                isDestructive: isDestructive,
+                onCancel: onCancel,
+                onConfirm: onConfirm
+            )
+        }
+    }
+
+    @ViewBuilder
+    func yubraeSheetStyle(palette: YubraePalette) -> some View {
+        if #available(iOS 16.4, *) {
+            self
+                .presentationDragIndicator(.visible)
+                .presentationCornerRadius(24)
+                .tint(palette.primary)
+        } else {
+            self
+                .presentationDragIndicator(.visible)
+                .tint(palette.primary)
+        }
+    }
+}
+
 /// iOS 16+ 原生 `Layout` 协议流式换行布局，用于标签与快捷选项芯片。
 public struct YubraeFlowLayout: Layout {
     public var spacing: CGFloat

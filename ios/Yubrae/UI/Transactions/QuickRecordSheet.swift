@@ -177,24 +177,29 @@ public struct QuickRecordSheet: View {
                     .fontWeight(.semibold)
                 }
             }
-            .alert("确认删除账单？", isPresented: $showDeleteConfirm) {
-                Button("取消", role: .cancel) {}
-                Button("删除", role: .destructive) {
-                    if let id = editingTransaction?.id {
-                        do {
-                            try store.deleteTransaction(id: id)
-                            store.toastMessage = "已删除账单并回滚账户余额"
-                            dismiss()
-                        } catch {
-                            store.lastErrorMessage = error.localizedDescription
-                        }
-                    }
-                }
-            } message: {
-                Text("删除后将自动回滚关联账户的余额变动。")
-            }
             .onChange(of: txType) { newType in
                 syncCategoryForTypeChange(newType)
+            }
+        }
+        .yubraeSheetStyle(palette: palette)
+        .yubraeConfirmDialog(
+            isPresented: $showDeleteConfirm,
+            palette: palette,
+            icon: "trash.fill",
+            title: "确认删除账单？",
+            message: "删除后将自动回滚关联账户的余额变动。",
+            confirmTitle: "删除",
+            cancelTitle: "取消",
+            isDestructive: true
+        ) {
+            if let id = editingTransaction?.id {
+                do {
+                    try store.deleteTransaction(id: id)
+                    store.toastMessage = "已删除账单并回滚账户余额"
+                    dismiss()
+                } catch {
+                    store.lastErrorMessage = error.localizedDescription
+                }
             }
         }
     }

@@ -2,11 +2,53 @@ import LocalAuthentication
 import SwiftUI
 import UIKit
 
-public enum YubraeTab: Int, Hashable {
+public enum YubraeTab: Int, CaseIterable, Hashable {
     case transactions = 0
     case assets = 1
     case stats = 2
     case mine = 3
+
+    public var title: String {
+        switch self {
+        case .transactions: return "明细"
+        case .assets: return "资产"
+        case .stats: return "统计"
+        case .mine: return "我的"
+        }
+    }
+
+    public var systemImage: String {
+        switch self {
+        case .transactions: return "list.bullet.rectangle.portrait"
+        case .assets: return "creditcard"
+        case .stats: return "chart.bar.xaxis"
+        case .mine: return "person.crop.circle"
+        }
+    }
+
+    public var selectedSystemImage: String {
+        switch self {
+        case .transactions: return "list.bullet.rectangle.portrait.fill"
+        case .assets: return "creditcard.fill"
+        case .stats: return "chart.bar.xaxis"
+        case .mine: return "person.crop.circle.fill"
+        }
+    }
+
+    public func shifted(by delta: Int) -> YubraeTab {
+        let all = Self.allCases
+        guard !all.isEmpty else { return self }
+        let currentIndex = all.firstIndex(of: self) ?? 0
+        let maxIndex = all.count - 1
+        let (sum, overflow) = currentIndex.addingReportingOverflow(delta)
+        let clamped: Int
+        if overflow {
+            clamped = delta > 0 ? maxIndex : 0
+        } else {
+            clamped = min(max(sum, 0), maxIndex)
+        }
+        return all[clamped]
+    }
 }
 
 private struct QuickRecordContext: Identifiable {
@@ -23,6 +65,7 @@ public struct RootTabView: View {
     @State private var selectedTab: YubraeTab = .transactions
     @State private var quickRecordContext: QuickRecordContext?
     @State private var showSmartInputSheet = false
+    @State private var isCenterButtonPressed = false
 
     // Global Update Check State
     @State private var availableUpdate: AppUpdateInfo?
@@ -59,65 +102,57 @@ public struct RootTabView: View {
 
     public var body: some View {
         ZStack(alignment: .top) {
-            TabView(selection: $selectedTab) {
-                TransactionsView(
-                    store: store,
-                    onOpenQuickRecord: { tx in
-                        quickRecordContext = QuickRecordContext(editingTransaction: tx)
-                    },
-                    onOpenSmartInput: {
-                        showSmartInputSheet = true
-                    }
-                )
-                .tabItem {
-                    Label("明细", systemImage: "list.bullet.rectangle.portrait")
-                }
-                .tag(YubraeTab.transactions)
-
-                AssetsView(store: store)
-                    .tabItem {
-                        Label("资产", systemImage: "creditcard")
-                    }
-                    .tag(YubraeTab.assets)
-
-                StatsView(store: store)
-                    .tabItem {
-                        Label("统计", systemImage: "chart.bar.xaxis")
-                    }
-                    .tag(YubraeTab.stats)
-
-                MineView(
-                    store: store,
-                    availableUpdate: availableUpdate,
-                    isCheckingUpdate: isCheckingUpdate,
-                    onCheckUpdate: {
-                        Task { await performUpdateCheck(manual: true) }
-                    },
-                    onPresentUpdateSheet: {
-                        if availableUpdate != nil {
-                            showUpdateSheet = true
+            ZStack(alignment: .bottomTrailing) {
+                TabView(selection: $selectedTab) {
+                    TransactionsView(
+                        store: store,
+                        onOpenQuickRecord: { tx in
+                            quickRecordContext = QuickRecordContext(editingTransaction: tx)
+                        },
+                        onOpenSmartInput: {
+                            showSmartInputSheet = true
                         }
-                    }
-                )
-                .tabItem {
-                    Label("我的", systemImage: "person.crop.circle")
-                }
-                .badge(hasUpdateBadge ? Text("新") : nil)
-                .tag(YubraeTab.mine)
-            }
-            .tint(palette.primary)
+                    )
+                    .tag(YubraeTab.transactions)
 
-            // 悬浮快捷记账入口（明细页与资产页底部右侧便捷触发）
-            if selectedTab == .transactions || selectedTab == .assets {
-                VStack {
-                    Spacer()
-                    HStack {
-                        Spacer()
-                        floatingActionButtons
-                            .padding(.trailing, 18)
-                            .padding(.bottom, 64)
-                    }
+                    AssetsView(store: store)
+                        .tag(YubraeTab.assets)
+
+                    StatsView(store: store)
+                        .tag(YubraeTab.stats)
+
+                    MineView(
+                        store: store,
+                        availableUpdate: availableUpdate,
+                        isCheckingUpdate: isCheckingUpdate,
+                        onCheckUpdate: {
+                            Task { await performUpdateCheck(manual: true) }
+                        },
+                        onPresentUpdateSheet: {
+                            if availableUpdate != nil {
+                                showUpdateSheet = true
+                            }
+                        }
+                    )
+                    .tag(YubraeTab.mine)
                 }
+                .tabViewStyle(.page(indexDisplayMode: .never))
+                .animation(.spring(response: 0.34, dampingFraction: 0.88), value: selectedTab)
+                .tint(palette.primary)
+                .background(palette.background.ignoresSafeArea())
+                .ignoresSafeArea(.container, edges: .top)
+
+                // 仅在明细页保留精致 AI 速记悬浮圆钮（避开底栏高度，不与中央 + 按钮冲突）
+                if selectedTab == .transactions {
+                    floatingAiButton
+                        .padding(.trailing, 18)
+                        .padding(.bottom, 16)
+                        .transition(.scale(scale: 0.85).combined(with: .opacity))
+                }
+            }
+            .animation(.spring(response: 0.28, dampingFraction: 0.84), value: selectedTab)
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                yubraeBottomTabBar
             }
 
             // 全局 Toast 提示条
@@ -143,9 +178,11 @@ public struct RootTabView: View {
         }
         .sheet(item: $quickRecordContext) { ctx in
             QuickRecordSheet(store: store, editingTransaction: ctx.editingTransaction)
+                .yubraeSheetStyle(palette: palette)
         }
         .sheet(isPresented: $showSmartInputSheet) {
             SmartInputSheet(store: store)
+                .yubraeSheetStyle(palette: palette)
         }
         .sheet(isPresented: $showUpdateSheet) {
             if let update = availableUpdate {
@@ -154,10 +191,12 @@ public struct RootTabView: View {
                     updateInfo: update,
                     onDismiss: { showUpdateSheet = false }
                 )
+                .yubraeSheetStyle(palette: palette)
             }
         }
         .sheet(isPresented: $showKlbkPassphraseSheet) {
             klbkImportPassphraseSheet
+                .yubraeSheetStyle(palette: palette)
         }
         .onOpenURL { url in
             handleIncomingURL(url)
@@ -167,6 +206,9 @@ public struct RootTabView: View {
                 hasPerformedLaunchTasks = true
                 runLaunchTasks()
             }
+        }
+        .onChange(of: selectedTab) { _ in
+            triggerImpactFeedback(.light)
         }
         .onChange(of: scenePhase) { newPhase in
             handleScenePhaseChange(newPhase)
@@ -185,49 +227,161 @@ public struct RootTabView: View {
         }
     }
 
-    // MARK: - Floating Action Buttons
+    // MARK: - Bottom Tab Bar & Floating AI Button
 
-    private var floatingActionButtons: some View {
-        HStack(spacing: 10) {
-            Button {
-                showSmartInputSheet = true
-            } label: {
-                Image(systemName: "sparkles")
-                    .font(.system(size: 16, weight: .semibold))
-                    .foregroundColor(palette.primary)
-                    .frame(width: 44, height: 44)
-                    .background(
-                        Circle()
-                            .fill(palette.surface)
-                            .shadow(color: Color.black.opacity(0.14), radius: 8, x: 0, y: 4)
-                    )
-                    .overlay(
-                        Circle()
-                            .strokeBorder(palette.primary.opacity(0.28), lineWidth: 1)
-                    )
-            }
-            .accessibilityLabel("智能记账")
+    private var yubraeBottomTabBar: some View {
+        VStack(spacing: 0) {
+            Rectangle()
+                .fill(palette.outline)
+                .frame(height: 0.5)
 
-            Button {
-                quickRecordContext = QuickRecordContext(editingTransaction: nil)
-            } label: {
-                HStack(spacing: 6) {
-                    Image(systemName: "plus")
-                        .font(.system(size: 17, weight: .bold))
-                    Text("记一笔")
-                        .font(.subheadline.weight(.semibold))
-                }
-                .foregroundColor(palette.onPrimary)
-                .padding(.horizontal, 16)
-                .frame(height: 46)
-                .background(
-                    Capsule(style: .continuous)
-                        .fill(palette.heroGradient)
-                        .shadow(color: palette.primary.opacity(0.32), radius: 10, x: 0, y: 5)
-                )
+            HStack(spacing: 0) {
+                bottomTabItem(.transactions)
+                bottomTabItem(.assets)
+                centerQuickRecordButton
+                bottomTabItem(.stats)
+                bottomTabItem(.mine)
             }
-            .accessibilityLabel("记一笔")
+            .padding(.horizontal, 6)
+            .frame(height: 58)
         }
+        .background(
+            Rectangle()
+                .fill(.ultraThinMaterial)
+                .overlay(palette.surface.opacity(palette.isDark ? 0.78 : 0.84))
+                .ignoresSafeArea(edges: .bottom)
+        )
+        .animation(.spring(response: 0.34, dampingFraction: 0.88), value: selectedTab)
+    }
+
+    private func bottomTabItem(_ tab: YubraeTab) -> some View {
+        let isSelected = selectedTab == tab
+        let pendingCount = tab == .transactions ? store.pendingCount : 0
+        let showUpdateDot = tab == .mine && hasUpdateBadge
+
+        return Button {
+            if selectedTab != tab {
+                withAnimation(.spring(response: 0.34, dampingFraction: 0.88)) {
+                    selectedTab = tab
+                }
+            } else {
+                triggerImpactFeedback(.light)
+            }
+        } label: {
+            VStack(spacing: 3) {
+                ZStack {
+                    Capsule(style: .continuous)
+                        .fill(palette.accentSoftFill)
+                        .frame(width: isSelected ? 48 : 26, height: 28)
+                        .opacity(isSelected ? 1 : 0)
+
+                    Image(systemName: isSelected ? tab.selectedSystemImage : tab.systemImage)
+                        .font(.system(size: 17, weight: isSelected ? .semibold : .regular))
+                        .foregroundColor(isSelected ? palette.primary : palette.textSecondary)
+                        .scaleEffect(isSelected ? 1.04 : 1.0)
+                        .overlay(alignment: .topTrailing) {
+                            if pendingCount > 0 {
+                                Text(pendingCount > 99 ? "99+" : "\(pendingCount)")
+                                    .font(.system(size: 9, weight: .bold))
+                                    .foregroundColor(.white)
+                                    .padding(.horizontal, 4.5)
+                                    .padding(.vertical, 1.5)
+                                    .background(Capsule().fill(palette.dangerColor))
+                                    .overlay(Capsule().strokeBorder(palette.surface, lineWidth: 1))
+                                    .fixedSize()
+                                    .offset(x: 11, y: -5)
+                            } else if showUpdateDot {
+                                Circle()
+                                    .fill(palette.dangerColor)
+                                    .frame(width: 7, height: 7)
+                                    .overlay(Circle().strokeBorder(palette.surface, lineWidth: 1))
+                                    .offset(x: 5, y: -3)
+                            }
+                        }
+                }
+                .frame(height: 28)
+
+                Text(tab.title)
+                    .font(.system(size: 10.5, weight: isSelected ? .semibold : .regular))
+                    .foregroundColor(isSelected ? palette.primary : palette.textSecondary)
+                    .lineLimit(1)
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: 52)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(tab.title)
+        .accessibilityAddTraits(isSelected ? AccessibilityTraits.isSelected : AccessibilityTraits())
+    }
+
+    private var centerQuickRecordButton: some View {
+        ZStack {
+            Circle()
+                .fill(
+                    LinearGradient(
+                        colors: [palette.primary, palette.primary.opacity(0.84)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+                .frame(width: 44, height: 44)
+                .shadow(color: palette.primary.opacity(0.28), radius: 8, x: 0, y: 4)
+
+            Image(systemName: "plus")
+                .font(.system(size: 19, weight: .bold))
+                .foregroundColor(palette.onPrimary)
+        }
+        .frame(maxWidth: .infinity)
+        .frame(height: 52)
+        .scaleEffect(isCenterButtonPressed ? 0.91 : 1.0)
+        .animation(.spring(response: 0.22, dampingFraction: 0.72), value: isCenterButtonPressed)
+        .contentShape(Rectangle())
+        .onTapGesture {
+            triggerImpactFeedback(.medium)
+            quickRecordContext = QuickRecordContext(editingTransaction: nil)
+        }
+        .onLongPressGesture(minimumDuration: 0.42, maximumDistance: 20, pressing: { pressing in
+            isCenterButtonPressed = pressing
+        }, perform: {
+            triggerImpactFeedback(.heavy)
+            showSmartInputSheet = true
+        })
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("记一笔")
+        .accessibilityHint("轻点手动记一笔，长按触发 AI 智能记账")
+        .accessibilityAddTraits(.isButton)
+    }
+
+    private var floatingAiButton: some View {
+        Button {
+            triggerImpactFeedback(.light)
+            showSmartInputSheet = true
+        } label: {
+            Image(systemName: "sparkles")
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundColor(palette.onPrimary)
+                .frame(width: 48, height: 48)
+                .background(
+                    Circle()
+                        .fill(
+                            LinearGradient(
+                                colors: [palette.primary, palette.primary.opacity(0.86)],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            )
+                        )
+                        .shadow(color: palette.primary.opacity(0.30), radius: 10, x: 0, y: 5)
+                )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("AI 智能记账")
+    }
+
+    private func triggerImpactFeedback(_ style: UIImpactFeedbackGenerator.FeedbackStyle) {
+        let generator = UIImpactFeedbackGenerator(style: style)
+        generator.prepare()
+        generator.impactOccurred()
     }
 
     // MARK: - Lock & Privacy Overlays
@@ -284,12 +438,61 @@ public struct RootTabView: View {
     // MARK: - KLBK File Passphrase Sheet
 
     private var klbkImportPassphraseSheet: some View {
-        NavigationStack {
-            Form {
-                Section(header: Text("解密 .klbk 加密备份"), footer: Text("支持导入 Android 端或 iOS 端导出的余白/棱账 .klbk 备份文件，恢复后会覆盖当前账本数据。")) {
-                    SecureField("请输入备份加密口令", text: $klbkPassphraseInput)
-                }
-                Section {
+        let isPassphraseEmpty = klbkPassphraseInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+
+        return NavigationStack {
+            ScrollView {
+                VStack(spacing: 18) {
+                    VStack(spacing: 10) {
+                        ZStack {
+                            Circle()
+                                .fill(palette.accentSoftFill)
+                                .frame(width: 58, height: 58)
+                            Image(systemName: "key.fill")
+                                .font(.system(size: 24, weight: .semibold))
+                                .foregroundColor(palette.primary)
+                        }
+
+                        Text("解密 .klbk 加密备份")
+                            .font(.headline.weight(.bold))
+                            .foregroundColor(palette.textPrimary)
+
+                        Text("支持导入 Android 端或 iOS 端导出的余白/棱账 .klbk 备份文件，恢复后会覆盖当前账本数据。")
+                            .font(.footnote)
+                            .foregroundColor(palette.textSecondary)
+                            .multilineTextAlignment(.center)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(.top, 6)
+
+                    YubraeCard(palette: palette) {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Label("备份加密口令", systemImage: "lock.shield.fill")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundColor(palette.textPrimary)
+
+                            HStack(spacing: 10) {
+                                Image(systemName: "lock")
+                                    .font(.subheadline)
+                                    .foregroundColor(palette.textTertiary)
+                                SecureField("请输入备份加密口令", text: $klbkPassphraseInput)
+                                    .textInputAutocapitalization(.never)
+                                    .autocorrectionDisabled(true)
+                                    .font(.subheadline)
+                            }
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 11)
+                            .background(
+                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .fill(palette.surfaceSecondary)
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .strokeBorder(palette.outline, lineWidth: 0.8)
+                            )
+                        }
+                    }
+
                     Button {
                         guard let data = pendingKlbkData else { return }
                         do {
@@ -302,16 +505,29 @@ public struct RootTabView: View {
                             store.lastErrorMessage = error.localizedDescription
                         }
                     } label: {
-                        HStack {
-                            Spacer()
-                            Text("确认解密并恢复")
-                                .fontWeight(.semibold)
-                            Spacer()
-                        }
+                        Text("确认解密并恢复")
+                            .font(.headline)
+                            .foregroundColor(palette.onPrimary)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 14)
+                            .background(
+                                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                    .fill(
+                                        LinearGradient(
+                                            colors: [palette.primary, palette.primary.opacity(0.84)],
+                                            startPoint: .topLeading,
+                                            endPoint: .bottomTrailing
+                                        )
+                                    )
+                            )
+                            .opacity(isPassphraseEmpty ? 0.48 : 1.0)
                     }
-                    .disabled(klbkPassphraseInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .buttonStyle(.plain)
+                    .disabled(isPassphraseEmpty)
                 }
+                .padding(18)
             }
+            .background(palette.background.ignoresSafeArea())
             .navigationTitle("导入加密备份")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

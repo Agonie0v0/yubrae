@@ -35,9 +35,9 @@ import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Handshake
 import androidx.compose.material.icons.rounded.Schedule
 import androidx.compose.material.icons.rounded.Warning
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.DatePicker
+import androidx.compose.material3.DatePickerDefaults
 import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
@@ -86,7 +86,10 @@ import com.yubrae.app.ui.components.KairoFormats
 import com.yubrae.app.ui.components.KairoIcons
 import com.yubrae.app.ui.components.LocalPrivacyMasked
 import com.yubrae.app.ui.components.YimuCard
+import com.yubrae.app.ui.components.YubraeDialog
+import com.yubrae.app.ui.components.YubraeDialogShape
 import com.yubrae.app.ui.components.formatPrivacyAmount
+import com.yubrae.app.ui.components.yubraeDialogContainerColor
 import com.yubrae.app.ui.theme.KairoTheme
 import com.yubrae.app.ui.theme.tabular
 import java.time.Instant
@@ -905,106 +908,11 @@ private fun SettleDebtDialog(
     var noteInput by remember { mutableStateOf("") }
     var errorMsg by remember { mutableStateOf<String?>(null) }
 
-    AlertDialog(
+    YubraeDialog(
         onDismissRequest = onDismiss,
-        title = {
-            Text(if (isLend) "收款核销 · ${debt.personName}" else "还款核销 · ${debt.personName}")
-        },
-        text = {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                Text(
-                    text = "待核销：${
-                        formatPrivacyAmount(
-                            privacyMasked,
-                            MoneyAmount.format(remainingMicros, debt.currencyCode, showCurrencyCode = true)
-                        )
-                    }",
-                    style = MaterialTheme.typography.bodyMedium.tabular(),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    FilterChip(
-                        selected = isFullSettle,
-                        onClick = {
-                            isFullSettle = true
-                            amountInput = if (privacyMasked) {
-                                ""
-                            } else {
-                                MoneyAmount.formatPlain(remainingMicros, digits, grouping = false)
-                            }
-                        },
-                        label = { Text("全额核销") }
-                    )
-                    FilterChip(
-                        selected = !isFullSettle,
-                        onClick = {
-                            isFullSettle = false
-                            amountInput = ""
-                        },
-                        label = { Text("部分核销") }
-                    )
-                }
-
-                OutlinedTextField(
-                    value = amountInput,
-                    onValueChange = {
-                        amountInput = it
-                        val parsed = MoneyAmount.parseToMicros(it)
-                        isFullSettle = parsed == remainingMicros
-                    },
-                    label = { Text("核销金额 (${debt.currencyCode})") },
-                    placeholder = if (isFullSettle && privacyMasked) {
-                        { Text("全额核销") }
-                    } else {
-                        null
-                    },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-
-                Text(
-                    text = if (isLend) "收款入账账户" else "付款扣款账户",
-                    style = MaterialTheme.typography.labelMedium
-                )
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (debt.accountId == null) {
-                        item(key = "no_account") {
-                            FilterChip(
-                                selected = selectedAccountId == null,
-                                onClick = { selectedAccountId = null },
-                                label = { Text("不关联账户") }
-                            )
-                        }
-                    }
-                    items(activeAccounts, key = { it.id }) { acc ->
-                        FilterChip(
-                            selected = selectedAccountId == acc.id,
-                            onClick = { selectedAccountId = acc.id },
-                            label = { Text("${acc.name} (${acc.currencyCode})") }
-                        )
-                    }
-                }
-
-                OutlinedTextField(
-                    value = noteInput,
-                    onValueChange = { noteInput = it },
-                    label = { Text("备注（可选）") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-
-                errorMsg?.let {
-                    Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
-                }
-            }
-        },
+        title = if (isLend) "收款核销" else "还款核销",
+        subtitle = debt.personName,
+        icon = Icons.Rounded.Handshake,
         confirmButton = {
             Button(
                 onClick = {
@@ -1014,15 +922,115 @@ private fun SettleDebtDialog(
                         parsed > remainingMicros -> errorMsg = "核销金额不能超过未结清余额"
                         else -> onConfirm(parsed, selectedAccountId, noteInput.trim())
                     }
-                }
+                },
+                shape = RoundedCornerShape(12.dp)
             ) {
                 Text("确认核销")
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("取消") }
+            TextButton(
+                onClick = onDismiss,
+                shape = RoundedCornerShape(12.dp)
+            ) { Text("取消") }
         }
-    )
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Text(
+                text = "待核销：${
+                    formatPrivacyAmount(
+                        privacyMasked,
+                        MoneyAmount.format(remainingMicros, debt.currencyCode, showCurrencyCode = true)
+                    )
+                }",
+                style = MaterialTheme.typography.bodyMedium.tabular(),
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(
+                    selected = isFullSettle,
+                    onClick = {
+                        isFullSettle = true
+                        amountInput = if (privacyMasked) {
+                            ""
+                        } else {
+                            MoneyAmount.formatPlain(remainingMicros, digits, grouping = false)
+                        }
+                    },
+                    label = { Text("全额核销") }
+                )
+                FilterChip(
+                    selected = !isFullSettle,
+                    onClick = {
+                        isFullSettle = false
+                        amountInput = ""
+                    },
+                    label = { Text("部分核销") }
+                )
+            }
+
+            OutlinedTextField(
+                value = amountInput,
+                onValueChange = {
+                    amountInput = it
+                    val parsed = MoneyAmount.parseToMicros(it)
+                    isFullSettle = parsed == remainingMicros
+                },
+                label = { Text("核销金额 (${debt.currencyCode})") },
+                placeholder = if (isFullSettle && privacyMasked) {
+                    { Text("全额核销") }
+                } else {
+                    null
+                },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                singleLine = true,
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            Text(
+                text = if (isLend) "收款入账账户" else "付款扣款账户",
+                style = MaterialTheme.typography.labelMedium
+            )
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (debt.accountId == null) {
+                    item(key = "no_account") {
+                        FilterChip(
+                            selected = selectedAccountId == null,
+                            onClick = { selectedAccountId = null },
+                            label = { Text("不关联账户") }
+                        )
+                    }
+                }
+                items(activeAccounts, key = { it.id }) { acc ->
+                    FilterChip(
+                        selected = selectedAccountId == acc.id,
+                        onClick = { selectedAccountId = acc.id },
+                        label = { Text("${acc.name} (${acc.currencyCode})") }
+                    )
+                }
+            }
+
+            OutlinedTextField(
+                value = noteInput,
+                onValueChange = { noteInput = it },
+                label = { Text("备注（可选）") },
+                singleLine = true,
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            errorMsg?.let {
+                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+            }
+        }
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
@@ -1049,169 +1057,10 @@ private fun AddDebtDialog(
     var showMoreCurrencies by remember { mutableStateOf(false) }
     var errorMsg by remember { mutableStateOf<String?>(null) }
 
-    AlertDialog(
+    YubraeDialog(
         onDismissRequest = onDismiss,
-        title = { Text("新增借贷") },
-        text = {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    FilterChip(
-                        selected = direction == DebtDirection.LEND,
-                        onClick = { direction = DebtDirection.LEND },
-                        label = { Text("借出（应收）") },
-                        modifier = Modifier.weight(1f)
-                    )
-                    FilterChip(
-                        selected = direction == DebtDirection.BORROW,
-                        onClick = { direction = DebtDirection.BORROW },
-                        label = { Text("借入（应付）") },
-                        modifier = Modifier.weight(1f)
-                    )
-                }
-
-                OutlinedTextField(
-                    value = personName,
-                    onValueChange = { personName = it },
-                    label = { Text("往来人姓名") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-
-                if (existingPersons.isNotEmpty()) {
-                    FlowRow(
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        existingPersons.take(6).forEach { person ->
-                            FilterChip(
-                                selected = personName == person,
-                                onClick = { personName = person },
-                                label = { Text(person) }
-                            )
-                        }
-                    }
-                }
-
-                OutlinedTextField(
-                    value = amountInput,
-                    onValueChange = { amountInput = it },
-                    label = { Text("借贷金额 ($currencyCode)") },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-
-                Text("币种", style = MaterialTheme.typography.labelMedium)
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    val quickCodes = if (pinnedCurrencies.contains(currencyCode)) {
-                        pinnedCurrencies
-                    } else {
-                        pinnedCurrencies + currencyCode
-                    }
-                    items(quickCodes, key = { it }) { code ->
-                        CurrencyBadge(
-                            currencyCode = code,
-                            selected = code.equals(currencyCode, true),
-                            onClick = { currencyCode = code }
-                        )
-                    }
-                    item(key = "more") {
-                        FilterChip(
-                            selected = false,
-                            onClick = { showMoreCurrencies = true },
-                            label = { Text("更多") }
-                        )
-                    }
-                }
-
-                Text("还款日（可选）", style = MaterialTheme.typography.labelMedium)
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    OutlinedButton(
-                        onClick = { showDatePicker = true },
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Icon(Icons.Rounded.CalendarMonth, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(dueDateMillis?.let { KairoFormats.formatDate(it) } ?: "选择日期")
-                    }
-                    if (dueDateMillis != null) {
-                        IconButton(onClick = { dueDateMillis = null }) {
-                            Icon(Icons.Rounded.Close, contentDescription = "清除日期")
-                        }
-                    }
-                }
-
-                Text("关联账户（可选）", style = MaterialTheme.typography.labelMedium)
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    item(key = "no_account") {
-                        FilterChip(
-                            selected = selectedAccountId == null,
-                            onClick = { selectedAccountId = null },
-                            label = { Text("不关联账户") }
-                        )
-                    }
-                    items(activeAccounts, key = { it.id }) { acc ->
-                        FilterChip(
-                            selected = selectedAccountId == acc.id,
-                            onClick = {
-                                selectedAccountId = acc.id
-                                currencyCode = acc.currencyCode
-                            },
-                            label = { Text("${acc.name} (${acc.currencyCode})") }
-                        )
-                    }
-                }
-
-                if (selectedAccountId != null) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("同步增减账户余额", style = MaterialTheme.typography.bodyMedium)
-                            Text(
-                                text = if (direction == DebtDirection.LEND) {
-                                    "借出扣减余额 · 不计收支"
-                                } else {
-                                    "借入增加余额 · 不计收支"
-                                },
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                        Switch(
-                            checked = syncAccountBalance,
-                            onCheckedChange = { syncAccountBalance = it }
-                        )
-                    }
-                }
-
-                OutlinedTextField(
-                    value = noteInput,
-                    onValueChange = { noteInput = it },
-                    label = { Text("备注（可选）") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-
-                errorMsg?.let {
-                    Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
-                }
-            }
-        },
+        title = "新增借贷",
+        icon = Icons.Rounded.Handshake,
         confirmButton = {
             Button(
                 onClick = {
@@ -1235,15 +1084,182 @@ private fun AddDebtDialog(
                             selectedAccountId != null && syncAccountBalance
                         )
                     }
-                }
+                },
+                shape = RoundedCornerShape(12.dp)
             ) {
                 Text("保存")
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("取消") }
+            TextButton(
+                onClick = onDismiss,
+                shape = RoundedCornerShape(12.dp)
+            ) { Text("取消") }
         }
-    )
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                FilterChip(
+                    selected = direction == DebtDirection.LEND,
+                    onClick = { direction = DebtDirection.LEND },
+                    label = { Text("借出（应收）") },
+                    modifier = Modifier.weight(1f)
+                )
+                FilterChip(
+                    selected = direction == DebtDirection.BORROW,
+                    onClick = { direction = DebtDirection.BORROW },
+                    label = { Text("借入（应付）") },
+                    modifier = Modifier.weight(1f)
+                )
+            }
+
+            OutlinedTextField(
+                value = personName,
+                onValueChange = { personName = it },
+                label = { Text("往来人姓名") },
+                singleLine = true,
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            if (existingPersons.isNotEmpty()) {
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    existingPersons.take(6).forEach { person ->
+                        FilterChip(
+                            selected = personName == person,
+                            onClick = { personName = person },
+                            label = { Text(person) }
+                        )
+                    }
+                }
+            }
+
+            OutlinedTextField(
+                value = amountInput,
+                onValueChange = { amountInput = it },
+                label = { Text("借贷金额 ($currencyCode)") },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                singleLine = true,
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            Text("币种", style = MaterialTheme.typography.labelMedium)
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                val quickCodes = if (pinnedCurrencies.contains(currencyCode)) {
+                    pinnedCurrencies
+                } else {
+                    pinnedCurrencies + currencyCode
+                }
+                items(quickCodes, key = { it }) { code ->
+                    CurrencyBadge(
+                        currencyCode = code,
+                        selected = code.equals(currencyCode, true),
+                        onClick = { currencyCode = code }
+                    )
+                }
+                item(key = "more") {
+                    FilterChip(
+                        selected = false,
+                        onClick = { showMoreCurrencies = true },
+                        label = { Text("更多") }
+                    )
+                }
+            }
+
+            Text("还款日（可选）", style = MaterialTheme.typography.labelMedium)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedButton(
+                    onClick = { showDatePicker = true },
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Icon(Icons.Rounded.CalendarMonth, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(dueDateMillis?.let { KairoFormats.formatDate(it) } ?: "选择日期")
+                }
+                if (dueDateMillis != null) {
+                    IconButton(onClick = { dueDateMillis = null }) {
+                        Icon(Icons.Rounded.Close, contentDescription = "清除日期")
+                    }
+                }
+            }
+
+            Text("关联账户（可选）", style = MaterialTheme.typography.labelMedium)
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                item(key = "no_account") {
+                    FilterChip(
+                        selected = selectedAccountId == null,
+                        onClick = { selectedAccountId = null },
+                        label = { Text("不关联账户") }
+                    )
+                }
+                items(activeAccounts, key = { it.id }) { acc ->
+                    FilterChip(
+                        selected = selectedAccountId == acc.id,
+                        onClick = {
+                            selectedAccountId = acc.id
+                            currencyCode = acc.currencyCode
+                        },
+                        label = { Text("${acc.name} (${acc.currencyCode})") }
+                    )
+                }
+            }
+
+            if (selectedAccountId != null) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("同步增减账户余额", style = MaterialTheme.typography.bodyMedium)
+                        Text(
+                            text = if (direction == DebtDirection.LEND) {
+                                "借出扣减余额 · 不计收支"
+                            } else {
+                                "借入增加余额 · 不计收支"
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = syncAccountBalance,
+                        onCheckedChange = { syncAccountBalance = it }
+                    )
+                }
+            }
+
+            OutlinedTextField(
+                value = noteInput,
+                onValueChange = { noteInput = it },
+                label = { Text("备注（可选）") },
+                singleLine = true,
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            errorMsg?.let {
+                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+            }
+        }
+    }
 
     if (showMoreCurrencies) {
         CurrencyPickerDialog(
@@ -1263,6 +1279,8 @@ private fun AddDebtDialog(
         val pickerState = rememberDatePickerState(initialSelectedDateMillis = utcMillis)
         DatePickerDialog(
             onDismissRequest = { showDatePicker = false },
+            shape = YubraeDialogShape,
+            colors = DatePickerDefaults.colors(containerColor = yubraeDialogContainerColor()),
             confirmButton = {
                 TextButton(
                     onClick = {
@@ -1271,11 +1289,15 @@ private fun AddDebtDialog(
                             dueDateMillis = pickedDate.atTime(LocalTime.of(12, 0)).atZone(zone).toInstant().toEpochMilli()
                         }
                         showDatePicker = false
-                    }
+                    },
+                    shape = RoundedCornerShape(12.dp)
                 ) { Text("确定") }
             },
             dismissButton = {
-                TextButton(onClick = { showDatePicker = false }) { Text("取消") }
+                TextButton(
+                    onClick = { showDatePicker = false },
+                    shape = RoundedCornerShape(12.dp)
+                ) { Text("取消") }
             }
         ) {
             DatePicker(state = pickerState)

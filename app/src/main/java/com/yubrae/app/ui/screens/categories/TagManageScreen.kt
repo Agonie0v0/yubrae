@@ -31,8 +31,8 @@ import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.LocalOffer
 import androidx.compose.material.icons.rounded.Search
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
@@ -68,6 +68,7 @@ import com.yubrae.app.ui.components.GroupedIconPicker
 import com.yubrae.app.ui.components.KairoIcons
 import com.yubrae.app.ui.components.TagBadgeChip
 import com.yubrae.app.ui.components.YimuCard
+import com.yubrae.app.ui.components.YubraeDialog
 
 private val TAG_PRESET_GROUPS = listOf(
     "渠道平台",
@@ -453,126 +454,10 @@ private fun TagEditorDialog(
         if (selectedGroup in TAG_PRESET_GROUPS) TAG_PRESET_GROUPS else TAG_PRESET_GROUPS + selectedGroup
     }
 
-    AlertDialog(
+    YubraeDialog(
         onDismissRequest = onDismiss,
-        title = {
-            Text(if (isEditing) "编辑标签" else "新建标签")
-        },
-        text = {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text(
-                        text = "效果预览",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    TagBadgeChip(
-                        name = name.trim().ifEmpty { "标签名称" },
-                        colorHex = selectedColor,
-                        iconKey = selectedIcon
-                    )
-                }
-
-                OutlinedTextField(
-                    value = name,
-                    onValueChange = {
-                        name = it
-                        if (it.isNotBlank()) nameError = false
-                    },
-                    label = { Text("标签名称") },
-                    placeholder = { Text("如：咖啡、免税店") },
-                    isError = nameError,
-                    supportingText = if (nameError) {
-                        { Text("请输入标签名称") }
-                    } else null,
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-
-                Text(
-                    text = "所属分组",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    groupChoices.forEach { group ->
-                        FilterChip(
-                            selected = selectedGroup == group,
-                            onClick = { selectedGroup = group },
-                            label = { Text(group) }
-                        )
-                    }
-                }
-
-                Text(
-                    text = "标签图标（可选）",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                GroupedIconPicker(
-                    groups = KairoIcons.tagIconGroups,
-                    selectedKey = selectedIcon,
-                    onSelect = { selectedIcon = it },
-                    accentColor = Color(selectedColor),
-                    allowClear = true,
-                    clearLabel = "无图标",
-                    gridMaxHeight = 200.dp
-                )
-
-                Text(
-                    text = "颜色",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    KairoIcons.selectableColorPalette.forEach { hex ->
-                        val isSelected = selectedColor == hex
-                        Box(
-                            modifier = Modifier
-                                .size(30.dp)
-                                .clip(CircleShape)
-                                .background(Color(hex))
-                                .then(
-                                    if (isSelected) {
-                                        Modifier.border(
-                                            BorderStroke(2.5.dp, MaterialTheme.colorScheme.onSurface),
-                                            CircleShape
-                                        )
-                                    } else {
-                                        Modifier
-                                    }
-                                )
-                                .clickable { selectedColor = hex },
-                            contentAlignment = Alignment.Center
-                        ) {
-                            if (isSelected) {
-                                Icon(
-                                    imageVector = Icons.Rounded.Check,
-                                    contentDescription = "已选颜色",
-                                    tint = Color.White,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        },
+        title = if (isEditing) "编辑标签" else "新建标签",
+        icon = Icons.Rounded.LocalOffer,
         confirmButton = {
             Button(
                 onClick = {
@@ -592,13 +477,132 @@ private fun TagEditorDialog(
                             icon = selectedIcon.trim()
                         )
                     )
-                }
+                },
+                shape = RoundedCornerShape(12.dp)
             ) {
                 Text("保存")
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("取消") }
+            TextButton(
+                onClick = onDismiss,
+                shape = RoundedCornerShape(12.dp)
+            ) { Text("取消") }
         }
-    )
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Text(
+                    text = "效果预览",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                TagBadgeChip(
+                    name = name.trim().ifEmpty { "标签名称" },
+                    colorHex = selectedColor,
+                    iconKey = selectedIcon
+                )
+            }
+
+            OutlinedTextField(
+                value = name,
+                onValueChange = {
+                    name = it
+                    if (it.isNotBlank()) nameError = false
+                },
+                label = { Text("标签名称") },
+                placeholder = { Text("如：咖啡、免税店") },
+                isError = nameError,
+                supportingText = if (nameError) {
+                    { Text("请输入标签名称") }
+                } else null,
+                singleLine = true,
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            Text(
+                text = "所属分组",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                groupChoices.forEach { group ->
+                    FilterChip(
+                        selected = selectedGroup == group,
+                        onClick = { selectedGroup = group },
+                        label = { Text(group) }
+                    )
+                }
+            }
+
+            Text(
+                text = "标签图标（可选）",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            GroupedIconPicker(
+                groups = KairoIcons.tagIconGroups,
+                selectedKey = selectedIcon,
+                onSelect = { selectedIcon = it },
+                accentColor = Color(selectedColor),
+                allowClear = true,
+                clearLabel = "无图标",
+                gridMaxHeight = 200.dp
+            )
+
+            Text(
+                text = "颜色",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                KairoIcons.selectableColorPalette.forEach { hex ->
+                    val isSelected = selectedColor == hex
+                    Box(
+                        modifier = Modifier
+                            .size(30.dp)
+                            .clip(CircleShape)
+                            .background(Color(hex))
+                            .then(
+                                if (isSelected) {
+                                    Modifier.border(
+                                        BorderStroke(2.5.dp, MaterialTheme.colorScheme.onSurface),
+                                        CircleShape
+                                    )
+                                } else {
+                                    Modifier
+                                }
+                            )
+                            .clickable { selectedColor = hex },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (isSelected) {
+                            Icon(
+                                imageVector = Icons.Rounded.Check,
+                                contentDescription = "已选颜色",
+                                tint = Color.White,
+                                modifier = Modifier.size(16.dp)
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
 }

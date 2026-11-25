@@ -48,9 +48,9 @@ import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.PieChart
 import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.material.icons.rounded.VisibilityOff
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.DatePicker
+import androidx.compose.material3.DatePickerDefaults
 import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -133,7 +133,12 @@ import com.yubrae.app.ui.components.KairoIcons
 import com.yubrae.app.ui.components.LocalPrivacyMasked
 import com.yubrae.app.ui.components.TagBadgeChip
 import com.yubrae.app.ui.components.YimuCard
+import com.yubrae.app.ui.components.YubraeDialog
+import com.yubrae.app.ui.components.YubraeDialogShape
+import com.yubrae.app.ui.components.YubraeSheetShape
 import com.yubrae.app.ui.components.formatPrivacyAmount
+import com.yubrae.app.ui.components.yubraeDialogContainerColor
+import com.yubrae.app.ui.components.yubraeSheetContainerColor
 import com.yubrae.app.ui.theme.KairoTheme
 import com.yubrae.app.ui.theme.tabular
 import com.yubrae.app.ui.viewmodel.KairoMainViewModel
@@ -671,6 +676,8 @@ fun StatsScreen(
 
             DatePickerDialog(
                 onDismissRequest = { customPickTarget = null },
+                shape = YubraeDialogShape,
+                colors = DatePickerDefaults.colors(containerColor = yubraeDialogContainerColor()),
                 confirmButton = {
                     TextButton(
                         onClick = {
@@ -695,13 +702,17 @@ fun StatsScreen(
                                 onCustomDateRangeChange(startMs, endMs)
                             }
                             customPickTarget = null
-                        }
+                        },
+                        shape = RoundedCornerShape(12.dp)
                     ) {
                         Text("确定")
                     }
                 },
                 dismissButton = {
-                    TextButton(onClick = { customPickTarget = null }) {
+                    TextButton(
+                        onClick = { customPickTarget = null },
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
                         Text("取消")
                     }
                 }
@@ -1511,7 +1522,8 @@ private fun CategoryDrillDownBottomSheet(
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        containerColor = MaterialTheme.colorScheme.surface
+        shape = YubraeSheetShape,
+        containerColor = yubraeSheetContainerColor()
     ) {
         Column(
             modifier = Modifier
@@ -2473,123 +2485,10 @@ private fun BudgetEditorDialog(
         ledgers.filter { !it.archived || it.id == selectedLedgerId }
     }
 
-    AlertDialog(
+    YubraeDialog(
         onDismissRequest = onDismiss,
-        title = { Text(if (existing == null) "新建预算" else "编辑预算") },
-        text = {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                OutlinedTextField(
-                    value = name,
-                    onValueChange = { name = it },
-                    label = { Text("预算名称") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-                OutlinedTextField(
-                    value = limitInput,
-                    onValueChange = { limitInput = it },
-                    label = { Text("月度限额 ($currencyCode)") },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-
-                Text("币种", style = MaterialTheme.typography.labelMedium)
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    val codes = if (pinnedCurrencies.contains(currencyCode)) pinnedCurrencies else pinnedCurrencies + currencyCode
-                    items(codes, key = { it }) { code ->
-                        CurrencyBadge(
-                            currencyCode = code,
-                            selected = code.equals(currencyCode, true),
-                            onClick = { currencyCode = code }
-                        )
-                    }
-                    item(key = "more") {
-                        FilterChip(
-                            selected = false,
-                            onClick = { showMoreCurrencies = true },
-                            label = { Text("更多") }
-                        )
-                    }
-                }
-
-                Text("账本", style = MaterialTheme.typography.labelMedium)
-                if (availableLedgers.isEmpty()) {
-                    Text(
-                        text = "暂无可用账本",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                } else {
-                    FlowRow(
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        availableLedgers.forEach { ledger ->
-                            FilterChip(
-                                selected = selectedLedgerId == ledger.id,
-                                onClick = { selectedLedgerId = ledger.id },
-                                label = { Text(ledger.name) }
-                            )
-                        }
-                    }
-                }
-
-                Text("适用范围", style = MaterialTheme.typography.labelMedium)
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    FilterChip(
-                        selected = selectedCategoryId == null,
-                        onClick = {
-                            selectedCategoryId = null
-                            if (name.isBlank() || expenseCategories.any { "${it.name}预算" == name || it.name == name }) {
-                                name = "月度总预算"
-                            }
-                        },
-                        label = { Text("全局总预算") }
-                    )
-                    expenseCategories.filter { it.parentId == null }.forEach { cat ->
-                        FilterChip(
-                            selected = selectedCategoryId == cat.id,
-                            onClick = {
-                                selectedCategoryId = cat.id
-                                name = "${cat.name}预算"
-                            },
-                            label = { Text(cat.name) }
-                        )
-                    }
-                }
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text("上月结余结转", style = MaterialTheme.typography.bodyMedium)
-                    Switch(checked = rolloverEnabled, onCheckedChange = { rolloverEnabled = it })
-                }
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text("启用", style = MaterialTheme.typography.bodyMedium)
-                    Switch(checked = enabled, onCheckedChange = { enabled = it })
-                }
-
-                errorMsg?.let {
-                    Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
-                }
-            }
-        },
+        title = if (existing == null) "新建预算" else "编辑预算",
+        icon = Icons.Rounded.PieChart,
         confirmButton = {
             Button(
                 onClick = {
@@ -2614,15 +2513,134 @@ private fun BudgetEditorDialog(
                             )
                         )
                     }
-                }
+                },
+                shape = RoundedCornerShape(12.dp)
             ) {
                 Text("保存")
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("取消") }
+            TextButton(
+                onClick = onDismiss,
+                shape = RoundedCornerShape(12.dp)
+            ) { Text("取消") }
         }
-    )
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            OutlinedTextField(
+                value = name,
+                onValueChange = { name = it },
+                label = { Text("预算名称") },
+                singleLine = true,
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier.fillMaxWidth()
+            )
+            OutlinedTextField(
+                value = limitInput,
+                onValueChange = { limitInput = it },
+                label = { Text("月度限额 ($currencyCode)") },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                singleLine = true,
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            Text("币种", style = MaterialTheme.typography.labelMedium)
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                val codes = if (pinnedCurrencies.contains(currencyCode)) pinnedCurrencies else pinnedCurrencies + currencyCode
+                items(codes, key = { it }) { code ->
+                    CurrencyBadge(
+                        currencyCode = code,
+                        selected = code.equals(currencyCode, true),
+                        onClick = { currencyCode = code }
+                    )
+                }
+                item(key = "more") {
+                    FilterChip(
+                        selected = false,
+                        onClick = { showMoreCurrencies = true },
+                        label = { Text("更多") }
+                    )
+                }
+            }
+
+            Text("账本", style = MaterialTheme.typography.labelMedium)
+            if (availableLedgers.isEmpty()) {
+                Text(
+                    text = "暂无可用账本",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else {
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    availableLedgers.forEach { ledger ->
+                        FilterChip(
+                            selected = selectedLedgerId == ledger.id,
+                            onClick = { selectedLedgerId = ledger.id },
+                            label = { Text(ledger.name) }
+                        )
+                    }
+                }
+            }
+
+            Text("适用范围", style = MaterialTheme.typography.labelMedium)
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                FilterChip(
+                    selected = selectedCategoryId == null,
+                    onClick = {
+                        selectedCategoryId = null
+                        if (name.isBlank() || expenseCategories.any { "${it.name}预算" == name || it.name == name }) {
+                            name = "月度总预算"
+                        }
+                    },
+                    label = { Text("全局总预算") }
+                )
+                expenseCategories.filter { it.parentId == null }.forEach { cat ->
+                    FilterChip(
+                        selected = selectedCategoryId == cat.id,
+                        onClick = {
+                            selectedCategoryId = cat.id
+                            name = "${cat.name}预算"
+                        },
+                        label = { Text(cat.name) }
+                    )
+                }
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("上月结余结转", style = MaterialTheme.typography.bodyMedium)
+                Switch(checked = rolloverEnabled, onCheckedChange = { rolloverEnabled = it })
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("启用", style = MaterialTheme.typography.bodyMedium)
+                Switch(checked = enabled, onCheckedChange = { enabled = it })
+            }
+
+            errorMsg?.let {
+                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+            }
+        }
+    }
 
     if (showMoreCurrencies) {
         CurrencyPickerDialog(
@@ -3039,7 +3057,8 @@ private fun TagDrillDownBottomSheet(
     ModalBottomSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState,
-        containerColor = MaterialTheme.colorScheme.surface
+        shape = YubraeSheetShape,
+        containerColor = yubraeSheetContainerColor()
     ) {
         Column(
             modifier = Modifier

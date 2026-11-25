@@ -223,6 +223,7 @@ public struct StatsView: View {
             }
             .sheet(isPresented: $showAddBudgetSheet) {
                 QuickBudgetCreateSheet(store: store)
+                    .yubraeSheetStyle(palette: palette)
             }
         }
     }

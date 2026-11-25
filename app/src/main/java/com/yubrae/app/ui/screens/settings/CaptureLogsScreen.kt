@@ -18,13 +18,15 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.ReceiptLong
 import androidx.compose.material.icons.rounded.AddLink
 import androidx.compose.material.icons.rounded.ContentCopy
-import androidx.compose.material3.AlertDialog
+import androidx.compose.material.icons.rounded.Fingerprint
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
@@ -60,6 +62,7 @@ import com.yubrae.app.ui.components.ChannelChip
 import com.yubrae.app.ui.components.EmptyStateCard
 import com.yubrae.app.ui.components.KairoFormats
 import com.yubrae.app.ui.components.ParseStatusChip
+import com.yubrae.app.ui.components.YubraeDialog
 import com.yubrae.app.ui.viewmodel.KairoMainViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -334,63 +337,10 @@ private fun PromoteLogToAliasDialog(
     var pattern by remember { mutableStateOf(log.sourcePackage) }
     var errorMsg by remember { mutableStateOf<String?>(null) }
 
-    AlertDialog(
+    YubraeDialog(
         onDismissRequest = onDismiss,
-        title = { Text("沉淀为账户指纹") },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text("目标账户", style = MaterialTheme.typography.labelMedium)
-                if (accounts.isEmpty()) {
-                    Text("暂无可用账户", color = MaterialTheme.colorScheme.error)
-                } else {
-                    LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        items(accounts, key = { it.id }) { acc ->
-                            FilterChip(
-                                selected = selectedAccountId == acc.id,
-                                onClick = { selectedAccountId = acc.id },
-                                label = { Text("${acc.name}(${acc.currencyCode})") }
-                            )
-                        }
-                    }
-                }
-
-                Text("匹配方式", style = MaterialTheme.typography.labelMedium)
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    val types = listOf(
-                        AliasMatchType.PACKAGE to "包名",
-                        AliasMatchType.CARD_LAST4 to "卡尾号",
-                        AliasMatchType.KEYWORD to "关键词",
-                        AliasMatchType.REGEX to "正则"
-                    )
-                    items(types, key = { it.first }) { (type, label) ->
-                        FilterChip(
-                            selected = matchType == type,
-                            onClick = {
-                                matchType = type
-                                pattern = when (type) {
-                                    AliasMatchType.PACKAGE -> log.sourcePackage
-                                    AliasMatchType.CARD_LAST4 -> Regex("(\\d{4})").find(log.content)?.groupValues?.getOrNull(1) ?: ""
-                                    else -> log.title.ifBlank { log.content.take(12) }
-                                }
-                            },
-                            label = { Text(label) }
-                        )
-                    }
-                }
-
-                OutlinedTextField(
-                    value = pattern,
-                    onValueChange = { pattern = it },
-                    label = { Text("匹配模式") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
-
-                errorMsg?.let {
-                    Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
-                }
-            }
-        },
+        title = "沉淀为账户指纹",
+        icon = Icons.Rounded.Fingerprint,
         confirmButton = {
             Button(
                 onClick = {
@@ -399,13 +349,76 @@ private fun PromoteLogToAliasDialog(
                         pattern.trim().isEmpty() -> errorMsg = "请输入匹配模式"
                         else -> onSave(selectedAccountId, pattern.trim(), matchType)
                     }
-                }
+                },
+                shape = RoundedCornerShape(12.dp)
             ) {
                 Text("保存指纹")
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("取消") }
+            TextButton(
+                onClick = onDismiss,
+                shape = RoundedCornerShape(12.dp)
+            ) { Text("取消") }
         }
-    )
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Text("目标账户", style = MaterialTheme.typography.labelMedium)
+            if (accounts.isEmpty()) {
+                Text("暂无可用账户", color = MaterialTheme.colorScheme.error)
+            } else {
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    items(accounts, key = { it.id }) { acc ->
+                        FilterChip(
+                            selected = selectedAccountId == acc.id,
+                            onClick = { selectedAccountId = acc.id },
+                            label = { Text("${acc.name}(${acc.currencyCode})") }
+                        )
+                    }
+                }
+            }
+
+            Text("匹配方式", style = MaterialTheme.typography.labelMedium)
+            LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                val types = listOf(
+                    AliasMatchType.PACKAGE to "包名",
+                    AliasMatchType.CARD_LAST4 to "卡尾号",
+                    AliasMatchType.KEYWORD to "关键词",
+                    AliasMatchType.REGEX to "正则"
+                )
+                items(types, key = { it.first }) { (type, label) ->
+                    FilterChip(
+                        selected = matchType == type,
+                        onClick = {
+                            matchType = type
+                            pattern = when (type) {
+                                AliasMatchType.PACKAGE -> log.sourcePackage
+                                AliasMatchType.CARD_LAST4 -> Regex("(\\d{4})").find(log.content)?.groupValues?.getOrNull(1) ?: ""
+                                else -> log.title.ifBlank { log.content.take(12) }
+                            }
+                        },
+                        label = { Text(label) }
+                    )
+                }
+            }
+
+            OutlinedTextField(
+                value = pattern,
+                onValueChange = { pattern = it },
+                label = { Text("匹配模式") },
+                singleLine = true,
+                shape = RoundedCornerShape(14.dp),
+                modifier = Modifier.fillMaxWidth()
+            )
+
+            errorMsg?.let {
+                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+            }
+        }
+    }
 }

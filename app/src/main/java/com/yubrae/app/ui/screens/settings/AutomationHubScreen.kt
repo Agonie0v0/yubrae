@@ -34,8 +34,10 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
@@ -58,7 +60,6 @@ import androidx.compose.material.icons.rounded.SmartToy
 import androidx.compose.material.icons.rounded.SystemUpdateAlt
 import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.material.icons.rounded.VisibilityOff
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -106,6 +107,7 @@ import com.yubrae.app.ui.components.CurrencyBadge
 import com.yubrae.app.ui.components.CurrencyPickerDialog
 import com.yubrae.app.ui.components.YimuCard
 import com.yubrae.app.ui.components.YubraeBrandMark
+import com.yubrae.app.ui.components.YubraeDialog
 import com.yubrae.app.ui.security.BiometricLockHelper
 import com.yubrae.app.ui.theme.KairoTheme
 import com.yubrae.app.ui.theme.KairoThemePreset
@@ -950,46 +952,65 @@ fun AutoCaptureSettingsScreen(
         val (guideTitle, guideSteps) = remember(activeRomFamily) {
             DeviceRomProfile.guideForFamily(activeRomFamily)
         }
-        AlertDialog(
+        YubraeDialog(
             onDismissRequest = { showRomGuide = false },
-            title = { Text(guideTitle) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    guideSteps.forEach { step ->
-                        Text(step, style = MaterialTheme.typography.bodySmall)
-                    }
-                }
-            },
+            title = guideTitle,
+            icon = Icons.Rounded.Security,
             confirmButton = {
-                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    TextButton(onClick = {
-                        showRomGuide = false
-                        if (!DeviceRomProfile.openOemBackgroundSettings(context, activeRomFamily)) {
-                            viewModel.showMessage("无法打开系统后台设置，请手动前往应用信息页设置")
-                        }
-                    }) {
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    TextButton(
+                        onClick = {
+                            showRomGuide = false
+                            if (!DeviceRomProfile.openAppDetails(context)) {
+                                viewModel.showMessage("无法打开应用详情页，请前往系统设置手动查找「余白」")
+                            }
+                        },
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Text(
+                            if (DeviceRomProfile.needsRestrictedSettingsHint()) {
+                                "应用信息(解除受限)"
+                            } else {
+                                "应用信息"
+                            }
+                        )
+                    }
+                    OutlinedButton(
+                        onClick = {
+                            showRomGuide = false
+                            if (!DeviceRomProfile.openOemBackgroundSettings(context, activeRomFamily)) {
+                                viewModel.showMessage("无法打开系统后台设置，请手动前往应用信息页设置")
+                            }
+                        },
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
                         Text("前往后台设置")
                     }
-                    TextButton(onClick = { showRomGuide = false }) { Text("知道了") }
-                }
-            },
-            dismissButton = {
-                TextButton(onClick = {
-                    showRomGuide = false
-                    if (!DeviceRomProfile.openAppDetails(context)) {
-                        viewModel.showMessage("无法打开应用详情页，请前往系统设置手动查找「余白」")
+                    Button(
+                        onClick = { showRomGuide = false },
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Text("知道了")
                     }
-                }) {
-                    Text(
-                        if (DeviceRomProfile.needsRestrictedSettingsHint()) {
-                            "应用信息(解除受限)"
-                        } else {
-                            "应用信息"
-                        }
-                    )
                 }
             }
-        )
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 360.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                guideSteps.forEach { step ->
+                    Text(step, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        }
     }
 }
 

@@ -17,9 +17,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.CurrencyExchange
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Refresh
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -47,6 +47,7 @@ import com.yubrae.app.core.model.CurrencyCatalog
 import com.yubrae.app.core.model.CurrencyInfo
 import com.yubrae.app.core.model.MoneyAmount
 import com.yubrae.app.ui.components.KairoFormats
+import com.yubrae.app.ui.components.YubraeDialog
 import com.yubrae.app.ui.theme.tabular
 import com.yubrae.app.ui.viewmodel.KairoMainViewModel
 
@@ -240,24 +241,11 @@ fun ExchangeRatesScreen(
         var rateInput by remember(row) { mutableStateOf(MoneyAmount.formatRate(row.rateToCnyMicros, 4)) }
         var errorMsg by remember { mutableStateOf<String?>(null) }
 
-        AlertDialog(
+        YubraeDialog(
             onDismissRequest = { editingRow = null },
-            title = { Text("自定义 ${row.info.code} 汇率") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(
-                        value = rateInput,
-                        onValueChange = { rateInput = it },
-                        label = { Text("1 ${row.info.code} = ? CNY") },
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    errorMsg?.let {
-                        Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
-                    }
-                }
-            },
+            title = "自定义 ${row.info.code} 汇率",
+            subtitle = row.info.nameZh,
+            icon = Icons.Rounded.CurrencyExchange,
             confirmButton = {
                 Button(
                     onClick = {
@@ -269,14 +257,33 @@ fun ExchangeRatesScreen(
                                 editingRow = null
                             }
                         }
-                    }
+                    },
+                    shape = RoundedCornerShape(12.dp)
                 ) {
                     Text("保存")
                 }
             },
             dismissButton = {
-                TextButton(onClick = { editingRow = null }) { Text("取消") }
+                TextButton(
+                    onClick = { editingRow = null },
+                    shape = RoundedCornerShape(12.dp)
+                ) { Text("取消") }
             }
-        )
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = rateInput,
+                    onValueChange = { rateInput = it },
+                    label = { Text("1 ${row.info.code} = ? CNY") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    singleLine = true,
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                errorMsg?.let {
+                    Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                }
+            }
+        }
     }
 }

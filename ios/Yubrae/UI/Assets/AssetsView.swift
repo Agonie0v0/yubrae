@@ -113,21 +113,27 @@ public struct AssetsView: View {
             }
             .sheet(item: $accountEditContext) { ctx in
                 AccountEditorSheet(store: store, editingAccount: ctx.account)
+                    .yubraeSheetStyle(palette: palette)
             }
             .sheet(item: $calibratingAccount) { acc in
                 BalanceCalibrationSheet(store: store, account: acc)
+                    .yubraeSheetStyle(palette: palette)
             }
             .sheet(isPresented: $showHiddenManagerSheet) {
                 HiddenAssetsManagerSheet(store: store)
+                    .yubraeSheetStyle(palette: palette)
             }
             .sheet(isPresented: $showAddDebtSheet) {
                 AddDebtSheet(store: store)
+                    .yubraeSheetStyle(palette: palette)
             }
             .sheet(item: $settlingDebt) { debt in
                 SettleDebtSheet(store: store, debt: debt)
+                    .yubraeSheetStyle(palette: palette)
             }
             .sheet(isPresented: $showSettleReimburseSheet) {
                 SettleReimburseSheet(store: store, pendingTxs: pendingReimburseTxs)
+                    .yubraeSheetStyle(palette: palette)
             }
         }
     }
@@ -542,6 +548,10 @@ private struct AccountEditorSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var colorScheme
 
+    private var palette: YubraePalette {
+        YubraeTheme.palette(for: store.settings, colorScheme: colorScheme)
+    }
+
     @State private var name: String
     @State private var groupType: String
     @State private var currencyCode: String
@@ -691,16 +701,6 @@ private struct AccountEditorSheet: View {
                         } label: {
                             Label("删除该账户", systemImage: "trash")
                         }
-                        .alert("确认删除「\(existing.name)」？", isPresented: $showDeleteConfirm) {
-                            Button("取消", role: .cancel) {}
-                            Button("删除", role: .destructive) {
-                                store.deleteAccount(id: existing.id)
-                                store.toastMessage = "已删除账户「\(existing.name)」"
-                                dismiss()
-                            }
-                        } message: {
-                            Text("删除账户不会清除历史账单记录，但将移除该账户的余额统计。")
-                        }
                     }
                 }
             }
@@ -721,7 +721,24 @@ private struct AccountEditorSheet: View {
             .sheet(isPresented: $showCalibration) {
                 if let existing = editingAccount {
                     BalanceCalibrationSheet(store: store, account: existing)
+                        .yubraeSheetStyle(palette: palette)
                 }
+            }
+        }
+        .yubraeConfirmDialog(
+            isPresented: $showDeleteConfirm,
+            palette: palette,
+            icon: "trash.fill",
+            title: "确认删除「\(editingAccount?.name ?? "该账户")」？",
+            message: "删除账户不会清除历史账单记录，但将移除该账户的余额统计。",
+            confirmTitle: "删除",
+            cancelTitle: "取消",
+            isDestructive: true
+        ) {
+            if let existing = editingAccount {
+                store.deleteAccount(id: existing.id)
+                store.toastMessage = "已删除账户「\(existing.name)」"
+                dismiss()
             }
         }
     }
