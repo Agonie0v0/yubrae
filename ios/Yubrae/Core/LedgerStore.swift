@@ -355,6 +355,40 @@ public final class LedgerStore: ObservableObject {
             }
     }
 
+    /// 明细搜索匹配：覆盖商户、备注、标签、当前分类、父级大类、无分类特殊交易类型及转出/转入账户名。
+    public func matchesSearchQuery(_ rawQuery: String, for tx: TransactionDto) -> Bool {
+        let query = rawQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return true }
+
+        let cat = tx.categoryId.flatMap { category(byId: $0) }
+        let catName = cat?.name ?? ""
+        let parentCatName = cat?.parentId.flatMap { category(byId: $0)?.name } ?? ""
+        let fallbackTypeLabel: String
+        if tx.categoryId == nil {
+            switch tx.type {
+            case TransactionType.TRANSFER:
+                fallbackTypeLabel = "转账"
+            case TransactionType.ADJUST:
+                fallbackTypeLabel = "余额校准"
+            default:
+                fallbackTypeLabel = ""
+            }
+        } else {
+            fallbackTypeLabel = ""
+        }
+        let accName = account(byId: tx.accountId)?.name ?? ""
+        let toAccName = tx.toAccountId.flatMap { account(byId: $0)?.name } ?? ""
+
+        return tx.merchant.localizedCaseInsensitiveContains(query)
+            || tx.note.localizedCaseInsensitiveContains(query)
+            || tx.tags.localizedCaseInsensitiveContains(query)
+            || catName.localizedCaseInsensitiveContains(query)
+            || parentCatName.localizedCaseInsensitiveContains(query)
+            || fallbackTypeLabel.localizedCaseInsensitiveContains(query)
+            || accName.localizedCaseInsensitiveContains(query)
+            || toAccName.localizedCaseInsensitiveContains(query)
+    }
+
     // MARK: - Settings
 
     public func updateSettings(_ transform: (inout AppSettings) -> Void) {

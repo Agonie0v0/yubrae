@@ -55,6 +55,7 @@ import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.CheckBox
 import androidx.compose.material.icons.rounded.CheckBoxOutlineBlank
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.CurrencyExchange
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.DoneAll
 import androidx.compose.material.icons.rounded.Edit
@@ -242,6 +243,7 @@ fun TransactionsScreen(
 
     var detailTransaction by remember { mutableStateOf<TransactionEntity?>(null) }
     var deleteCandidate by remember { mutableStateOf<TransactionEntity?>(null) }
+    var showCurrencyFilterMenu by remember { mutableStateOf(false) }
     var showAccountFilterMenu by remember { mutableStateOf(false) }
     var showChannelFilterMenu by remember { mutableStateOf(false) }
     var showMonthPickerDialog by remember { mutableStateOf(false) }
@@ -450,7 +452,7 @@ fun TransactionsScreen(
                         OutlinedTextField(
                             value = filters.query,
                             onValueChange = { viewModel.setTxQuery(it) },
-                            placeholder = { Text("搜索商户 / 备注 / 标签") },
+                            placeholder = { Text("搜索分类 / 商户 / 账户 / 标签 / 备注") },
                             leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
                             trailingIcon = {
                                 if (filters.query.isNotEmpty()) {
@@ -501,13 +503,72 @@ fun TransactionsScreen(
                                 }
                             }
 
-                            val currencyOptions = listOf("ALL" to "全部币种", "CNY" to "CNY", "USD" to "USD", "EUR" to "EUR", "GBP" to "GBP")
-                            items(currencyOptions, key = { it.first }) { (code, label) ->
-                                FilterChip(
-                                    selected = filters.currencyFilter == code,
-                                    onClick = { viewModel.setTxCurrencyFilter(code) },
-                                    label = { Text(label) }
-                                )
+                            item(key = "currency_filter") {
+                                val currencyOptions = remember(
+                                    settings.pinnedCurrencies,
+                                    accounts,
+                                    filters.currencyFilter
+                                ) {
+                                    linkedSetOf("CNY", "USD", "EUR", "GBP").apply {
+                                        settings.pinnedCurrencies.forEach { code ->
+                                            val normalized = code.trim().uppercase()
+                                            if (normalized.isNotEmpty() && normalized != "ALL") {
+                                                add(normalized)
+                                            }
+                                        }
+                                        accounts.forEach { acc ->
+                                            val normalized = acc.currencyCode.trim().uppercase()
+                                            if (normalized.isNotEmpty() && normalized != "ALL") {
+                                                add(normalized)
+                                            }
+                                        }
+                                        val activeCurrency = filters.currencyFilter.trim().uppercase()
+                                        if (activeCurrency.isNotEmpty() && activeCurrency != "ALL") {
+                                            add(activeCurrency)
+                                        }
+                                    }.toList()
+                                }
+                                Box {
+                                    FilterChip(
+                                        selected = filters.currencyFilter != "ALL",
+                                        onClick = { showCurrencyFilterMenu = true },
+                                        leadingIcon = {
+                                            Icon(Icons.Rounded.CurrencyExchange, null, modifier = Modifier.size(16.dp))
+                                        },
+                                        trailingIcon = {
+                                            Icon(Icons.Rounded.ArrowDropDown, null, modifier = Modifier.size(18.dp))
+                                        },
+                                        label = {
+                                            Text(
+                                                if (filters.currencyFilter == "ALL") "全部币种" else filters.currencyFilter,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                        }
+                                    )
+                                    DropdownMenu(
+                                        expanded = showCurrencyFilterMenu,
+                                        onDismissRequest = { showCurrencyFilterMenu = false }
+                                    ) {
+                                        DropdownMenuItem(
+                                            text = { Text("全部币种") },
+                                            onClick = {
+                                                viewModel.setTxCurrencyFilter("ALL")
+                                                showCurrencyFilterMenu = false
+                                            }
+                                        )
+                                        currencyOptions.forEach { code ->
+                                            val info = CurrencyCatalog.find(code)
+                                            DropdownMenuItem(
+                                                text = { Text("${info.flag} ${info.code} · ${info.nameZh}") },
+                                                onClick = {
+                                                    viewModel.setTxCurrencyFilter(code)
+                                                    showCurrencyFilterMenu = false
+                                                }
+                                            )
+                                        }
+                                    }
+                                }
                             }
 
                             item(key = "account_filter") {

@@ -570,4 +570,181 @@ final class LedgerStoreTests: XCTestCase {
         XCTAssertEqual(yimuIdempotent.addedCategories, 0)
         XCTAssertEqual(yimuIdempotent.addedTags, 0)
     }
+
+    @MainActor
+    func testTransactionSearchMatchesCategoryParentCategoryAndAccountNames() throws {
+        let dir = makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = LedgerStore(
+            storageDirectory: dir,
+            useKeychain: false,
+            timeZone: TimeZone(secondsFromGMT: 8 * 3600)!
+        )
+
+        let foodParent = try XCTUnwrap(
+            store.categories.first(where: { $0.parentId == nil && $0.name == "餐饮美食" })
+        )
+        let diningOutChild = try XCTUnwrap(
+            store.categories.first(where: { $0.parentId == foodParent.id && $0.name == "三餐外食" })
+        )
+        let breakfastChild = store.saveCategory(
+            CategoryDto(
+                parentId: foodParent.id,
+                name: "早餐",
+                type: TransactionType.EXPENSE,
+                icon: "ramen_dining",
+                colorHex: foodParent.colorHex
+            )
+        )
+        let transportParent = try XCTUnwrap(
+            store.categories.first(where: { $0.parentId == nil && $0.name == "交通出行" })
+        )
+        let transitChild = try XCTUnwrap(
+            store.categories.first(where: { $0.parentId == transportParent.id && $0.name == "地铁公交" })
+        )
+
+        let wechatId = try XCTUnwrap(store.accounts.first(where: { $0.name == "微信零钱" })?.id)
+        let debitId = try XCTUnwrap(store.accounts.first(where: { $0.name == "银行储蓄卡" })?.id)
+        let cashId = try XCTUnwrap(store.accounts.first(where: { $0.name == "现金" })?.id)
+        let alipayId = try XCTUnwrap(store.accounts.first(where: { $0.name == "支付宝" })?.id)
+
+        let baseMillis: Int64 = 1_772_352_000_000
+
+        let foodParentTx = try store.saveTransaction(
+            RecordTransactionRequest(
+                type: TransactionType.EXPENSE,
+                timestamp: baseMillis,
+                origAmountMicros: 3_500_000,
+                origCurrency: "CNY",
+                accountId: cashId,
+                categoryId: foodParent.id,
+                merchant: "食堂",
+                note: "部门工作餐",
+                tags: TagTextCodec.format(["工作餐"])
+            )
+        )
+        let diningOutTx = try store.saveTransaction(
+            RecordTransactionRequest(
+                type: TransactionType.EXPENSE,
+                timestamp: baseMillis + 1_000,
+                origAmountMicros: 420_000,
+                origCurrency: "CNY",
+                accountId: wechatId,
+                categoryId: diningOutChild.id,
+                merchant: "Starbucks Reserve",
+                note: "Team Lunch",
+                tags: TagTextCodec.format(["Coffee", "工作日"])
+            )
+        )
+        let breakfastTx = try store.saveTransaction(
+            RecordTransactionRequest(
+                type: TransactionType.EXPENSE,
+                timestamp: baseMillis + 2_000,
+                origAmountMicros: 120_000,
+                origCurrency: "CNY",
+                accountId: alipayId,
+                categoryId: breakfastChild.id,
+                merchant: "街角包子铺"
+            )
+        )
+        let transportTx = try store.saveTransaction(
+            RecordTransactionRequest(
+                type: TransactionType.EXPENSE,
+                timestamp: baseMillis + 3_000,
+                origAmountMicros: 50_000,
+                origCurrency: "CNY",
+                accountId: cashId,
+                categoryId: transitChild.id,
+                merchant: "北京地铁",
+                note: "早高峰通勤"
+            )
+        )
+        let transferTx = try store.saveTransaction(
+            RecordTransactionRequest(
+                type: TransactionType.TRANSFER,
+                timestamp: baseMillis + 4_000,
+                origAmountMicros: 10_000_000,
+                origCurrency: "CNY",
+                accountId: wechatId,
+                toAccountId: debitId,
+                categoryId: nil
+            )
+        )
+        let adjustTx = try store.saveTransaction(
+            RecordTransactionRequest(
+                type: TransactionType.ADJUST,
+                timestamp: baseMillis + 5_000,
+                origAmountMicros: 500_000,
+                origCurrency: "CNY",
+                accountId: cashId,
+                categoryId: nil
+            )
+        )
+        let categorizedTransfer = TransactionDto(
+            id: 9999,
+            type: TransactionType.TRANSFER,
+            timestamp: baseMillis + 6_000,
+            origAmountMicros: 100_000,
+            origCurrency: "CNY",
+            accountId: cashId,
+            accountAmountMicros: 100_000,
+            accountCurrency: "CNY",
+            toAccountId: alipayId,
+            categoryId: foodParent.id
+        )
+
+        // 1. 空查询与纯空白边界均放行
+        XCTAssertTrue(store.matchesSearchQuery("", for: foodParentTx))
+        XCTAssertTrue(store.matchesSearchQuery("   \n\t ", for: transferTx))
+        XCTAssertTrue(store.matchesSearchQuery("", for: adjustTx))
+
+        // 2. 搜索父级大类关键词 "餐饮"：命中直挂大类及各子类（三餐外食/早餐），不误命中交通出行或转账校准
+        XCTAssertTrue(store.matchesSearchQuery("餐饮", for: foodParentTx))
+        XCTAssertTrue(store.matchesSearchQuery("餐饮", for: diningOutTx))
+        XCTAssertTrue(store.matchesSearchQuery("  餐饮  ", for: diningOutTx))
+        XCTAssertTrue(store.matchesSearchQuery("餐饮", for: breakfastTx))
+        XCTAssertFalse(store.matchesSearchQuery("餐饮", for: transportTx))
+        XCTAssertFalse(store.matchesSearchQuery("餐饮", for: transferTx))
+        XCTAssertFalse(store.matchesSearchQuery("餐饮", for: adjustTx))
+
+        // 3. 搜索子类部分关键词 & 交通父级大类
+        XCTAssertTrue(store.matchesSearchQuery("外食", for: diningOutTx))
+        XCTAssertFalse(store.matchesSearchQuery("外食", for: foodParentTx))
+        XCTAssertFalse(store.matchesSearchQuery("外食", for: breakfastTx))
+        XCTAssertFalse(store.matchesSearchQuery("外食", for: transportTx))
+        XCTAssertTrue(store.matchesSearchQuery("早餐", for: breakfastTx))
+        XCTAssertTrue(store.matchesSearchQuery("交通", for: transportTx))
+        XCTAssertFalse(store.matchesSearchQuery("交通", for: diningOutTx))
+
+        // 4. 搜索账户名部分关键词（消费/转出账户与转入账户）
+        XCTAssertTrue(store.matchesSearchQuery("微信", for: diningOutTx))
+        XCTAssertTrue(store.matchesSearchQuery("微信", for: transferTx))
+        XCTAssertFalse(store.matchesSearchQuery("微信", for: foodParentTx))
+        XCTAssertFalse(store.matchesSearchQuery("微信", for: breakfastTx))
+        XCTAssertTrue(store.matchesSearchQuery("储蓄", for: transferTx))
+        XCTAssertFalse(store.matchesSearchQuery("储蓄", for: diningOutTx))
+        XCTAssertFalse(store.matchesSearchQuery("储蓄", for: adjustTx))
+        XCTAssertTrue(store.matchesSearchQuery("支付宝", for: breakfastTx))
+
+        // 5. 无分类特殊交易类型文案（转账 / 余额校准），且带分类记录不触发兜底文案
+        XCTAssertTrue(store.matchesSearchQuery("转账", for: transferTx))
+        XCTAssertFalse(store.matchesSearchQuery("转账", for: diningOutTx))
+        XCTAssertFalse(store.matchesSearchQuery("转账", for: adjustTx))
+        XCTAssertFalse(store.matchesSearchQuery("转账", for: categorizedTransfer))
+        XCTAssertTrue(store.matchesSearchQuery("校准", for: adjustTx))
+        XCTAssertTrue(store.matchesSearchQuery("余额校准", for: adjustTx))
+        XCTAssertFalse(store.matchesSearchQuery("校准", for: transferTx))
+        XCTAssertFalse(store.matchesSearchQuery("校准", for: diningOutTx))
+
+        // 6. 原有商户、标签、备注大小写不敏感匹配与无匹配边界
+        XCTAssertTrue(store.matchesSearchQuery("starbucks", for: diningOutTx))
+        XCTAssertTrue(store.matchesSearchQuery("STARBUCKS", for: diningOutTx))
+        XCTAssertTrue(store.matchesSearchQuery("coffee", for: diningOutTx))
+        XCTAssertTrue(store.matchesSearchQuery("COFFEE", for: diningOutTx))
+        XCTAssertTrue(store.matchesSearchQuery("工作日", for: diningOutTx))
+        XCTAssertTrue(store.matchesSearchQuery("lunch", for: diningOutTx))
+        XCTAssertTrue(store.matchesSearchQuery("通勤", for: transportTx))
+        XCTAssertFalse(store.matchesSearchQuery("不存在的关键字xyz", for: diningOutTx))
+        XCTAssertFalse(store.matchesSearchQuery("不存在的关键字xyz", for: transferTx))
+    }
 }

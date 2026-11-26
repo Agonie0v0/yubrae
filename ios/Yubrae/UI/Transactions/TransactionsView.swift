@@ -76,15 +76,7 @@ public struct TransactionsView: View {
             }
             guard filterOk else { return false }
 
-            let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !query.isEmpty else { return true }
-            let catName = store.category(byId: tx.categoryId)?.name ?? ""
-            let accName = store.account(byId: tx.accountId)?.name ?? ""
-            return tx.merchant.localizedCaseInsensitiveContains(query)
-                || tx.note.localizedCaseInsensitiveContains(query)
-                || tx.tags.localizedCaseInsensitiveContains(query)
-                || catName.localizedCaseInsensitiveContains(query)
-                || accName.localizedCaseInsensitiveContains(query)
+            return store.matchesSearchQuery(searchText, for: tx)
         }
     }
 
@@ -488,7 +480,7 @@ public struct TransactionsView: View {
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass")
                     .foregroundColor(palette.textTertiary)
-                TextField("搜索商户、分类、标签或备注", text: $searchText)
+                TextField("搜索分类、商户、账户、标签或备注", text: $searchText)
                     .font(.subheadline)
                 if !searchText.isEmpty {
                     Button {

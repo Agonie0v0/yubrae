@@ -125,6 +125,39 @@ data class TransactionsUiState(
     val baseAmountByTxId: Map<Long, Long> = emptyMap()
 )
 
+internal fun matchesTransactionSearchQuery(
+    tx: TransactionEntity,
+    query: String,
+    categoryById: Map<Long, CategoryEntity>,
+    accountById: Map<Long, AccountEntity>
+): Boolean {
+    val queryLower = query.trim().lowercase()
+    if (queryLower.isEmpty()) return true
+
+    val category = tx.categoryId?.let { categoryById[it] }
+    val parentCategory = category?.parentId?.let { categoryById[it] }
+    val fallbackTypeLabel = if (tx.categoryId == null) {
+        when (tx.type) {
+            TransactionType.TRANSFER -> "转账"
+            TransactionType.ADJUST -> "余额校准"
+            else -> ""
+        }
+    } else {
+        ""
+    }
+    val fromAccountName = accountById[tx.accountId]?.name
+    val toAccountName = tx.toAccountId?.let { accountById[it]?.name }
+
+    return tx.merchant.lowercase().contains(queryLower) ||
+        tx.note.lowercase().contains(queryLower) ||
+        tx.tags.lowercase().contains(queryLower) ||
+        (category?.name?.lowercase()?.contains(queryLower) == true) ||
+        (parentCategory?.name?.lowercase()?.contains(queryLower) == true) ||
+        (fallbackTypeLabel.isNotEmpty() && fallbackTypeLabel.lowercase().contains(queryLower)) ||
+        (fromAccountName?.lowercase()?.contains(queryLower) == true) ||
+        (toAccountName?.lowercase()?.contains(queryLower) == true)
+}
+
 data class AssetsUiState(
     val displayCurrency: String = CurrencyCatalog.DEFAULT_BASE_CURRENCY,
     val showArchived: Boolean = false,
@@ -293,10 +326,12 @@ class KairoMainViewModel(
     val transactionsUiState: StateFlow<TransactionsUiState> = combine(
         allTransactions,
         pendingTransactions,
-        categories,
+        combine(allAccounts, categories) { accs, cats -> accs to cats },
         exchangeRates,
         combine(_txFilters, settings) { filters, appSettings -> filters to appSettings }
-    ) { transactions, pending, allCategories, rates, (filters, appSettings) ->
+    ) { transactions, pending, (accounts, allCategories), rates, (filters, appSettings) ->
+        val categoryById = allCategories.associateBy { it.id }
+        val accountById = accounts.associateBy { it.id }
         val base = appSettings.baseCurrency
         val zone = ZoneId.systemDefault()
         val monthStart = filters.yearMonth.atDay(1).atStartOfDay(zone).toInstant().toEpochMilli()
@@ -344,7 +379,6 @@ class KairoMainViewModel(
         }
         monthExpense = monthExpense.coerceAtLeast(0L)
 
-        val queryLower = filters.query.trim().lowercase()
         val filtered = inMonthLedger.filter { tx ->
             val matchCurrency = filters.currencyFilter == "ALL" ||
                 tx.origCurrency.equals(filters.currencyFilter, ignoreCase = true) ||
@@ -362,10 +396,7 @@ class KairoMainViewModel(
             } else {
                 true
             }
-            val matchQuery = queryLower.isEmpty() ||
-                tx.merchant.lowercase().contains(queryLower) ||
-                tx.note.lowercase().contains(queryLower) ||
-                tx.tags.lowercase().contains(queryLower)
+            val matchQuery = matchesTransactionSearchQuery(tx, filters.query, categoryById, accountById)
             val matchTag = filters.tagFilter == null || filters.tagFilter in TagTextCodec.parse(tx.tags)
             matchCurrency && matchAccount && matchChannel && matchCat && matchReimburse && matchAmount && matchQuery && matchTag
         }
