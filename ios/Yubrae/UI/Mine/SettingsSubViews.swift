@@ -689,7 +689,7 @@ public struct ShortcutsAutomationGuideView: View {
                             .foregroundColor(palette.primary)
                         if #available(iOS 17.0, *) {
                             ShortcutsLink()
-                            Text("点击上方系统卡片可直接查看或启用「快捷记一笔」「一句话智能记账」「小票识图记账」。")
+                            Text("点击上方系统卡片可直接查看或启用「快捷记一笔」「一句话智能记账」「相册识图记账」。")
                                 .font(.caption)
                                 .foregroundColor(palette.textSecondary)
                         }
@@ -724,33 +724,35 @@ public struct ShortcutsAutomationGuideView: View {
                     }
                 }
 
-                // 方案 1：轻点背面 / 离开支付 App 截屏自动识图
+                // 方案 1：相册选图 / 轻点背面 / 离开支付 App 截屏自动识图
                 YubraeCard(palette: palette) {
                     VStack(alignment: .leading, spacing: 10) {
-                        Label("方案一：轻点背面 / 支付退出自动截屏记账（推荐）", systemImage: "hand.tap.fill")
+                        Label("方案一：相册选图与截屏自动化识图（推荐）", systemImage: "hand.tap.fill")
                             .font(.subheadline.weight(.bold))
                             .foregroundColor(palette.primary)
-                        Text("余白已注册原生 iOS 16+ App Intents，无需越狱即可与苹果「快捷指令」无缝联动：")
+                        Text("余白已注册原生 iOS 16+ App Intents，无需越狱即可与苹果「快捷指令」无缝联动（请先在「我的 → AI 大模型设置」开启支持视觉识图的模型，如 gpt-4o-mini / qwen-vl）：")
                             .font(.caption)
                             .foregroundColor(palette.textSecondary)
-                        stepLine("1", "在余白「我的 → AI 大模型设置」开启支持视觉识图的模型（如 gpt-4o-mini / qwen-vl）。")
-                        stepLine("2", "打开系统「快捷指令」App，新建快捷指令，添加动作：「拍摄截屏」→「余白小票与截图识图记账」（传入上一步截屏）。")
-                        stepLine("3", "在 iPhone「设置 → 辅助功能 → 触控 → 轻点背面」将轻点两下绑定为该快捷指令；或在快捷指令「自动化」中配置「当关闭微信 / 支付宝时运行」。")
+                            .fixedSize(horizontal: false, vertical: true)
+                        stepLine("1", "直接从相册选图（推荐手势 / 桌面入口）：在快捷指令中添加「余白从相册识图记账」（或使用顶部预置卡片），运行后直接拉起系统照片库选图，选完自动识图。")
+                        stepLine("2", "全自动后台截屏 / 选图流转（轻点背面 / 退出支付 App）：先添加系统动作「拍摄截屏」「选择照片」或「获取最新截屏」，再紧跟「余白小票与截图识图记账」（现已自动连接上一步图片，无需点参数槽）。")
+                        stepLine("3", "触发绑定与避坑提醒：在 iPhone「设置 → 辅助功能 → 触控 → 轻点背面」绑定为该快捷指令，或在快捷指令「自动化」中配置「当关闭微信 / 支付宝时运行」。注意：由于 iOS 系统机制限制，直接点击单步里的文件参数槽会跳到「文件」App，因此请通过上一步「选择照片」传入或直接使用「余白从相册识图记账」。")
                     }
                 }
 
-                // 方案 2：Siri / 快捷指令一句话拆单
+                // 方案 2：Siri / 快捷指令原生动作
                 YubraeCard(palette: palette) {
                     VStack(alignment: .leading, spacing: 10) {
                         Label("方案二：Siri 语音与原生快捷指令动作", systemImage: "waveform.circle.fill")
                             .font(.subheadline.weight(.bold))
                             .foregroundColor(palette.primary)
-                        Text("以下 3 个原生动作已自动注册到系统「快捷指令」与 Siri：")
+                        Text("以下 4 个原生动作已自动注册到系统「快捷指令」与 Siri：")
                             .font(.caption)
                             .foregroundColor(palette.textSecondary)
                         intentBadgeRow(title: "余白快捷记一笔", desc: "直接传入金额、支出/收入、商户、备注与分类。")
                         intentBadgeRow(title: "余白一句话智能记账", desc: "传入语音听写或剪贴板文本，离线/AI 自动拆单入账。")
-                        intentBadgeRow(title: "余白小票与截图识图记账", desc: "传入图片文件自动调用视觉大模型识图记账。")
+                        intentBadgeRow(title: "余白从相册识图记账", desc: "打开余白并直接拉起系统相册，选取账单截图或小票照片后自动识图入账。")
+                        intentBadgeRow(title: "余白小票与截图识图记账", desc: "自动承接上一步「拍摄截屏」「选择照片」或「获取最新截屏」输出的图片，后台静默识图记账。")
                     }
                 }
 
@@ -889,6 +891,7 @@ public struct ShortcutsAutomationGuideView: View {
             Text(desc)
                 .font(.caption2)
                 .foregroundColor(palette.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
                 .padding(.leading, 10)
         }
     }

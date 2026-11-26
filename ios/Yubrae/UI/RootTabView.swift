@@ -64,7 +64,7 @@ public struct RootTabView: View {
 
     @State private var selectedTab: YubraeTab = .transactions
     @State private var quickRecordContext: QuickRecordContext?
-    @State private var showSmartInputSheet = false
+    @State private var smartInputLaunch: SmartInputLaunchRequest?
     @State private var isCenterButtonPressed = false
 
     // Global Update Check State
@@ -110,7 +110,7 @@ public struct RootTabView: View {
                             quickRecordContext = QuickRecordContext(editingTransaction: tx)
                         },
                         onOpenSmartInput: {
-                            showSmartInputSheet = true
+                            smartInputLaunch = SmartInputLaunchRequest(initialMode: .text)
                         }
                     )
                     .tag(YubraeTab.transactions)
@@ -177,9 +177,15 @@ public struct RootTabView: View {
             QuickRecordSheet(store: store, editingTransaction: ctx.editingTransaction)
                 .yubraeSheetStyle(palette: palette)
         }
-        .sheet(isPresented: $showSmartInputSheet) {
-            SmartInputSheet(store: store)
-                .yubraeSheetStyle(palette: palette)
+        .sheet(item: $smartInputLaunch) { req in
+            SmartInputSheet(
+                store: store,
+                initialMode: req.initialMode,
+                autoOpenPhotoPicker: req.autoOpenPhotoPicker,
+                autoParseOnPick: req.autoParseOnPick
+            )
+            .id(req.id)
+            .yubraeSheetStyle(palette: palette)
         }
         .sheet(isPresented: $showUpdateSheet) {
             if let update = availableUpdate {
@@ -203,12 +209,18 @@ public struct RootTabView: View {
                 hasPerformedLaunchTasks = true
                 runLaunchTasks()
             }
+            consumePendingSmartInputIfReady()
         }
         .onChange(of: selectedTab) { _ in
             triggerImpactFeedback(.light)
         }
         .onChange(of: scenePhase) { newPhase in
             handleScenePhaseChange(newPhase)
+        }
+        .onChange(of: store.pendingSmartInputLaunch) { newLaunch in
+            if newLaunch != nil {
+                consumePendingSmartInputIfReady()
+            }
         }
         .onChange(of: store.toastMessage) { newMessage in
             if let msg = newMessage, !msg.isEmpty {
@@ -342,7 +354,7 @@ public struct RootTabView: View {
             isCenterButtonPressed = pressing
         }, perform: {
             triggerImpactFeedback(.heavy)
-            showSmartInputSheet = true
+            smartInputLaunch = SmartInputLaunchRequest(initialMode: .text)
         })
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("记一笔")
@@ -353,7 +365,7 @@ public struct RootTabView: View {
     private var floatingAiButton: some View {
         Button {
             triggerImpactFeedback(.light)
-            showSmartInputSheet = true
+            smartInputLaunch = SmartInputLaunchRequest(initialMode: .text)
         } label: {
             Image(systemName: "sparkles")
                 .font(.system(size: 17, weight: .semibold))
@@ -571,6 +583,7 @@ public struct RootTabView: View {
             if isBiometricLocked && store.settings.biometricLockEnabled {
                 authenticateBiometrics()
             }
+            consumePendingSmartInputIfReady()
         default:
             break
         }
@@ -584,6 +597,7 @@ public struct RootTabView: View {
             // 无生物识别且未设置系统密码（如模拟器）时直接放行，避免锁死
             isBiometricLocked = false
             biometricErrorText = nil
+            consumePendingSmartInputIfReady()
             return
         }
         context.evaluatePolicy(
@@ -596,6 +610,7 @@ public struct RootTabView: View {
                         isBiometricLocked = false
                         biometricErrorText = nil
                     }
+                    consumePendingSmartInputIfReady()
                 } else {
                     biometricErrorText = error?.localizedDescription ?? "验证未通过，请重试"
                 }
@@ -603,7 +618,20 @@ public struct RootTabView: View {
         }
     }
 
+    private func consumePendingSmartInputIfReady() {
+        guard !isBiometricLocked else { return }
+        if let launch = store.consumePendingSmartInputLaunch() {
+            smartInputLaunch = launch
+        }
+    }
+
     private func handleIncomingURL(_ url: URL) {
+        if let launch = ExternalBillUrlParser.parseSmartInputLaunch(url: url) {
+            store.pendingSmartInputLaunch = launch
+            consumePendingSmartInputIfReady()
+            return
+        }
+
         if url.isFileURL && url.pathExtension.lowercased() == "klbk" {
             let accessed = url.startAccessingSecurityScopedResource()
             defer {

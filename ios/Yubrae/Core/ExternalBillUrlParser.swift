@@ -41,22 +41,57 @@ public struct ExternalBillParams: Equatable, Sendable {
     }
 }
 
-/// 统一解析 `yubrae://addbill?...`、`yubrae://record?...` 及向后兼容的 `kairoledger://...` URL 协议。
+/// 统一解析 `yubrae://addbill?...`、`yubrae://record?...`、`yubrae://smartinput?...`、`yubrae://receipt`、`yubrae://scan` 及向后兼容的 `kairoledger://...` URL 协议。
 public enum ExternalBillUrlParser {
     public static let supportedSchemes: Set<String> = ["yubrae", "kairoledger"]
     public static let supportedActions: Set<String> = ["addbill", "record"]
+    private static let smartInputActions: Set<String> = ["smartinput", "receipt", "scan"]
 
     /// 判断 URL 是否属于余白外部记账协议。
     public static func isSupportedURL(_ url: URL) -> Bool {
         guard let scheme = url.scheme?.lowercased(), supportedSchemes.contains(scheme) else {
             return false
         }
-        let host = (url.host ?? "").lowercased()
-        let pathAction = url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/")).lowercased()
-        if !host.isEmpty {
-            return supportedActions.contains(host)
+        return supportedActions.contains(extractAction(from: url))
+    }
+
+    /// 解析 `yubrae://smartinput?...`、`yubrae://receipt`、`yubrae://scan`（及兼容 `kairoledger://...`）智能记账启动请求。
+    public static func parseSmartInputLaunch(url: URL) -> SmartInputLaunchRequest? {
+        guard let scheme = url.scheme?.lowercased(), supportedSchemes.contains(scheme) else {
+            return nil
         }
-        return supportedActions.contains(pathAction)
+        let action = extractAction(from: url)
+        guard smartInputActions.contains(action),
+              let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            return nil
+        }
+
+        let (_, lowerParams) = queryMaps(from: components)
+        let isReceiptAction = action == "receipt" || action == "scan"
+
+        let modeRaw = (lowerParams["mode"] ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        let initialMode: SmartInputMode
+        switch modeRaw {
+        case "photo", "image", "receipt", "screenshot":
+            initialMode = .receiptImage
+        case "text":
+            initialMode = .text
+        default:
+            initialMode = isReceiptAction ? .receiptImage : .text
+        }
+
+        let autoOpenPhotoPicker = parseBoolFlag(lowerParams["autoopenphotopicker"] ?? lowerParams["autopick"])
+            ?? isReceiptAction
+        let autoParseOnPick = parseBoolFlag(lowerParams["autoparseonpick"] ?? lowerParams["autoparse"])
+            ?? autoOpenPhotoPicker
+
+        return SmartInputLaunchRequest(
+            initialMode: initialMode,
+            autoOpenPhotoPicker: autoOpenPhotoPicker,
+            autoParseOnPick: autoParseOnPick
+        )
     }
 
     public static func parse(urlString: String, nowMillis: Int64 = currentEpochMillis()) -> ExternalBillParams? {
@@ -71,18 +106,7 @@ public enum ExternalBillUrlParser {
             return nil
         }
 
-        var params: [String: String] = [:]
-        var lowerParams: [String: String] = [:]
-        for item in components.queryItems ?? [] {
-            guard let value = item.value else { continue }
-            if params[item.name] == nil {
-                params[item.name] = value
-            }
-            let lowerKey = item.name.lowercased()
-            if lowerParams[lowerKey] == nil {
-                lowerParams[lowerKey] = value
-            }
-        }
+        let (params, lowerParams) = queryMaps(from: components)
 
         func getParam(_ key: String) -> String? {
             params[key] ?? lowerParams[key.lowercased()]
@@ -171,6 +195,45 @@ public enum ExternalBillUrlParser {
     }
 
     // MARK: - Private
+
+    private static func extractAction(from url: URL) -> String {
+        let host = (url.host ?? "").lowercased()
+        if !host.isEmpty {
+            return host
+        }
+        return url.path.trimmingCharacters(in: CharacterSet(charactersIn: "/")).lowercased()
+    }
+
+    private static func queryMaps(from components: URLComponents) -> (exact: [String: String], lower: [String: String]) {
+        var params: [String: String] = [:]
+        var lowerParams: [String: String] = [:]
+        for item in components.queryItems ?? [] {
+            guard let value = item.value else { continue }
+            if params[item.name] == nil {
+                params[item.name] = value
+            }
+            let lowerKey = item.name.lowercased()
+            if lowerParams[lowerKey] == nil {
+                lowerParams[lowerKey] = value
+            }
+        }
+        return (params, lowerParams)
+    }
+
+    private static func parseBoolFlag(_ raw: String?) -> Bool? {
+        guard let normalized = raw?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+              !normalized.isEmpty else {
+            return nil
+        }
+        switch normalized {
+        case "1", "true", "yes":
+            return true
+        case "0", "false", "no":
+            return false
+        default:
+            return nil
+        }
+    }
 
     private static func parseType(_ raw: String?) -> String {
         let normalized = (raw ?? "").trimmingCharacters(in: .whitespacesAndNewlines).uppercased()

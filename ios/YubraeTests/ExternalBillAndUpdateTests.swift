@@ -1,4 +1,6 @@
+import AppIntents
 import Foundation
+import UIKit
 import XCTest
 @testable import Yubrae
 
@@ -465,5 +467,136 @@ final class ExternalBillAndUpdateTests: XCTestCase {
         // 空输入与纯空白返回空
         XCTAssertEqual(YubraeReleaseNotesFormatter.cleanedPlainText("  \n\r\n  "), "")
         XCTAssertTrue(YubraeReleaseNotesFormatter.attributedLines("   \n  ").isEmpty)
+    }
+
+    // MARK: - Smart Input Launch & Receipt Vision Intent Tests (Issue #5)
+
+    func testSmartInputLaunchURLParsing() throws {
+        let smartPhotoURL = try XCTUnwrap(URL(string: "yubrae://smartinput?mode=photo&autoPick=true&autoParse=true"))
+        let smartPhotoReq = try XCTUnwrap(ExternalBillUrlParser.parseSmartInputLaunch(url: smartPhotoURL))
+        XCTAssertEqual(smartPhotoReq.initialMode, .receiptImage)
+        XCTAssertTrue(smartPhotoReq.autoOpenPhotoPicker)
+        XCTAssertTrue(smartPhotoReq.autoParseOnPick)
+
+        let receiptURL = try XCTUnwrap(URL(string: "yubrae://receipt"))
+        let receiptReq = try XCTUnwrap(ExternalBillUrlParser.parseSmartInputLaunch(url: receiptURL))
+        XCTAssertEqual(receiptReq.initialMode, .receiptImage)
+        XCTAssertTrue(receiptReq.autoOpenPhotoPicker)
+        XCTAssertTrue(receiptReq.autoParseOnPick)
+
+        let legacyScanURL = try XCTUnwrap(URL(string: "kairoledger://scan?autoParse=false"))
+        let legacyScanReq = try XCTUnwrap(ExternalBillUrlParser.parseSmartInputLaunch(url: legacyScanURL))
+        XCTAssertEqual(legacyScanReq.initialMode, .receiptImage)
+        XCTAssertTrue(legacyScanReq.autoOpenPhotoPicker)
+        XCTAssertFalse(legacyScanReq.autoParseOnPick)
+
+        let smartTextURL = try XCTUnwrap(URL(string: "yubrae://smartinput"))
+        let smartTextReq = try XCTUnwrap(ExternalBillUrlParser.parseSmartInputLaunch(url: smartTextURL))
+        XCTAssertEqual(smartTextReq.initialMode, .text)
+        XCTAssertFalse(smartTextReq.autoOpenPhotoPicker)
+        XCTAssertFalse(smartTextReq.autoParseOnPick)
+
+        let addBillURL = try XCTUnwrap(URL(string: "yubrae://addbill?money=28.50&type=EXPENSE"))
+        XCTAssertNil(ExternalBillUrlParser.parseSmartInputLaunch(url: addBillURL))
+
+        let webURL = try XCTUnwrap(URL(string: "https://example.com/receipt"))
+        XCTAssertNil(ExternalBillUrlParser.parseSmartInputLaunch(url: webURL))
+    }
+
+    @MainActor
+    func testLedgerStoreSmartInputLaunchRequestFlow() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("yubrae-smart-input-test-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let store = LedgerStore(storageDirectory: dir, useKeychain: false)
+        XCTAssertNil(store.pendingSmartInputLaunch)
+
+        store.requestSmartInputLaunch(
+            mode: .receiptImage,
+            autoOpenPhotoPicker: true,
+            autoParseOnPick: true
+        )
+
+        let pending = try XCTUnwrap(store.pendingSmartInputLaunch)
+        XCTAssertEqual(pending.initialMode, .receiptImage)
+        XCTAssertTrue(pending.autoOpenPhotoPicker)
+        XCTAssertTrue(pending.autoParseOnPick)
+
+        let consumed = try XCTUnwrap(store.consumePendingSmartInputLaunch())
+        XCTAssertEqual(consumed, pending)
+        XCTAssertNil(store.pendingSmartInputLaunch)
+        XCTAssertNil(store.consumePendingSmartInputLaunch())
+    }
+
+    func testReceiptImageNormalizerResizesAndConvertsToJPEG() throws {
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: 2000, height: 1000))
+        let pngData = renderer.pngData { context in
+            UIColor.systemBlue.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 2000, height: 1000))
+        }
+        XCTAssertFalse(pngData.isEmpty)
+
+        let normalized = try XCTUnwrap(
+            YubraeReceiptImageNormalizer.prepareForVision(
+                data: pngData,
+                fallbackMimeType: "image/png",
+                maxDimension: 1600
+            )
+        )
+        XCTAssertEqual(normalized.mimeType, "image/jpeg")
+        XCTAssertFalse(normalized.data.isEmpty)
+
+        let outputImage = try XCTUnwrap(UIImage(data: normalized.data))
+        let maxSide = max(outputImage.size.width, outputImage.size.height)
+        XCTAssertLessThanOrEqual(maxSide, 1600)
+        XCTAssertEqual(outputImage.size.width, 1600, accuracy: 1)
+        XCTAssertEqual(outputImage.size.height, 800, accuracy: 1)
+
+        XCTAssertNil(YubraeReceiptImageNormalizer.prepareForVision(data: Data()))
+
+        let unreadable = Data([0x01, 0x02, 0x03, 0x04])
+        let fallbackHeic = try XCTUnwrap(
+            YubraeReceiptImageNormalizer.prepareForVision(
+                data: unreadable,
+                fallbackMimeType: " image/heic "
+            )
+        )
+        XCTAssertEqual(fallbackHeic.data, unreadable)
+        XCTAssertEqual(fallbackHeic.mimeType, "image/heic")
+
+        let fallbackBlank = try XCTUnwrap(
+            YubraeReceiptImageNormalizer.prepareForVision(
+                data: unreadable,
+                fallbackMimeType: "  "
+            )
+        )
+        XCTAssertEqual(fallbackBlank.data, unreadable)
+        XCTAssertEqual(fallbackBlank.mimeType, "image/jpeg")
+    }
+
+    @MainActor
+    func testPickPhotoAndReceiptImageIntents() async throws {
+        _ = YubraeRuntime.sharedStore.consumePendingSmartInputLaunch()
+        defer { _ = YubraeRuntime.sharedStore.consumePendingSmartInputLaunch() }
+
+        XCTAssertFalse(YubraeReceiptImageIntent.openAppWhenRun)
+        XCTAssertTrue(YubraePickPhotoReceiptIntent.openAppWhenRun)
+
+        _ = try await YubraePickPhotoReceiptIntent().perform()
+        let pending = try XCTUnwrap(YubraeRuntime.sharedStore.pendingSmartInputLaunch)
+        XCTAssertEqual(pending.initialMode, .receiptImage)
+        XCTAssertTrue(pending.autoOpenPhotoPicker)
+        XCTAssertTrue(pending.autoParseOnPick)
+
+        let consumed = YubraeRuntime.sharedStore.consumePendingSmartInputLaunch()
+        XCTAssertEqual(consumed, pending)
+        XCTAssertNil(YubraeRuntime.sharedStore.pendingSmartInputLaunch)
+
+        XCTAssertTrue(YubraeReceiptImageIntent.missingImageGuidance.contains("相册"))
+        XCTAssertTrue(YubraeReceiptImageIntent.missingImageGuidance.contains("选择照片"))
+
+        let receiptIntent = YubraeReceiptImageIntent()
+        _ = try await receiptIntent.perform()
     }
 }

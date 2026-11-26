@@ -2,19 +2,6 @@ import PhotosUI
 import SwiftUI
 import UIKit
 
-private enum SmartInputMode: Int, CaseIterable, Identifiable {
-    case text = 0
-    case receiptImage = 1
-
-    var id: Int { rawValue }
-    var title: String {
-        switch self {
-        case .text: return "一句话拆单"
-        case .receiptImage: return "小票/截图识图"
-        }
-    }
-}
-
 private struct EditableDraftItem: Identifiable {
     let id: UUID
     var selected: Bool
@@ -32,22 +19,37 @@ private struct EditableDraftItem: Identifiable {
 
 public struct SmartInputSheet: View {
     @ObservedObject public var store: LedgerStore
+    public let initialMode: SmartInputMode
+    public let autoOpenPhotoPicker: Bool
+    public let autoParseOnPick: Bool
+
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var colorScheme
 
-    @State private var mode: SmartInputMode = .text
+    @State private var mode: SmartInputMode
     @State private var inputText: String = ""
     @State private var selectedPhotoItem: PhotosPickerItem?
     @State private var pickedImage: UIImage?
     @State private var pickedImageData: Data?
+    @State private var isAutoPhotoPickerPresented = false
+    @State private var hasTriggeredAutoPhotoPicker = false
 
     @State private var isParsing = false
     @State private var statusBanner: String?
     @State private var errorBanner: String?
     @State private var draftItems: [EditableDraftItem] = []
 
-    public init(store: LedgerStore) {
+    public init(
+        store: LedgerStore,
+        initialMode: SmartInputMode = .text,
+        autoOpenPhotoPicker: Bool = false,
+        autoParseOnPick: Bool = false
+    ) {
         self.store = store
+        self.initialMode = initialMode
+        self.autoOpenPhotoPicker = autoOpenPhotoPicker
+        self.autoParseOnPick = autoParseOnPick
+        _mode = State(initialValue: initialMode)
     }
 
     private var palette: YubraePalette {
@@ -138,6 +140,19 @@ public struct SmartInputSheet: View {
             }
             .onChange(of: selectedPhotoItem) { newItem in
                 loadPickedPhoto(newItem)
+            }
+            .photosPicker(
+                isPresented: $isAutoPhotoPickerPresented,
+                selection: $selectedPhotoItem,
+                matching: .images
+            )
+            .onAppear {
+                if autoOpenPhotoPicker && !hasTriggeredAutoPhotoPicker {
+                    hasTriggeredAutoPhotoPicker = true
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                        isAutoPhotoPickerPresented = true
+                    }
+                }
             }
         }
     }
@@ -498,12 +513,21 @@ public struct SmartInputSheet: View {
 
     private func loadPickedPhoto(_ item: PhotosPickerItem?) {
         guard let item else { return }
-        Task {
-            if let data = try? await item.loadTransferable(type: Data.self),
-               let uiImage = UIImage(data: data) {
-                await MainActor.run {
-                    prepareImageForVision(uiImage)
-                }
+        Task { @MainActor in
+            guard let data = try? await item.loadTransferable(type: Data.self),
+                  let uiImage = UIImage(data: data) else {
+                errorBanner = "无法读取所选图片，请重新选择或改用「粘贴截图」。"
+                return
+            }
+            if mode != .receiptImage {
+                mode = .receiptImage
+            }
+            prepareImageForVision(uiImage)
+            guard autoParseOnPick && !isParsing && pickedImageData != nil else { return }
+            if store.settings.llmEnabled && LlmBillService.hasUsableLlmConfig(store.settings) {
+                await parsePickedReceipt()
+            } else {
+                errorBanner = "已选中图片，请先在「我的 -> AI 大模型设置」中启用 AI 并填写 API Key 后再点击识别。"
             }
         }
     }

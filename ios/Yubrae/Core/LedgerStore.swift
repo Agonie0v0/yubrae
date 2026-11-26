@@ -2,6 +2,38 @@ import Combine
 import Foundation
 import Security
 
+public enum SmartInputMode: Int, CaseIterable, Identifiable, Equatable, Sendable {
+    case text = 0
+    case receiptImage = 1
+
+    public var id: Int { rawValue }
+    public var title: String {
+        switch self {
+        case .text: return "一句话拆单"
+        case .receiptImage: return "小票/截图识图"
+        }
+    }
+}
+
+public struct SmartInputLaunchRequest: Identifiable, Equatable, Sendable {
+    public let id: UUID
+    public let initialMode: SmartInputMode
+    public let autoOpenPhotoPicker: Bool
+    public let autoParseOnPick: Bool
+
+    public init(
+        id: UUID = UUID(),
+        initialMode: SmartInputMode = .text,
+        autoOpenPhotoPicker: Bool = false,
+        autoParseOnPick: Bool = false
+    ) {
+        self.id = id
+        self.initialMode = initialMode
+        self.autoOpenPhotoPicker = autoOpenPhotoPicker
+        self.autoParseOnPick = autoParseOnPick
+    }
+}
+
 public enum LedgerStoreError: LocalizedError, Equatable {
     case unsupportedTransactionType(String)
     case nonPositiveAmount
@@ -155,6 +187,7 @@ public final class LedgerStore: ObservableObject {
 
     @Published public var lastErrorMessage: String?
     @Published public var toastMessage: String?
+    @Published public var pendingSmartInputLaunch: SmartInputLaunchRequest?
 
     // MARK: - Dependencies & Storage
 
@@ -1786,6 +1819,24 @@ public final class LedgerStore: ObservableObject {
     }
 
     // MARK: - External URL & Smart Draft Entry
+
+    public func requestSmartInputLaunch(
+        mode: SmartInputMode = .receiptImage,
+        autoOpenPhotoPicker: Bool = false,
+        autoParseOnPick: Bool = false
+    ) {
+        pendingSmartInputLaunch = SmartInputLaunchRequest(
+            initialMode: mode,
+            autoOpenPhotoPicker: autoOpenPhotoPicker,
+            autoParseOnPick: autoParseOnPick
+        )
+    }
+
+    public func consumePendingSmartInputLaunch() -> SmartInputLaunchRequest? {
+        guard let current = pendingSmartInputLaunch else { return nil }
+        pendingSmartInputLaunch = nil
+        return current
+    }
 
     @discardableResult
     public func handleIncomingURL(_ url: URL) throws -> TransactionDto? {
