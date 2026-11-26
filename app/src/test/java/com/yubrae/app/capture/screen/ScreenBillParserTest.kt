@@ -1739,7 +1739,7 @@ class ScreenBillParserTest {
         assertEquals("家居日用", pddDraft.categoryName)
         assertTrue(pddDraft.note.contains("纯棉四件套"))
         assertEquals("241123-123456789012345", pddDraft.externalOrderNo)
-        assertEquals(listOf("拼多多", "网购"), TagTextCodec.parse(pddDraft.tags))
+        assertEquals(listOf("拼多多"), TagTextCodec.parse(pddDraft.tags))
 
         val taobaoSnapshot = ScreenSnapshot(
             packageName = "com.taobao.taobao",
@@ -1770,7 +1770,7 @@ class ScreenBillParserTest {
         assertEquals("服饰鞋包", tbDraft.categoryName)
         assertTrue(tbDraft.note.contains("法兰绒格子衬衫"))
         assertEquals("394857102938475601", tbDraft.externalOrderNo)
-        assertEquals(listOf("淘宝", "网购"), TagTextCodec.parse(tbDraft.tags))
+        assertEquals(listOf("淘宝"), TagTextCodec.parse(tbDraft.tags))
 
         val jdSnapshot = ScreenSnapshot(
             packageName = "com.jingdong.app.mall",
@@ -1795,7 +1795,7 @@ class ScreenBillParserTest {
         assertEquals("Logitech罗技京东自营旗舰店", jdDraft.merchant)
         assertEquals("数码配件", jdDraft.categoryName)
         assertTrue(jdDraft.note.contains("罗技 MX Master 3S"))
-        assertEquals(listOf("京东", "网购"), TagTextCodec.parse(jdDraft.tags))
+        assertEquals(listOf("京东"), TagTextCodec.parse(jdDraft.tags))
     }
 
     @Test
@@ -1840,7 +1840,7 @@ class ScreenBillParserTest {
         assertTrue(mtDraft.note.contains("冰鲜柠檬水"))
         assertTrue(mtDraft.note.contains("满天星奶茶"))
         assertEquals("外卖", mtDraft.categoryName)
-        assertEquals(listOf("美团", "外卖"), TagTextCodec.parse(mtDraft.tags))
+        assertEquals(listOf("美团"), TagTextCodec.parse(mtDraft.tags))
 
         val elemeSnapshot = ScreenSnapshot(
             packageName = "me.ele",
@@ -1869,7 +1869,7 @@ class ScreenBillParserTest {
         assertTrue(eleDraft.note.contains("香辣鸡腿堡套餐"))
         assertTrue(eleDraft.note.contains("上校鸡块"))
         assertEquals("外卖", eleDraft.categoryName)
-        assertEquals(listOf("外卖"), TagTextCodec.parse(eleDraft.tags))
+        assertEquals(emptyList<String>(), TagTextCodec.parse(eleDraft.tags))
     }
 
     @Test
@@ -1960,7 +1960,7 @@ class ScreenBillParserTest {
         assertEquals("宠物食品", draft1.categoryName)
         assertTrue(draft1.merchant.contains("皇家猫粮"))
         assertTrue(draft1.note.contains("皇家猫粮"))
-        assertEquals(listOf("拼多多", "网购"), TagTextCodec.parse(draft1.tags))
+        assertEquals(listOf("拼多多"), TagTextCodec.parse(draft1.tags))
 
         val wechatPddShop = ScreenSnapshot(
             packageName = "com.tencent.mm",
@@ -1980,7 +1980,7 @@ class ScreenBillParserTest {
         val draft2 = outcome2.draft!!
         assertEquals("南极人家纺旗舰店", draft2.merchant)
         assertEquals("家居日用", draft2.categoryName)
-        assertEquals(listOf("拼多多", "网购"), TagTextCodec.parse(draft2.tags))
+        assertEquals(listOf("拼多多"), TagTextCodec.parse(draft2.tags))
     }
 
     @Test

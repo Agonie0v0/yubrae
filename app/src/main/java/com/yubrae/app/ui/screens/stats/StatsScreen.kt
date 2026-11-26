@@ -122,6 +122,7 @@ import com.yubrae.app.data.db.TransactionEntity
 import com.yubrae.app.data.db.TransactionStatus
 import com.yubrae.app.data.db.TransactionType
 import com.yubrae.app.domain.LedgerAnalytics
+import com.yubrae.app.ui.components.AutoResizeAmountText
 import com.yubrae.app.ui.components.CategoryIconBadge
 import com.yubrae.app.ui.components.ChannelChip
 import com.yubrae.app.ui.components.CompactHairlineDivider
@@ -135,6 +136,9 @@ import com.yubrae.app.ui.components.LocalPrivacyMasked
 import com.yubrae.app.ui.components.QuickCurrencySelectorRow
 import com.yubrae.app.ui.components.TagBadgeChip
 import com.yubrae.app.ui.components.TopStatusBarScrim
+import com.yubrae.app.ui.components.WeekPickerDialog
+import com.yubrae.app.ui.components.YearMonthPickerDialog
+import com.yubrae.app.ui.components.YearPickerDialog
 import com.yubrae.app.ui.components.YimuCard
 import com.yubrae.app.ui.components.YubraeDialog
 import com.yubrae.app.ui.components.YubraeDialogShape
@@ -181,6 +185,7 @@ fun StatsScreen(
     customStartMillis: Long? = null,
     customEndMillis: Long? = null,
     onShiftPeriod: (Int) -> Unit = { delta -> viewModel.shiftStatsPeriod(delta) },
+    onSelectAnchorDate: (LocalDate) -> Unit = { date -> viewModel.setStatsAnchorDate(date) },
     onCustomDateRangeChange: (Long, Long) -> Unit = { s, e -> viewModel.setStatsCustomRange(s, e) },
     trendBuckets: List<TrendBucketPoint> = emptyList(),
     netWorthHistory: List<NetWorthPoint> = emptyList(),
@@ -216,6 +221,7 @@ fun StatsScreen(
     var localCustomStart by remember(resolvedCustomStart) { mutableStateOf(resolvedCustomStart) }
     var localCustomEnd by remember(resolvedCustomEnd) { mutableStateOf(resolvedCustomEnd) }
     var customPickTarget by remember { mutableStateOf<CustomDatePickTarget?>(null) }
+    var showPeriodPickerDialog by remember { mutableStateOf(false) }
 
     var showCurrencyMenu by remember { mutableStateOf(false) }
     var showMoreCurrencies by remember { mutableStateOf(false) }
@@ -390,18 +396,64 @@ fun StatsScreen(
                             )
                         }
 
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text(
-                                text = periodTitle,
-                                style = MaterialTheme.typography.titleMedium.tabular(),
-                                fontWeight = FontWeight.Bold
-                            )
-                            if (periodSubTitle != null) {
-                                Text(
-                                    text = periodSubTitle,
-                                    style = MaterialTheme.typography.labelSmall.tabular(),
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                        val isPickerSupported = localGranularity != StatsGranularity.CUSTOM
+                        Surface(
+                            shape = CircleShape,
+                            color = if (isPickerSupported) {
+                                MaterialTheme.colorScheme.surfaceContainerLow
+                            } else {
+                                Color.Transparent
+                            },
+                            border = if (isPickerSupported) {
+                                BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f))
+                            } else {
+                                null
+                            },
+                            modifier = Modifier
+                                .weight(1f, fill = false)
+                                .padding(horizontal = 6.dp)
+                                .clip(CircleShape)
+                                .then(
+                                    if (isPickerSupported) {
+                                        Modifier.clickable { showPeriodPickerDialog = true }
+                                    } else {
+                                        Modifier
+                                    }
                                 )
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(
+                                    horizontal = if (isPickerSupported) 12.dp else 4.dp,
+                                    vertical = if (isPickerSupported) 4.dp else 0.dp
+                                ),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(2.dp)
+                            ) {
+                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                    Text(
+                                        text = periodTitle,
+                                        style = MaterialTheme.typography.titleMedium.tabular(),
+                                        fontWeight = FontWeight.Bold,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    if (periodSubTitle != null) {
+                                        Text(
+                                            text = periodSubTitle,
+                                            style = MaterialTheme.typography.labelSmall.tabular(),
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 1
+                                        )
+                                    }
+                                }
+                                if (isPickerSupported) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.ArrowDropDown,
+                                        contentDescription = "选择周期",
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(18.dp)
+                                    )
+                                }
                             }
                         }
 
@@ -782,6 +834,47 @@ fun StatsScreen(
             onDismiss = { showMoreCurrencies = false }
         )
     }
+
+    if (showPeriodPickerDialog) {
+        when (localGranularity) {
+            StatsGranularity.WEEKLY -> {
+                WeekPickerDialog(
+                    initialDate = anchorDate,
+                    onSelectWeekDate = { pickedDate ->
+                        highlightedCategoryId = null
+                        highlightedTagName = null
+                        onSelectAnchorDate(pickedDate)
+                    },
+                    onDismiss = { showPeriodPickerDialog = false }
+                )
+            }
+            StatsGranularity.YEARLY -> {
+                YearPickerDialog(
+                    initialYear = anchorDate.year,
+                    onSelect = { pickedYear ->
+                        highlightedCategoryId = null
+                        highlightedTagName = null
+                        onSelectAnchorDate(LocalDate.of(pickedYear, 1, 15))
+                    },
+                    onDismiss = { showPeriodPickerDialog = false }
+                )
+            }
+            StatsGranularity.CUSTOM -> {
+                showPeriodPickerDialog = false
+            }
+            else -> {
+                YearMonthPickerDialog(
+                    initialYearMonth = uiState.selectedMonth,
+                    onSelect = { pickedYm ->
+                        highlightedCategoryId = null
+                        highlightedTagName = null
+                        onSelectAnchorDate(pickedYm.atDay(15))
+                    },
+                    onDismiss = { showPeriodPickerDialog = false }
+                )
+            }
+        }
+    }
 }
 
 @Composable
@@ -1131,60 +1224,48 @@ private fun TrendBarChartCard(
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 10.dp, vertical = 7.dp),
-                        verticalArrangement = Arrangement.spacedBy(3.dp)
+                            .padding(horizontal = 10.dp, vertical = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
+                        Text(
+                            text = activePoint.detailTitle,
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
                         Row(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text(
-                                text = activePoint.detailTitle,
-                                style = MaterialTheme.typography.labelMedium,
-                                fontWeight = FontWeight.Bold,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.weight(1f, fill = false)
+                            TrendSummaryMetricColumn(
+                                label = "收入",
+                                amountText = formatPrivacyAmount(
+                                    privacyMasked,
+                                    MoneyAmount.format(activePoint.incomeMicros, displayCurrency)
+                                ),
+                                valueColor = semantic.income,
+                                modifier = Modifier.weight(1f)
                             )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = "结余 ${
-                                    formatPrivacyAmount(
-                                        privacyMasked,
-                                        MoneyAmount.format(balanceMicros, displayCurrency, showSign = true)
-                                    )
-                                }",
-                                style = MaterialTheme.typography.labelMedium.tabular(),
-                                fontWeight = FontWeight.SemiBold,
-                                color = if (balanceMicros >= 0L) semantic.income else semantic.expense,
-                                maxLines = 1,
-                                softWrap = false
+                            TrendSummaryMetricColumn(
+                                label = "支出",
+                                amountText = formatPrivacyAmount(
+                                    privacyMasked,
+                                    MoneyAmount.format(activePoint.expenseMicros, displayCurrency)
+                                ),
+                                valueColor = semantic.expense,
+                                modifier = Modifier.weight(1f)
                             )
-                        }
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp)
-                        ) {
-                            Text(
-                                text = "收 ${
-                                    formatPrivacyAmount(
-                                        privacyMasked,
-                                        MoneyAmount.format(activePoint.incomeMicros, displayCurrency)
-                                    )
-                                }",
-                                style = MaterialTheme.typography.labelSmall.tabular(),
-                                color = semantic.income
-                            )
-                            Text(
-                                text = "支 ${
-                                    formatPrivacyAmount(
-                                        privacyMasked,
-                                        MoneyAmount.format(activePoint.expenseMicros, displayCurrency)
-                                    )
-                                }",
-                                style = MaterialTheme.typography.labelSmall.tabular(),
-                                color = semantic.expense
+                            TrendSummaryMetricColumn(
+                                label = "结余",
+                                amountText = formatPrivacyAmount(
+                                    privacyMasked,
+                                    MoneyAmount.format(balanceMicros, displayCurrency, showSign = true)
+                                ),
+                                valueColor = if (balanceMicros >= 0L) semantic.income else semantic.expense,
+                                modifier = Modifier.weight(1f)
                             )
                         }
                     }
@@ -1306,6 +1387,41 @@ private fun TrendBarChartCard(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun TrendSummaryMetricColumn(
+    label: String,
+    amountText: String,
+    valueColor: Color,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier,
+        verticalArrangement = Arrangement.spacedBy(2.dp)
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall.copy(
+                fontSize = 10.sp,
+                lineHeight = 13.sp
+            ),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+        AutoResizeAmountText(
+            text = amountText,
+            baseStyle = MaterialTheme.typography.labelMedium.copy(
+                fontSize = 12.5.sp,
+                lineHeight = 16.sp
+            ).tabular(),
+            fontWeight = FontWeight.SemiBold,
+            color = valueColor,
+            minFontSize = 9.sp,
+            modifier = Modifier.fillMaxWidth()
+        )
     }
 }
 

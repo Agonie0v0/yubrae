@@ -21,7 +21,6 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -32,6 +31,7 @@ import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
@@ -50,7 +50,6 @@ import androidx.compose.material.icons.automirrored.rounded.MenuBook
 import androidx.compose.material.icons.rounded.AccountBalanceWallet
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.AutoAwesome
-import androidx.compose.material.icons.rounded.Calculate
 import androidx.compose.material.icons.rounded.CalendarMonth
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
@@ -74,17 +73,18 @@ import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TimePicker
 import androidx.compose.material3.rememberDatePickerState
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -97,15 +97,21 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.window.DialogWindowProvider
+import androidx.core.view.WindowCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.yubrae.app.core.contract.ConversionPreview
 import com.yubrae.app.core.contract.ParsedBillDraft
@@ -126,6 +132,7 @@ import com.yubrae.app.domain.RecordUsageRanker
 import com.yubrae.app.ui.theme.KairoTheme
 import com.yubrae.app.ui.theme.tabular
 import com.yubrae.app.ui.viewmodel.KairoMainViewModel
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import java.time.Instant
 import java.time.LocalDate
@@ -166,8 +173,6 @@ fun QuickRecordSheet(
     onQuickCreateCategory: (suspend (CategoryEntity) -> Long?)? = null,
     onDismiss: () -> Unit
 ) {
-    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    val focusManager = LocalFocusManager.current
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     val semantic = KairoTheme.semantic
@@ -424,19 +429,8 @@ fun QuickRecordSheet(
     var editingTransferRateField by remember { mutableStateOf(false) }
 
     var preview by remember { mutableStateOf<ConversionPreview?>(null) }
-    val isSystemImeVisible = rememberIsSystemImeVisible()
     var imeInputFocused by remember { mutableStateOf(false) }
-    var hasSeenImeSinceFocus by remember { mutableStateOf(false) }
-    LaunchedEffect(isSystemImeVisible) {
-        if (isSystemImeVisible) {
-            hasSeenImeSinceFocus = true
-        } else if (hasSeenImeSinceFocus) {
-            hasSeenImeSinceFocus = false
-            imeInputFocused = false
-            focusManager.clearFocus()
-        }
-    }
-    val showKeypad = !isSystemImeVisible && !imeInputFocused
+    var clearFocusNonce by remember { mutableStateOf(0) }
     var showCurrencyPicker by remember { mutableStateOf(false) }
     var showLedgerPicker by remember { mutableStateOf(false) }
     var showRateOverrideDialog by remember { mutableStateOf(false) }
@@ -629,7 +623,15 @@ fun QuickRecordSheet(
         val acct = selectedAccount
         when {
             acct == null -> viewModel.showMessage("请先选择账户")
-            finalAmountMicros == null || finalAmountMicros <= 0L -> viewModel.showMessage("请输入有效金额")
+            finalAmountMicros == null || finalAmountMicros <= 0L -> {
+                viewModel.showMessage(
+                    if (QuickExprEval.containsOperator(amountExpr)) {
+                        "请输入有效金额或完善算式"
+                    } else {
+                        "请输入有效金额"
+                    }
+                )
+            }
             txType == TransactionType.TRANSFER && (selectedToAccount == null || selectedToAccount.id == acct.id) -> {
                 viewModel.showMessage("请选择不同的转入目标账户")
             }
@@ -682,7 +684,7 @@ fun QuickRecordSheet(
                             manualTransferRateMicros = null
                             activePanel = RecordWorkspacePanel.CATEGORY
                             imeInputFocused = false
-                            focusManager.clearFocus()
+                            clearFocusNonce++
                             viewModel.showMessage("已记一笔，可继续记录下一笔")
                         } else {
                             onDismiss()
@@ -703,20 +705,66 @@ fun QuickRecordSheet(
         count
     }
 
-    ModalBottomSheet(
+    Dialog(
         onDismissRequest = onDismiss,
-        sheetState = sheetState,
-        dragHandle = null,
-        shape = YubraeSheetShape,
-        containerColor = yubraeSheetContainerColor()
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            decorFitsSystemWindows = false
+        )
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .fillMaxHeight(0.90f)
-                .navigationBarsPadding()
-                .imePadding()
+        val focusManager = LocalFocusManager.current
+        val isSystemImeVisible = rememberIsSystemImeVisible()
+        var hasSeenImeSinceFocus by remember { mutableStateOf(false) }
+        LaunchedEffect(isSystemImeVisible) {
+            if (isSystemImeVisible) {
+                hasSeenImeSinceFocus = true
+            } else if (hasSeenImeSinceFocus) {
+                hasSeenImeSinceFocus = false
+                imeInputFocused = false
+                focusManager.clearFocus()
+            }
+        }
+        LaunchedEffect(imeInputFocused, clearFocusNonce) {
+            if (!imeInputFocused) {
+                focusManager.clearFocus()
+            }
+        }
+        val showKeypad = !isSystemImeVisible && !imeInputFocused
+
+        val dialogView = LocalView.current
+        val sheetBgColor = yubraeSheetContainerColor()
+        val isLightSheet = sheetBgColor.luminance() > 0.5f
+        if (!dialogView.isInEditMode) {
+            SideEffect {
+                val dialogWindow = (dialogView.parent as? DialogWindowProvider)?.window
+                if (dialogWindow != null) {
+                    val controller = WindowCompat.getInsetsController(dialogWindow, dialogView)
+                    controller.isAppearanceLightStatusBars = isLightSheet
+                    controller.isAppearanceLightNavigationBars = isLightSheet
+                }
+            }
+        }
+
+        val localSnackbarHostState = remember { SnackbarHostState() }
+        LaunchedEffect(viewModel) {
+            viewModel.snackbarEvents.collectLatest { msg ->
+                localSnackbarHostState.currentSnackbarData?.dismiss()
+                localSnackbarHostState.showSnackbar(msg)
+            }
+        }
+
+        Surface(
+            modifier = Modifier.fillMaxSize(),
+            color = sheetBgColor
         ) {
+            Box(modifier = Modifier.fillMaxSize()) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .statusBarsPadding()
+                        .navigationBarsPadding()
+                        .imePadding()
+                ) {
             // 1. 顶栏：三槽等重 Row，左(删除/账本) | 中(支出/收入/转账) | 右(关闭)，彻底防止长账本名与分段器重叠
             Row(
                 modifier = Modifier
@@ -1697,23 +1745,6 @@ fun QuickRecordSheet(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    TextButton(
-                        onClick = {
-                            focusManager.clearFocus()
-                            imeInputFocused = false
-                        },
-                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
-                    ) {
-                        Icon(Icons.Rounded.Calculate, null, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text(
-                            text = "键盘",
-                            style = MaterialTheme.typography.labelLarge,
-                            maxLines = 1,
-                            softWrap = false,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
                     if (!isEditMode && !isRefundMode) {
                         FilledTonalButton(
                             onClick = { saveWithMode(true) },
@@ -1750,6 +1781,17 @@ fun QuickRecordSheet(
                         )
                     }
                 }
+            }
+                }
+
+                SnackbarHost(
+                    hostState = localSnackbarHostState,
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .navigationBarsPadding()
+                        .imePadding()
+                        .padding(horizontal = 16.dp, vertical = 12.dp)
+                )
             }
         }
     }

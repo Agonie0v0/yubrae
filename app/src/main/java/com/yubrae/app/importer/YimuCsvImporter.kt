@@ -446,11 +446,13 @@ class YimuCsvImporter(
                         val subKey = CategoryKey(parentCat.id, normalizeNameKey(subName), catType)
                         var subCat = categoriesByKey[subKey]
                         if (subCat == null) {
+                            val subSuggested = defaultCategoryIcon(subName, catType)
+                            val resolvedSubIcon = if (subSuggested != "category") subSuggested else parentCat.icon
                             val toInsert = CategoryEntity(
                                 parentId = parentCat.id,
                                 name = subName,
                                 type = catType,
-                                icon = parentCat.icon,
+                                icon = resolvedSubIcon,
                                 colorHex = parentCat.colorHex,
                                 isSystem = false
                             )
@@ -1698,14 +1700,10 @@ class YimuCsvImporter(
     private fun defaultCategoryName(txType: String): String =
         if (txType == TransactionType.INCOME) "其他收入" else "其他支出"
 
-    private fun defaultCategoryIcon(name: String, txType: String): String = when {
-        txType == TransactionType.INCOME -> "attach_money"
-        name.contains("餐") || name.contains("食") || name.contains("饮") -> "restaurant"
-        name.contains("交通") || name.contains("车") || name.contains("地铁") -> "directions_car"
-        name.contains("购物") || name.contains("消费") || name.contains("百货") -> "shopping_bag"
-        name.contains("订阅") || name.contains("软件") -> "subscriptions"
-        name.contains("医") || name.contains("药") -> "medical_services"
-        else -> "category"
+    private fun defaultCategoryIcon(name: String, txType: String): String {
+        val suggested = com.yubrae.app.domain.RecordUsageRanker.suggestCategoryStyle(name).first
+        if (suggested != "category") return suggested
+        return if (txType == TransactionType.INCOME) "attach_money" else "category"
     }
 
     private fun defaultCategoryColor(txType: String): Long =

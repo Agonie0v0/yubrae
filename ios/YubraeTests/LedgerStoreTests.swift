@@ -15,11 +15,12 @@ final class LedgerStoreTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: dir) }
         let store = LedgerStore(storageDirectory: dir, useKeychain: false, timeZone: TimeZone(secondsFromGMT: 8 * 3600)!)
 
-        // 默认种子检查：1 账本、16 支出大类 + 9 收入大类、28 标签、9 账户
+        // 默认种子检查：1 账本、16 支出大类 + 9 收入大类（共 115 分类）、21 标签、9 账户
         XCTAssertEqual(store.ledgers.count, 1)
         XCTAssertEqual(store.parentCategories(for: TransactionType.EXPENSE).count, 16)
         XCTAssertEqual(store.parentCategories(for: TransactionType.INCOME).count, 9)
-        XCTAssertEqual(store.tags.count, 28)
+        XCTAssertEqual(store.categories.count, 115)
+        XCTAssertEqual(store.tags.count, 21)
         XCTAssertEqual(store.accounts.count, 9)
 
         let wechatId = try XCTUnwrap(store.accounts.first(where: { $0.name == "微信零钱" })?.id)
@@ -81,14 +82,27 @@ final class LedgerStoreTests: XCTestCase {
         XCTAssertEqual(store.account(byId: debitId)?.balanceMicros, 1000 * MoneyAmount.amountScale)
         XCTAssertEqual(store.account(byId: wechatId)?.balanceMicros, -600_000)
 
-        // 6. 余额校准将微信零钱调整为 ¥100.00
-        _ = try store.calibrateAccountBalance(accountId: wechatId, targetBalanceMicros: 1_000_000)
+        // 6. 余额校准将微信零钱调整为 ¥100.00（生成差额记录）
+        let adjustTx = try store.calibrateAccountBalance(accountId: wechatId, targetBalanceMicros: 1_000_000)
+        XCTAssertNotNil(adjustTx)
+        XCTAssertEqual(adjustTx?.type, TransactionType.ADJUST)
         XCTAssertEqual(store.account(byId: wechatId)?.balanceMicros, 1_000_000)
+
+        // 6b. 仅调整余额但不生成差额变动记录
+        let txCountBeforeSilent = store.transactions.count
+        let silentAdjust = try store.calibrateAccountBalance(
+            accountId: wechatId,
+            targetBalanceMicros: 2_345_000,
+            createRecord: false
+        )
+        XCTAssertNil(silentAdjust)
+        XCTAssertEqual(store.account(byId: wechatId)?.balanceMicros, 2_345_000)
+        XCTAssertEqual(store.transactions.count, txCountBeforeSilent)
 
         // 7. 重启持久化验证：从同一目录重新加载
         let reloaded = LedgerStore(storageDirectory: dir, useKeychain: false)
         XCTAssertEqual(reloaded.account(byId: debitId)?.balanceMicros, 1000 * MoneyAmount.amountScale)
-        XCTAssertEqual(reloaded.account(byId: wechatId)?.balanceMicros, 1_000_000)
+        XCTAssertEqual(reloaded.account(byId: wechatId)?.balanceMicros, 2_345_000)
         XCTAssertTrue(reloaded.transactions.contains(where: { $0.id == incomeTx.id }))
     }
 
@@ -352,5 +366,95 @@ final class LedgerStoreTests: XCTestCase {
 
         let reopened = LedgerStore(storageDirectory: dir, useKeychain: false, timeZone: tz)
         XCTAssertTrue(reopened.accounts.isEmpty)
+    }
+
+    @MainActor
+    func testPresetCategoriesAndTagsDeduplicatedWithUniqueSfSymbolsAndMigration() throws {
+        // 1. 验证默认分类（115 个）：去重完整、无其他杂项、115 个唯一 iconKey 且对应 115 个非兜底 SF Symbol
+        let categories = DefaultSeedData.makeDefaultCategories()
+        XCTAssertEqual(categories.count, 115)
+        XCTAssertEqual(Set(categories.map { "\($0.type)::\($0.name)" }).count, 115)
+        XCTAssertFalse(categories.contains { $0.name == "其他杂项" })
+        XCTAssertEqual(Set(categories.map(\.icon)).count, 115)
+        let categorySymbols = categories.map { DefaultSeedData.sfSymbol(for: $0.icon) }
+        XCTAssertEqual(Set(categorySymbols).count, 115)
+        XCTAssertFalse(categorySymbols.contains("square.grid.2x2.fill"))
+
+        // 2. 验证默认标签（21 个）：无重复名称、与分类名零重叠、无已清理冗余系统标签、21 个唯一非兜底 SF Symbol
+        let tags = DefaultSeedData.makeDefaultTags()
+        XCTAssertEqual(tags.count, 21)
+        XCTAssertEqual(Set(tags.map(\.name)).count, 21)
+        let categoryNames = Set(categories.map(\.name))
+        XCTAssertTrue(tags.allSatisfy { !categoryNames.contains($0.name) })
+        let removedTagNames: Set<String> = ["外卖", "网购", "聚餐", "宠物", "请客", "公司报销", "定期订阅"]
+        XCTAssertTrue(tags.allSatisfy { !removedTagNames.contains($0.name) })
+        XCTAssertEqual(Set(tags.map(\.icon)).count, 21)
+        let tagSymbols = tags.map { DefaultSeedData.sfSymbol(for: $0.icon) }
+        XCTAssertEqual(Set(tagSymbols).count, 21)
+        XCTAssertFalse(tagSymbols.contains("square.grid.2x2.fill"))
+
+        // 3. 构造历史快照并通过 LedgerStore.init 进行端到端无损迁移与升级验证
+        let dir = makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+
+        var snapshot = DefaultSeedData.makeInitialSnapshot()
+        snapshot.categories = [
+            CategoryDto(id: 10, parentId: nil, name: "餐饮美食", type: TransactionType.EXPENSE, icon: "restaurant", isSystem: true),
+            CategoryDto(id: 11, parentId: 10, name: "三餐外食", type: TransactionType.EXPENSE, icon: "lunch_dining", isSystem: true),
+            CategoryDto(id: 12, parentId: nil, name: "宠物生活", type: TransactionType.EXPENSE, icon: "pets", isSystem: true),
+            CategoryDto(id: 13, parentId: 12, name: "宠物用品", type: TransactionType.EXPENSE, icon: "star", isSystem: true),
+            CategoryDto(id: 20, parentId: nil, name: "其他支出", type: TransactionType.EXPENSE, icon: "more_horiz", isSystem: true),
+            CategoryDto(id: 21, parentId: 20, name: "其他杂项", type: TransactionType.EXPENSE, icon: "category", isSystem: true)
+        ]
+        snapshot.tags = [
+            TagDto(id: 1, name: "网购", groupName: "渠道平台", isSystem: true, icon: "shopping_cart"),
+            TagDto(id: 2, name: "大促囤货", groupName: "场景行程", isSystem: true, icon: "shopping_basket"),
+            TagDto(id: 3, name: "外卖", groupName: "自定义", isSystem: false, icon: "star")
+        ]
+        snapshot.transactions = [
+            TransactionDto(
+                id: 100,
+                type: TransactionType.EXPENSE,
+                timestamp: 1_772_352_000_000,
+                origAmountMicros: 500_000,
+                origCurrency: "CNY",
+                accountId: 1,
+                accountAmountMicros: 500_000,
+                accountCurrency: "CNY",
+                categoryId: 21,
+                merchant: "杂项迁移测试"
+            )
+        ]
+
+        let data = try JSONEncoder().encode(snapshot)
+        try data.write(to: dir.appendingPathComponent("snapshot.json"))
+
+        let store = LedgerStore(
+            storageDirectory: dir,
+            useKeychain: false,
+            timeZone: TimeZone(secondsFromGMT: 8 * 3600)!
+        )
+
+        XCTAssertEqual(store.categories.count, 115)
+        XCTAssertFalse(store.categories.contains { $0.name == "其他杂项" })
+        XCTAssertEqual(store.categories.first { $0.name == "三餐外食" }?.icon, "ramen_dining")
+        // 用户自定义的系统分类图标不被覆盖
+        XCTAssertEqual(store.categories.first { $0.name == "宠物用品" }?.icon, "star")
+
+        // 原关联到 “其他杂项(id=21)” 的流水无损迁移到 “其他支出(id=20)”
+        XCTAssertEqual(store.transactions.first { $0.id == 100 }?.categoryId, 20)
+
+        // 21 个预置系统标签 + 1 个用户自建同名非系统标签 “外卖”
+        XCTAssertEqual(store.tags.count, 22)
+        XCTAssertFalse(store.tags.contains { $0.isSystem && $0.name == "网购" })
+        XCTAssertEqual(store.tags.first { $0.name == "大促囤货" }?.icon, "add_shopping_cart")
+        let customTag = try XCTUnwrap(store.tags.first { !$0.isSystem && $0.name == "外卖" })
+        XCTAssertEqual(customTag.icon, "star")
+
+        // 幂等性检查
+        let res = store.ensurePresetCatalogSeeded()
+        XCTAssertEqual(res.addedCategories, 0)
+        XCTAssertEqual(res.addedTags, 0)
     }
 }

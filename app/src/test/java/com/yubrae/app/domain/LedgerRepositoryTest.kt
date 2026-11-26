@@ -246,18 +246,37 @@ class LedgerRepositoryTest {
             AccountEntity(name = "现金", groupType = AccountGroup.WALLET, currencyCode = "CNY", balanceMicros = 500_000L) // 50.00
         )
 
-        val upTx = ledger.calibrateAccountBalance(accId, MoneyAmount.parseToMicros("125.50")!!).getOrThrow()
+        val upTx = ledger.calibrateAccountBalance(accId, MoneyAmount.parseToMicros("125.50")!!).getOrThrow()!!
         assertEquals(TransactionType.ADJUST, upTx.type)
         assertEquals(MoneyAmount.parseToMicros("75.50")!!, upTx.origAmountMicros)
         assertEquals(MoneyAmount.parseToMicros("125.50")!!, accountDao.getById(accId)!!.balanceMicros)
 
-        val downTx = ledger.calibrateAccountBalance(accId, MoneyAmount.parseToMicros("100.00")!!).getOrThrow()
+        val downTx = ledger.calibrateAccountBalance(accId, MoneyAmount.parseToMicros("100.00")!!).getOrThrow()!!
         assertEquals(MoneyAmount.parseToMicros("-25.50")!!, downTx.origAmountMicros)
         assertEquals(MoneyAmount.parseToMicros("100.00")!!, accountDao.getById(accId)!!.balanceMicros)
 
         // Delete downward adjust restores 125.50
         ledger.deleteTransaction(downTx.id)
         assertEquals(MoneyAmount.parseToMicros("125.50")!!, accountDao.getById(accId)!!.balanceMicros)
+    }
+
+    @Test
+    fun calibrateAccountBalance_withoutRecordUpdatesBalanceOnly() = runTest {
+        val accId = accountDao.insert(
+            AccountEntity(name = "现金", groupType = AccountGroup.WALLET, currencyCode = "CNY", balanceMicros = 500_000L) // 50.00
+        )
+        val initialTxCount = transactionDao.getAll().size
+
+        val result = ledger.calibrateAccountBalance(
+            accountId = accId,
+            targetBalanceMicros = MoneyAmount.parseToMicros("288.88")!!,
+            note = "直接修改",
+            createRecord = false
+        ).getOrThrow()
+
+        assertEquals(null, result)
+        assertEquals(MoneyAmount.parseToMicros("288.88")!!, accountDao.getById(accId)!!.balanceMicros)
+        assertEquals(initialTxCount, transactionDao.getAll().size)
     }
 
     @Test

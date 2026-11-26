@@ -1,5 +1,8 @@
 package com.yubrae.app.ui.screens.transactions
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
@@ -103,6 +106,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
@@ -126,6 +130,7 @@ import com.yubrae.app.data.db.TagTextCodec
 import com.yubrae.app.data.db.TransactionEntity
 import com.yubrae.app.data.db.TransactionStatus
 import com.yubrae.app.data.db.TransactionType
+import com.yubrae.app.ui.components.AutoResizeAmountText
 import com.yubrae.app.ui.components.CategoryIconBadge
 import com.yubrae.app.ui.components.ChannelChip
 import com.yubrae.app.ui.components.CompactHairlineDivider
@@ -134,10 +139,12 @@ import com.yubrae.app.ui.components.EmptyStateCard
 import com.yubrae.app.ui.components.KairoFormats
 import com.yubrae.app.ui.components.KairoIcons
 import com.yubrae.app.ui.components.LocalPrivacyMasked
+import com.yubrae.app.ui.components.MonthSummaryDetailDialog
 import com.yubrae.app.ui.components.ReceiptThumbnailImage
 import com.yubrae.app.ui.components.ReceiptZoomPreviewDialog
 import com.yubrae.app.ui.components.TagBadgeChip
 import com.yubrae.app.ui.components.TopStatusBarScrim
+import com.yubrae.app.ui.components.YearMonthPickerDialog
 import com.yubrae.app.ui.components.YimuCard
 import com.yubrae.app.ui.components.YubraeDialog
 import com.yubrae.app.ui.components.YubraeSheetShape
@@ -237,6 +244,8 @@ fun TransactionsScreen(
     var deleteCandidate by remember { mutableStateOf<TransactionEntity?>(null) }
     var showAccountFilterMenu by remember { mutableStateOf(false) }
     var showChannelFilterMenu by remember { mutableStateOf(false) }
+    var showMonthPickerDialog by remember { mutableStateOf(false) }
+    var showMonthSummaryDialog by remember { mutableStateOf(false) }
 
     val latestOnMultiSelectModeChange by rememberUpdatedState(onMultiSelectModeChange)
     LaunchedEffect(isMultiSelectMode) {
@@ -418,7 +427,8 @@ fun TransactionsScreen(
                     onOpenSmartInput = onOpenSmartInput,
                     onPrevMonth = { viewModel.shiftTxMonth(-1) },
                     onNextMonth = { viewModel.shiftTxMonth(1) },
-                    onResetCurrentMonth = { viewModel.setTxMonth(YearMonth.now()) },
+                    onOpenMonthPicker = { showMonthPickerDialog = true },
+                    onOpenSummaryDetail = { showMonthSummaryDialog = true },
                     onToggleViewMode = {
                         viewMode = if (viewMode == TxViewMode.LIST) TxViewMode.CALENDAR else TxViewMode.LIST
                         if (viewMode == TxViewMode.LIST) {
@@ -867,6 +877,33 @@ fun TransactionsScreen(
             onDismiss = { showBatchDeleteConfirm = false }
         )
     }
+
+    if (showMonthPickerDialog) {
+        YearMonthPickerDialog(
+            initialYearMonth = filters.yearMonth,
+            onSelect = { picked -> viewModel.setTxMonth(picked) },
+            onDismiss = { showMonthPickerDialog = false }
+        )
+    }
+
+    if (showMonthSummaryDialog) {
+        val context = LocalContext.current
+        MonthSummaryDetailDialog(
+            yearMonth = filters.yearMonth,
+            baseCurrency = uiState.baseCurrency,
+            expenseMicros = uiState.monthExpenseBaseMicros,
+            incomeMicros = uiState.monthIncomeBaseMicros,
+            balanceMicros = uiState.monthBalanceBaseMicros,
+            foreignCurrencySummaries = foreignCurrencySummaries,
+            privacyMasked = privacyMasked,
+            onCopySummary = { summaryText ->
+                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                clipboard?.setPrimaryClip(ClipData.newPlainText("month_summary", summaryText))
+                viewModel.showMessage("已复制月度收支汇总")
+            },
+            onDismiss = { showMonthSummaryDialog = false }
+        )
+    }
 }
 
 @Composable
@@ -963,6 +1000,7 @@ private fun BatchSelectionToolbar(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun TransactionsTopHeaderCard(
     activeLedgerLabel: String,
@@ -984,7 +1022,8 @@ private fun TransactionsTopHeaderCard(
     onOpenSmartInput: () -> Unit,
     onPrevMonth: () -> Unit,
     onNextMonth: () -> Unit,
-    onResetCurrentMonth: () -> Unit,
+    onOpenMonthPicker: () -> Unit,
+    onOpenSummaryDetail: () -> Unit,
     onToggleViewMode: () -> Unit
 ) {
     val semantic = KairoTheme.semantic
@@ -1086,16 +1125,11 @@ private fun TransactionsTopHeaderCard(
                             Row(
                                 modifier = Modifier
                                     .clip(CircleShape)
-                                    .then(
-                                        if (!isCurrentMonth) {
-                                            Modifier
-                                                .background(pillBgColor.copy(alpha = 0.72f))
-                                                .clickable(onClick = onResetCurrentMonth)
-                                                .padding(horizontal = 5.dp, vertical = 2.dp)
-                                        } else {
-                                            Modifier.padding(horizontal = 3.dp, vertical = 2.dp)
-                                        }
-                                    ),
+                                    .background(
+                                        pillBgColor.copy(alpha = if (!isCurrentMonth) 0.78f else 0.52f)
+                                    )
+                                    .clickable(onClick = onOpenMonthPicker)
+                                    .padding(horizontal = 7.dp, vertical = 2.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(2.dp)
                             ) {
@@ -1124,6 +1158,12 @@ private fun TransactionsTopHeaderCard(
                                         softWrap = false
                                     )
                                 }
+                                Icon(
+                                    imageVector = Icons.Rounded.ArrowDropDown,
+                                    contentDescription = "选择年月",
+                                    tint = titleColor,
+                                    modifier = Modifier.size(15.dp)
+                                )
                             }
                             Box(
                                 modifier = Modifier
@@ -1177,37 +1217,48 @@ private fun TransactionsTopHeaderCard(
                     }
                 }
 
-                // 第 2 行：一体式轻薄 3 列收支条（去嵌套白卡）+ 隐私小眼睛
+                // 第 2 行：一体式轻薄 3 列收支条（去嵌套白卡，点击/长按展开大字详情）+ 隐私小眼睛
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(start = 2.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    HeaderSummaryMetricColumn(
-                        label = "本月支出",
-                        amountText = formatPrivacyAmount(privacyMasked, MoneyAmount.format(expenseMicros, baseCurrency)),
-                        valueColor = semantic.expense,
-                        labelColor = subtitleColor,
-                        modifier = Modifier.weight(1f)
-                    )
-                    HeaderSummaryMetricColumn(
-                        label = "本月收入",
-                        amountText = formatPrivacyAmount(privacyMasked, MoneyAmount.format(incomeMicros, baseCurrency)),
-                        valueColor = semantic.income,
-                        labelColor = subtitleColor,
-                        modifier = Modifier.weight(1f)
-                    )
-                    HeaderSummaryMetricColumn(
-                        label = "结余",
-                        amountText = formatPrivacyAmount(
-                            privacyMasked,
-                            MoneyAmount.format(balanceMicros, baseCurrency, showSign = true)
-                        ),
-                        valueColor = titleColor,
-                        labelColor = subtitleColor,
-                        modifier = Modifier.weight(1f)
-                    )
+                    Row(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(10.dp))
+                            .combinedClickable(
+                                onClick = onOpenSummaryDetail,
+                                onLongClick = onOpenSummaryDetail
+                            ),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        HeaderSummaryMetricColumn(
+                            label = "本月支出",
+                            amountText = formatPrivacyAmount(privacyMasked, MoneyAmount.format(expenseMicros, baseCurrency)),
+                            valueColor = semantic.expense,
+                            labelColor = subtitleColor,
+                            modifier = Modifier.weight(1f)
+                        )
+                        HeaderSummaryMetricColumn(
+                            label = "本月收入",
+                            amountText = formatPrivacyAmount(privacyMasked, MoneyAmount.format(incomeMicros, baseCurrency)),
+                            valueColor = semantic.income,
+                            labelColor = subtitleColor,
+                            modifier = Modifier.weight(1f)
+                        )
+                        HeaderSummaryMetricColumn(
+                            label = "结余",
+                            amountText = formatPrivacyAmount(
+                                privacyMasked,
+                                MoneyAmount.format(balanceMicros, baseCurrency, showSign = true)
+                            ),
+                            valueColor = titleColor,
+                            labelColor = subtitleColor,
+                            modifier = Modifier.weight(1f)
+                        )
+                    }
                     Box(
                         modifier = Modifier
                             .size(30.dp)
@@ -1303,18 +1354,17 @@ private fun HeaderSummaryMetricColumn(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis
         )
-        Text(
+        AutoResizeAmountText(
             text = amountText,
-            style = MaterialTheme.typography.titleMedium.copy(
+            baseStyle = MaterialTheme.typography.titleMedium.copy(
                 fontSize = 17.5.sp,
                 lineHeight = 22.sp,
                 letterSpacing = (-0.3).sp
             ).tabular(),
             fontWeight = FontWeight.SemiBold,
             color = valueColor,
-            maxLines = 1,
-            softWrap = false,
-            overflow = TextOverflow.Ellipsis
+            minFontSize = 10.sp,
+            modifier = Modifier.fillMaxWidth()
         )
     }
 }

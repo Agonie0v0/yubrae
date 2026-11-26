@@ -221,6 +221,9 @@ public struct QuickRecordSheet: View {
             }
         }
         .background(palette.background.ignoresSafeArea())
+        .onChange(of: amountExpr) { _ in
+            validationMessage = nil
+        }
         .onChange(of: txType) { newType in
             syncCategoryForTypeChange(newType)
             isCreatingCategory = false
@@ -1644,7 +1647,6 @@ public struct QuickRecordSheet: View {
     }
 
     private var calculatorKeypadView: some View {
-        let hasOp = QuickExprEvaluator.containsOperator(amountExpr)
         let isEdit = editingTransaction != nil
 
         return VStack(spacing: 5) {
@@ -1691,26 +1693,7 @@ public struct QuickRecordSheet: View {
                     }
                     .frame(width: leftThreeColsWidth)
 
-                    if hasOp {
-                        Button {
-                            let digits = CurrencyCatalog.find(origCurrency).minorDigits
-                            if let res = QuickExprEvaluator.evaluateAndFormat(amountExpr, maxScale: digits) {
-                                amountExpr = res
-                            } else {
-                                validationMessage = "算式格式有误"
-                            }
-                        } label: {
-                            Text("=")
-                                .font(.title2.weight(.bold))
-                                .lineLimit(1)
-                                .foregroundColor(palette.onPrimary)
-                                .frame(maxWidth: .infinity)
-                                .frame(height: 89)
-                                .background(RoundedRectangle(cornerRadius: 11).fill(palette.primary))
-                        }
-                        .buttonStyle(.plain)
-                        .frame(width: colWidth)
-                    } else if !isEdit {
+                    if !isEdit {
                         VStack(spacing: spacing) {
                             Button {
                                 saveBill(continueNext: true)
@@ -1798,18 +1781,6 @@ public struct QuickRecordSheet: View {
 
     private var collapsedBottomSaveBar: some View {
         HStack(spacing: 8) {
-            Button {
-                dismissSystemKeyboard()
-            } label: {
-                Label("键盘", systemImage: "keyboard")
-                    .font(.subheadline.weight(.semibold))
-                    .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
-                    .foregroundColor(palette.primary)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 10)
-            }
-            .buttonStyle(.plain)
             if editingTransaction == nil {
                 Button {
                     saveBill(continueNext: true)
@@ -1945,7 +1916,9 @@ public struct QuickRecordSheet: View {
     private func saveBill(continueNext: Bool) {
         validationMessage = nil
         guard parsedAmountMicros > 0 else {
-            validationMessage = "请输入大于 0 的有效金额"
+            validationMessage = QuickExprEvaluator.containsOperator(amountExpr)
+                ? "请输入有效金额或完善算式"
+                : "请输入大于 0 的有效金额"
             return
         }
         guard selectedAccountId > 0 else {

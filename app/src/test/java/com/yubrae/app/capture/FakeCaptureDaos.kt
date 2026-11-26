@@ -562,7 +562,12 @@ internal class FakeLedgerService(
     override suspend fun saveAccount(account: AccountEntity): Long = accountDao.insert(account)
     override suspend fun archiveAccount(accountId: Long, archived: Boolean) {}
     override suspend fun deleteAccount(accountId: Long, migrateToAccountId: Long?): Result<Unit> = Result.success(Unit)
-    override suspend fun calibrateAccountBalance(accountId: Long, targetBalanceMicros: Long, note: String): Result<TransactionEntity> =
+    override suspend fun calibrateAccountBalance(
+        accountId: Long,
+        targetBalanceMicros: Long,
+        note: String,
+        createRecord: Boolean
+    ): Result<TransactionEntity?> =
         Result.failure(UnsupportedOperationException())
     override suspend fun saveCategory(category: CategoryEntity): Long = categoryDao.insert(category)
     override suspend fun deleteCategory(categoryId: Long) = categoryDao.deleteById(categoryId)

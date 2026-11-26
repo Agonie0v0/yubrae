@@ -591,48 +591,22 @@ class LocalRuleParser {
 
         if (pkg == "com.xunmeng.pinduoduo" || text.contains("拼多多")) {
             tags.add("拼多多")
-            tags.add("网购")
         }
         if (pkg == "com.taobao.taobao" || pkg == "com.tmall.wireless" || text.contains("淘宝") || text.contains("天猫")) {
             tags.add("淘宝")
-            tags.add("网购")
         }
         if (pkg == "com.jingdong.app.mall" || text.contains("京东")) {
             tags.add("京东")
-            tags.add("网购")
         }
 
-        val hasTakeoutCue = text.contains("外卖") ||
-            text.contains("外送") ||
-            text.contains("宅急送") ||
-            text.contains("配送费") ||
-            text.contains("餐盒费") ||
-            text.contains("骑手") ||
-            cat == "外卖"
         val isMeituan = pkg == "com.sankuai.meituan.takeoutnew" ||
             pkg == "com.sankuai.meituan" ||
             text.contains("美团") ||
             text.contains("三快在线")
-        if (pkg == "com.sankuai.meituan.takeoutnew" ||
-            text.contains("美团外卖") ||
-            (isMeituan && hasTakeoutCue)
-        ) {
-            tags.add("美团")
-            tags.add("外卖")
-        } else if (isMeituan) {
+        if (isMeituan) {
             tags.add("美团")
         }
 
-        if (pkg == "me.ele" || text.contains("饿了么") || text.contains("拉扎斯")) {
-            tags.add("外卖")
-        }
-        if (hasTakeoutCue && "外卖" !in tags) {
-            tags.add("外卖")
-        }
-
-        if (cat in SUBSCRIPTION_TAG_CATEGORIES) {
-            tags.add("定期订阅")
-        }
         if (cat in TRAVEL_TAG_CATEGORIES ||
             text.contains("机票") ||
             text.contains("酒店") ||
@@ -800,10 +774,6 @@ class LocalRuleParser {
             "com.mipay.wallet", "com.xiaomi.pass", "com.huawei.wallet",
             "com.hihonor.wallet", "com.finshell.wallet", "com.coloros.wallet",
             "com.vivo.wallet", "com.samsung.android.spay"
-        )
-
-        private val SUBSCRIPTION_TAG_CATEGORIES = setOf(
-            "数字订阅", "AI与云服务", "软件会员", "影音音乐"
         )
 
         private val TRAVEL_TAG_CATEGORIES = setOf(

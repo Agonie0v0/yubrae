@@ -9,8 +9,8 @@ import java.util.Locale
 /**
  * 默认种子数据与幂等增量补齐：
  * - 默认账本
- * - 16 个支出大类 + 二级子类、9 个收入大类 + 二级子类（按 (name, type) 无损查缺补漏）
- * - 28 个预置标签（4 组，按 name 无损查缺补漏）
+ * - 16 个支出大类 + 67 个二级子类、9 个收入大类 + 23 个二级子类（共 115 个，1:1 唯一图标，按 (name, type) 无损查缺补漏并自动升级旧默认系统图标）
+ * - 21 个预置标签（4 组，无重复标签且 1:1 唯一图标，按 name 无损查缺补漏）
  * - 默认账户（含公交卡钱包账户）与账户别名（含交通卡包名/关键字）
  * - 离线兜底汇率
  * - 内置动账正则规则（含手机钱包/NFC公交卡及通用交通卡规则）
@@ -50,7 +50,7 @@ object DefaultSeedData {
     )
 
     private val PRESET_CATEGORIES: List<ParentCategorySpec> = listOf(
-        // 支出 16 大类及二级
+        // 支出 16 大类及 67 二级（83 个互不重复的专属 iconKey）
         ParentCategorySpec(
             name = "餐饮美食",
             type = TransactionType.EXPENSE,
@@ -58,14 +58,14 @@ object DefaultSeedData {
             colorHex = 0xFFEA580CL,
             sortOrder = 10,
             children = listOf(
-                ChildCategorySpec("三餐外食", "lunch_dining"),
+                ChildCategorySpec("三餐外食", "ramen_dining"),
                 ChildCategorySpec("外卖", "delivery_dining"),
                 ChildCategorySpec("咖啡茶饮", "local_cafe"),
                 ChildCategorySpec("零食甜品", "bakery_dining"),
                 ChildCategorySpec("水果生鲜", "local_grocery_store"),
                 ChildCategorySpec("买菜做饭", "kitchen"),
                 ChildCategorySpec("聚餐请客", "local_bar"),
-                ChildCategorySpec("烟酒茶", "coffee")
+                ChildCategorySpec("烟酒茶", "emoji_food_beverage")
             )
         ),
         ParentCategorySpec(
@@ -81,7 +81,7 @@ object DefaultSeedData {
                 ChildCategorySpec("高铁火车", "train"),
                 ChildCategorySpec("加油充电", "local_gas_station"),
                 ChildCategorySpec("停车过路", "local_parking"),
-                ChildCategorySpec("养车维修", "build")
+                ChildCategorySpec("养车维修", "local_car_wash")
             )
         ),
         ParentCategorySpec(
@@ -93,14 +93,14 @@ object DefaultSeedData {
             children = listOf(
                 ChildCategorySpec("网购百货", "local_mall"),
                 ChildCategorySpec("超市便利", "shopping_cart"),
-                ChildCategorySpec("家居日用", "store"),
+                ChildCategorySpec("家居日用", "weekend"),
                 ChildCategorySpec("快递邮寄", "local_shipping")
             )
         ),
         ParentCategorySpec(
             name = "服饰美容",
             type = TransactionType.EXPENSE,
-            icon = "checkroom",
+            icon = "style",
             colorHex = 0xFFE11D48L,
             sortOrder = 40,
             children = listOf(
@@ -129,9 +129,9 @@ object DefaultSeedData {
             colorHex = 0xFF0D9488L,
             sortOrder = 60,
             children = listOf(
-                ChildCategorySpec("房租房贷", "home"),
+                ChildCategorySpec("房租房贷", "cottage"),
                 ChildCategorySpec("水电燃气", "bolt"),
-                ChildCategorySpec("物业维修", "build"),
+                ChildCategorySpec("物业维修", "handyman"),
                 ChildCategorySpec("话费宽带", "wifi"),
                 ChildCategorySpec("家政服务", "cleaning_services")
             )
@@ -152,7 +152,7 @@ object DefaultSeedData {
         ParentCategorySpec(
             name = "休闲娱乐",
             type = TransactionType.EXPENSE,
-            icon = "sports_esports",
+            icon = "theater_comedy",
             colorHex = 0xFF9333EAL,
             sortOrder = 80,
             children = listOf(
@@ -171,21 +171,21 @@ object DefaultSeedData {
             children = listOf(
                 ChildCategorySpec("看病挂号", "local_hospital"),
                 ChildCategorySpec("买药保健", "medication"),
-                ChildCategorySpec("体检牙科", "medical_services"),
+                ChildCategorySpec("体检牙科", "monitor_heart"),
                 ChildCategorySpec("医疗保险", "health_and_safety")
             )
         ),
         ParentCategorySpec(
             name = "差旅住宿",
             type = TransactionType.EXPENSE,
-            icon = "flight",
+            icon = "explore",
             colorHex = 0xFF2563EBL,
             sortOrder = 100,
             children = listOf(
                 ChildCategorySpec("机票船票", "flight"),
                 ChildCategorySpec("酒店民宿", "hotel"),
-                ChildCategorySpec("旅游门票", "luggage"),
-                ChildCategorySpec("特产纪念", "redeem")
+                ChildCategorySpec("旅游门票", "confirmation_number"),
+                ChildCategorySpec("特产纪念", "backpack")
             )
         ),
         ParentCategorySpec(
@@ -196,21 +196,21 @@ object DefaultSeedData {
             sortOrder = 110,
             children = listOf(
                 ChildCategorySpec("书籍资料", "book"),
-                ChildCategorySpec("课程培训", "school"),
+                ChildCategorySpec("课程培训", "science"),
                 ChildCategorySpec("考试考证", "edit_note"),
-                ChildCategorySpec("文具办公", "menu_book")
+                ChildCategorySpec("文具办公", "palette")
             )
         ),
         ParentCategorySpec(
             name = "人情社交",
             type = TransactionType.EXPENSE,
-            icon = "favorite",
+            icon = "groups",
             colorHex = 0xFFEC4899L,
             sortOrder = 120,
             children = listOf(
                 ChildCategorySpec("红包礼金", "card_giftcard"),
                 ChildCategorySpec("送礼请客", "redeem"),
-                ChildCategorySpec("孝敬长辈", "volunteer_activism"),
+                ChildCategorySpec("孝敬长辈", "elderly"),
                 ChildCategorySpec("恋爱约会", "favorite")
             )
         ),
@@ -221,32 +221,32 @@ object DefaultSeedData {
             colorHex = 0xFFD97706L,
             sortOrder = 130,
             children = listOf(
-                ChildCategorySpec("宠物食品", "pets"),
+                ChildCategorySpec("宠物食品", "set_meal"),
                 ChildCategorySpec("宠物用品", "shopping_basket"),
-                ChildCategorySpec("宠物医疗", "local_hospital")
+                ChildCategorySpec("宠物医疗", "healing")
             )
         ),
         ParentCategorySpec(
             name = "亲子育儿",
             type = TransactionType.EXPENSE,
-            icon = "child_care",
+            icon = "stroller",
             colorHex = 0xFFF59E0BL,
             sortOrder = 140,
             children = listOf(
                 ChildCategorySpec("奶粉辅食", "child_care"),
-                ChildCategorySpec("童装玩具", "redeem"),
-                ChildCategorySpec("早教培训", "school")
+                ChildCategorySpec("童装玩具", "toys"),
+                ChildCategorySpec("早教培训", "translate")
             )
         ),
         ParentCategorySpec(
             name = "金融保险",
             type = TransactionType.EXPENSE,
-            icon = "currency_exchange",
+            icon = "assured_workload",
             colorHex = 0xFF64748BL,
             sortOrder = 150,
             children = listOf(
                 ChildCategorySpec("汇损手续费", "currency_exchange"),
-                ChildCategorySpec("商业保险", "health_and_safety"),
+                ChildCategorySpec("商业保险", "verified_user"),
                 ChildCategorySpec("利息罚息", "percent"),
                 ChildCategorySpec("投资亏损", "trending_down")
             )
@@ -259,12 +259,11 @@ object DefaultSeedData {
             sortOrder = 160,
             children = listOf(
                 ChildCategorySpec("公益捐赠", "volunteer_activism"),
-                ChildCategorySpec("意外丢失", "more_horiz"),
-                ChildCategorySpec("其他杂项", "category")
+                ChildCategorySpec("意外丢失", "priority_high")
             )
         ),
 
-        // 收入 9 大类及二级
+        // 收入 9 大类及 23 二级（32 个互不重复的专属 iconKey）
         ParentCategorySpec(
             name = "工资薪金",
             type = TransactionType.INCOME,
@@ -273,20 +272,20 @@ object DefaultSeedData {
             sortOrder = 10,
             children = listOf(
                 ChildCategorySpec("基本工资", "payments"),
-                ChildCategorySpec("加班津贴", "work"),
-                ChildCategorySpec("年终奖", "card_giftcard")
+                ChildCategorySpec("加班津贴", "schedule"),
+                ChildCategorySpec("年终奖", "emoji_events")
             )
         ),
         ParentCategorySpec(
             name = "奖金补贴",
             type = TransactionType.INCOME,
-            icon = "card_giftcard",
+            icon = "star",
             colorHex = 0xFF15803DL,
             sortOrder = 20,
             children = listOf(
-                ChildCategorySpec("绩效奖金", "trending_up"),
+                ChildCategorySpec("绩效奖金", "bar_chart"),
                 ChildCategorySpec("餐补交通补", "directions_bus"),
-                ChildCategorySpec("节日福利", "redeem")
+                ChildCategorySpec("节日福利", "cake")
             )
         ),
         ParentCategorySpec(
@@ -296,10 +295,10 @@ object DefaultSeedData {
             colorHex = 0xFF0D9488L,
             sortOrder = 30,
             children = listOf(
-                ChildCategorySpec("基金股票", "trending_up"),
+                ChildCategorySpec("基金股票", "candlestick_chart"),
                 ChildCategorySpec("银行利息", "savings"),
-                ChildCategorySpec("分红收益", "attach_money"),
-                ChildCategorySpec("外汇收益", "currency_exchange")
+                ChildCategorySpec("分红收益", "pie_chart"),
+                ChildCategorySpec("外汇收益", "monetization_on")
             )
         ),
         ParentCategorySpec(
@@ -310,30 +309,30 @@ object DefaultSeedData {
             sortOrder = 40,
             children = listOf(
                 ChildCategorySpec("公司报销", "receipt_long"),
-                ChildCategorySpec("购物退款", "replay"),
-                ChildCategorySpec("保险理赔", "health_and_safety")
+                ChildCategorySpec("购物退款", "local_post_office"),
+                ChildCategorySpec("保险理赔", "request_quote")
             )
         ),
         ParentCategorySpec(
             name = "兼职副业",
             type = TransactionType.INCOME,
-            icon = "laptop_mac",
+            icon = "business_center",
             colorHex = 0xFF2563EBL,
             sortOrder = 50,
             children = listOf(
-                ChildCategorySpec("外包私活", "laptop_mac"),
-                ChildCategorySpec("自媒体稿费", "edit_note"),
+                ChildCategorySpec("外包私活", "desktop_windows"),
+                ChildCategorySpec("自媒体稿费", "mic"),
                 ChildCategorySpec("二手闲置", "sell")
             )
         ),
         ParentCategorySpec(
             name = "人情礼金",
             type = TransactionType.INCOME,
-            icon = "redeem",
+            icon = "card_membership",
             colorHex = 0xFFDB2777L,
             sortOrder = 60,
             children = listOf(
-                ChildCategorySpec("微信红包", "card_giftcard"),
+                ChildCategorySpec("微信红包", "chat"),
                 ChildCategorySpec("礼金往来", "handshake")
             )
         ),
@@ -344,8 +343,8 @@ object DefaultSeedData {
             colorHex = 0xFFEA580CL,
             sortOrder = 70,
             children = listOf(
-                ChildCategorySpec("门店营收", "storefront"),
-                ChildCategorySpec("租金收入", "home")
+                ChildCategorySpec("门店营收", "point_of_sale"),
+                ChildCategorySpec("租金收入", "corporate_fare")
             )
         ),
         ParentCategorySpec(
@@ -355,8 +354,8 @@ object DefaultSeedData {
             colorHex = 0xFF006874L,
             sortOrder = 80,
             children = listOf(
-                ChildCategorySpec("公积金提取", "account_balance"),
-                ChildCategorySpec("个税退税", "receipt_long"),
+                ChildCategorySpec("公积金提取", "badge"),
+                ChildCategorySpec("个税退税", "calculate"),
                 ChildCategorySpec("消费补贴", "local_offer")
             )
         ),
@@ -370,39 +369,103 @@ object DefaultSeedData {
     )
 
     private val PRESET_TAGS: List<TagSpec> = listOf(
-        // 渠道平台 (8)
-        TagSpec("外卖", "渠道平台", 0xFFEA580CL, 10, "delivery_dining"),
-        TagSpec("网购", "渠道平台", 0xFF0284C7L, 20, "shopping_cart"),
-        TagSpec("拼多多", "渠道平台", 0xFFE11D48L, 30, "loyalty"),
-        TagSpec("淘宝", "渠道平台", 0xFFD97706L, 40, "shopping_bag"),
-        TagSpec("京东", "渠道平台", 0xFFDC2626L, 50, "local_shipping"),
-        TagSpec("美团", "渠道平台", 0xFFF59E0BL, 60, "fastfood"),
-        TagSpec("线下", "渠道平台", 0xFF0D9488L, 70, "storefront"),
-        TagSpec("跨境", "渠道平台", 0xFF4F46E5L, 80, "public"),
-        // 场景行程 (5)
-        TagSpec("通勤", "场景行程", 0xFF0369A1L, 90, "subway"),
-        TagSpec("差旅", "场景行程", 0xFF2563EBL, 100, "luggage"),
-        TagSpec("旅行", "场景行程", 0xFF0F766EL, 110, "flight"),
-        TagSpec("聚餐", "场景行程", 0xFFDB2777L, 120, "celebration"),
-        TagSpec("大促囤货", "场景行程", 0xFF9333EAL, 130, "shopping_basket"),
-        // 消费属性 (6)
-        TagSpec("刚需", "消费属性", 0xFF16A34AL, 140, "verified"),
-        TagSpec("定期订阅", "消费属性", 0xFF7C3AEDL, 150, "subscriptions"),
-        TagSpec("分期", "消费属性", 0xFF64748BL, 160, "credit_card"),
-        TagSpec("优惠立减", "消费属性", 0xFF15803DL, 170, "local_offer"),
-        TagSpec("冲动消费", "消费属性", 0xFFE11D48L, 180, "bolt"),
-        TagSpec("大额", "消费属性", 0xFFDC2626L, 190, "diamond"),
-        // 对象账务 (9)
-        TagSpec("自己", "对象账务", 0xFF2AA876L, 200, "person"),
-        TagSpec("家人", "对象账务", 0xFFEA580CL, 210, "home"),
-        TagSpec("伴侣", "对象账务", 0xFFEC4899L, 220, "favorite"),
-        TagSpec("宠物", "对象账务", 0xFFD97706L, 230, "pets"),
-        TagSpec("请客", "对象账务", 0xFFF59E0BL, 240, "redeem"),
-        TagSpec("AA", "对象账务", 0xFF0284C7L, 250, "groups"),
-        TagSpec("公司报销", "对象账务", 0xFF1677FFL, 260, "receipt_long"),
-        TagSpec("可抵税", "对象账务", 0xFF4F46E5L, 270, "calculate"),
-        TagSpec("装修", "对象账务", 0xFF0D9488L, 280, "build")
+        // 渠道平台 (6)
+        TagSpec("拼多多", "渠道平台", 0xFFE11D48L, 10, "loyalty"),
+        TagSpec("淘宝", "渠道平台", 0xFFD97706L, 20, "shopping_bag"),
+        TagSpec("京东", "渠道平台", 0xFFDC2626L, 30, "local_shipping"),
+        TagSpec("美团", "渠道平台", 0xFFF59E0BL, 40, "fastfood"),
+        TagSpec("线下", "渠道平台", 0xFF0D9488L, 50, "storefront"),
+        TagSpec("跨境", "渠道平台", 0xFF4F46E5L, 60, "public"),
+        // 场景行程 (4)
+        TagSpec("通勤", "场景行程", 0xFF0369A1L, 70, "subway"),
+        TagSpec("差旅", "场景行程", 0xFF2563EBL, 80, "luggage"),
+        TagSpec("旅行", "场景行程", 0xFF0F766EL, 90, "flight"),
+        TagSpec("大促囤货", "场景行程", 0xFF9333EAL, 100, "add_shopping_cart"),
+        // 消费属性 (5)
+        TagSpec("刚需", "消费属性", 0xFF16A34AL, 110, "verified"),
+        TagSpec("分期", "消费属性", 0xFF64748BL, 120, "credit_card"),
+        TagSpec("优惠立减", "消费属性", 0xFF15803DL, 130, "local_offer"),
+        TagSpec("冲动消费", "消费属性", 0xFFE11D48L, 140, "bolt"),
+        TagSpec("大额", "消费属性", 0xFFDC2626L, 150, "diamond"),
+        // 对象账务 (6)
+        TagSpec("自己", "对象账务", 0xFF2AA876L, 160, "person"),
+        TagSpec("家人", "对象账务", 0xFFEA580CL, 170, "family_restroom"),
+        TagSpec("伴侣", "对象账务", 0xFFEC4899L, 180, "favorite"),
+        TagSpec("AA", "对象账务", 0xFF0284C7L, 190, "groups"),
+        TagSpec("可抵税", "对象账务", 0xFF4F46E5L, 200, "calculate"),
+        TagSpec("装修", "对象账务", 0xFF0D9488L, 210, "handyman")
     )
+
+    private val REMOVED_DUPLICATE_SYSTEM_CATEGORIES: Set<Pair<String, String>> = setOf(
+        "其他杂项" to TransactionType.EXPENSE
+    )
+
+    private val REMOVED_DUPLICATE_SYSTEM_TAGS: Set<String> = setOf(
+        "外卖", "网购", "聚餐", "宠物", "请客", "公司报销", "定期订阅"
+    )
+
+    private val LEGACY_CATEGORY_ICONS: Map<Pair<String, String>, Set<String>> = mapOf(
+        ("三餐外食" to TransactionType.EXPENSE) to setOf("lunch_dining"),
+        ("烟酒茶" to TransactionType.EXPENSE) to setOf("coffee"),
+        ("养车维修" to TransactionType.EXPENSE) to setOf("build"),
+        ("家居日用" to TransactionType.EXPENSE) to setOf("store"),
+        ("服饰美容" to TransactionType.EXPENSE) to setOf("checkroom"),
+        ("房租房贷" to TransactionType.EXPENSE) to setOf("home"),
+        ("物业维修" to TransactionType.EXPENSE) to setOf("build"),
+        ("休闲娱乐" to TransactionType.EXPENSE) to setOf("sports_esports"),
+        ("体检牙科" to TransactionType.EXPENSE) to setOf("medical_services"),
+        ("差旅住宿" to TransactionType.EXPENSE) to setOf("flight"),
+        ("旅游门票" to TransactionType.EXPENSE) to setOf("luggage"),
+        ("特产纪念" to TransactionType.EXPENSE) to setOf("redeem"),
+        ("课程培训" to TransactionType.EXPENSE) to setOf("school"),
+        ("文具办公" to TransactionType.EXPENSE) to setOf("menu_book"),
+        ("人情社交" to TransactionType.EXPENSE) to setOf("favorite"),
+        ("孝敬长辈" to TransactionType.EXPENSE) to setOf("volunteer_activism"),
+        ("宠物食品" to TransactionType.EXPENSE) to setOf("pets"),
+        ("宠物医疗" to TransactionType.EXPENSE) to setOf("local_hospital"),
+        ("亲子育儿" to TransactionType.EXPENSE) to setOf("child_care"),
+        ("童装玩具" to TransactionType.EXPENSE) to setOf("redeem"),
+        ("早教培训" to TransactionType.EXPENSE) to setOf("school"),
+        ("金融保险" to TransactionType.EXPENSE) to setOf("currency_exchange"),
+        ("商业保险" to TransactionType.EXPENSE) to setOf("health_and_safety"),
+        ("加班津贴" to TransactionType.INCOME) to setOf("work"),
+        ("年终奖" to TransactionType.INCOME) to setOf("card_giftcard"),
+        ("奖金补贴" to TransactionType.INCOME) to setOf("card_giftcard"),
+        ("绩效奖金" to TransactionType.INCOME) to setOf("trending_up"),
+        ("节日福利" to TransactionType.INCOME) to setOf("redeem"),
+        ("基金股票" to TransactionType.INCOME) to setOf("trending_up"),
+        ("分红收益" to TransactionType.INCOME) to setOf("attach_money"),
+        ("外汇收益" to TransactionType.INCOME) to setOf("currency_exchange"),
+        ("购物退款" to TransactionType.INCOME) to setOf("replay"),
+        ("保险理赔" to TransactionType.INCOME) to setOf("health_and_safety"),
+        ("兼职副业" to TransactionType.INCOME) to setOf("laptop_mac"),
+        ("外包私活" to TransactionType.INCOME) to setOf("laptop_mac"),
+        ("自媒体稿费" to TransactionType.INCOME) to setOf("edit_note"),
+        ("人情礼金" to TransactionType.INCOME) to setOf("redeem"),
+        ("微信红包" to TransactionType.INCOME) to setOf("card_giftcard"),
+        ("门店营收" to TransactionType.INCOME) to setOf("storefront"),
+        ("租金收入" to TransactionType.INCOME) to setOf("home"),
+        ("公积金提取" to TransactionType.INCOME) to setOf("account_balance"),
+        ("个税退税" to TransactionType.INCOME) to setOf("receipt_long")
+    )
+
+    private val LEGACY_TAG_ICONS: Map<String, Set<String>> = mapOf(
+        "大促囤货" to setOf("shopping_basket"),
+        "家人" to setOf("home"),
+        "装修" to setOf("build")
+    )
+
+    internal fun presetCategoryIconKeys(): Map<Pair<String, String>, String> = buildMap {
+        PRESET_CATEGORIES.forEach { parent ->
+            put(parent.name to parent.type, parent.icon)
+            parent.children.forEach { child ->
+                put(child.name to parent.type, child.icon)
+            }
+        }
+    }
+
+    internal fun presetTagIconKeys(): Map<String, String> =
+        PRESET_TAGS.associate { it.name to it.icon }
 
     private val TRANSIT_ALIASES: List<TransitAliasSpec> = listOf(
         TransitAliasSpec(AliasMatchType.PACKAGE, "com.miui.tsmclient", 110),
@@ -569,7 +632,8 @@ object DefaultSeedData {
             exchangeRateDao = db.exchangeRateDao(),
             parseRuleDao = db.parseRuleDao(),
             seedInitialAccounts = shouldSeedInitialAccounts,
-            seedTransitCardIfMissing = shouldSeedInitialAccounts
+            seedTransitCardIfMissing = shouldSeedInitialAccounts,
+            transactionDao = db.transactionDao()
         )
         if (shouldSeedInitialAccounts) {
             settingsStore?.markInitialAccountsSeeded()
@@ -585,10 +649,11 @@ object DefaultSeedData {
         exchangeRateDao: ExchangeRateDao,
         parseRuleDao: ParseRuleDao,
         seedInitialAccounts: Boolean = true,
-        seedTransitCardIfMissing: Boolean = true
+        seedTransitCardIfMissing: Boolean = true,
+        transactionDao: TransactionDao? = null
     ) {
         ensureDefaultLedger(ledgerDao)
-        ensurePresetCategories(categoryDao)
+        ensurePresetCategories(categoryDao, transactionDao)
         ensurePresetTags(tagDao)
         ensureAccountsAndTransitCard(
             accountDao = accountDao,
@@ -623,9 +688,21 @@ object DefaultSeedData {
     }
 
     suspend fun ensurePresetCategories(db: KairoDatabase): Int =
-        ensurePresetCategories(db.categoryDao())
+        ensurePresetCategories(db.categoryDao(), db.transactionDao())
 
-    suspend fun ensurePresetCategories(categoryDao: CategoryDao): Int {
+    private fun shouldUpgradeSystemCategoryIcon(
+        existing: CategoryEntity,
+        targetIcon: String,
+        key: Pair<String, String>
+    ): Boolean {
+        if (!existing.isSystem || existing.icon == targetIcon) return false
+        return existing.icon.isBlank() || existing.icon in LEGACY_CATEGORY_ICONS[key].orEmpty()
+    }
+
+    suspend fun ensurePresetCategories(
+        categoryDao: CategoryDao,
+        transactionDao: TransactionDao? = null
+    ): Int {
         val existingByKey = categoryDao.getAll()
             .associateBy { it.name to it.type }
             .toMutableMap()
@@ -649,12 +726,18 @@ object DefaultSeedData {
                 addedCount++
                 insertedId
             } else {
+                if (shouldUpgradeSystemCategoryIcon(existingParent, parentSpec.icon, parentKey)) {
+                    val upgraded = existingParent.copy(icon = parentSpec.icon)
+                    categoryDao.update(upgraded)
+                    existingByKey[parentKey] = upgraded
+                }
                 existingParent.id
             }
 
             parentSpec.children.forEachIndexed { index, childSpec ->
                 val childKey = childSpec.name to parentSpec.type
-                if (existingByKey[childKey] == null) {
+                val existingChild = existingByKey[childKey]
+                if (existingChild == null) {
                     val childEntity = CategoryEntity(
                         parentId = parentId,
                         name = childSpec.name,
@@ -667,9 +750,33 @@ object DefaultSeedData {
                     val insertedChildId = categoryDao.insert(childEntity)
                     existingByKey[childKey] = childEntity.copy(id = insertedChildId)
                     addedCount++
+                } else if (shouldUpgradeSystemCategoryIcon(existingChild, childSpec.icon, childKey)) {
+                    val upgraded = existingChild.copy(icon = childSpec.icon)
+                    categoryDao.update(upgraded)
+                    existingByKey[childKey] = upgraded
                 }
             }
         }
+
+        // 无损移除历史版本中与一级分类重叠的系统子分类（如 “其他支出/其他杂项”），并将既有流水归并到父分类
+        val fallbackOtherExpenseId = existingByKey["其他支出" to TransactionType.EXPENSE]?.id
+        for (removedKey in REMOVED_DUPLICATE_SYSTEM_CATEGORIES) {
+            val legacy = existingByKey[removedKey] ?: continue
+            if (!legacy.isSystem) continue
+            if (transactionDao != null && fallbackOtherExpenseId != null && legacy.id > 0L) {
+                val affectedIds = transactionDao.getAll()
+                    .asSequence()
+                    .filter { it.categoryId == legacy.id }
+                    .map { it.id }
+                    .toList()
+                if (affectedIds.isNotEmpty()) {
+                    transactionDao.updateCategoryForIds(affectedIds, fallbackOtherExpenseId)
+                }
+            }
+            categoryDao.deleteById(legacy.id)
+            existingByKey.remove(removedKey)
+        }
+
         return addedCount
     }
 
@@ -677,7 +784,16 @@ object DefaultSeedData {
         ensurePresetTags(db.tagDao())
 
     suspend fun ensurePresetTags(tagDao: TagDao): Int {
-        val existingByName = tagDao.getAll().associateByTo(HashMap()) { it.name }
+        val allExisting = tagDao.getAll()
+        val existingByName = HashMap<String, TagEntity>(allExisting.size)
+        for (tag in allExisting) {
+            if (tag.isSystem && tag.name in REMOVED_DUPLICATE_SYSTEM_TAGS) {
+                tagDao.deleteById(tag.id)
+            } else {
+                existingByName[tag.name] = tag
+            }
+        }
+
         val toInsert = mutableListOf<TagEntity>()
         for (spec in PRESET_TAGS) {
             val existing = existingByName[spec.name]
@@ -692,8 +808,10 @@ object DefaultSeedData {
                 )
                 toInsert.add(entity)
                 existingByName[spec.name] = entity
-            } else if (existing.isSystem && existing.icon.isBlank() && spec.icon.isNotBlank()) {
-                // Room v3 -> v4 升级后无损回填预置系统标签默认图标，保留用户自定义标签配置
+            } else if (existing.isSystem && existing.icon != spec.icon &&
+                (existing.icon.isBlank() || existing.icon in LEGACY_TAG_ICONS[spec.name].orEmpty())
+            ) {
+                // 无损升级预置系统标签默认图标，保留用户自定义标签配置
                 tagDao.update(existing.copy(icon = spec.icon))
             }
         }

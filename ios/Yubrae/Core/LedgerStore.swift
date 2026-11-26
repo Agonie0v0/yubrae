@@ -261,8 +261,19 @@ public final class LedgerStore: ObservableObject {
         self.installments = loadedSnapshot.installments
         self.tags = loadedSnapshot.tags
 
+        var needsPersist = isFreshInstall
+        if !isFreshInstall {
+            let syncRes = DefaultSeedData.syncPresetCatalog(
+                categories: &self.categories,
+                tags: &self.tags,
+                transactions: &self.transactions
+            )
+            if syncRes.changed {
+                needsPersist = true
+            }
+        }
         ensureActiveLedgerValid()
-        if isFreshInstall {
+        if needsPersist {
             persist()
         }
     }
@@ -767,10 +778,18 @@ public final class LedgerStore: ObservableObject {
     public func calibrateAccountBalance(
         accountId: Int64,
         targetBalanceMicros: Int64,
-        note: String = "余额校准"
-    ) throws -> TransactionDto {
-        guard let acc = account(byId: accountId) else {
+        note: String = "余额校准",
+        createRecord: Bool = true
+    ) throws -> TransactionDto? {
+        guard let idx = accounts.firstIndex(where: { $0.id == accountId }) else {
             throw LedgerStoreError.accountNotFound(accountId)
+        }
+        let acc = accounts[idx]
+        if !createRecord {
+            accounts[idx].balanceMicros = targetBalanceMicros
+            accounts[idx].updatedAt = currentEpochMillis()
+            persist()
+            return nil
         }
         let delta = targetBalanceMicros - acc.balanceMicros
         let saved = try saveTransactionInternal(
@@ -962,12 +981,15 @@ public final class LedgerStore: ObservableObject {
 
     @discardableResult
     public func ensurePresetCatalogSeeded() -> (addedCategories: Int, addedTags: Int) {
-        let addedCats = DefaultSeedData.mergeMissingPresetCategories(into: &categories)
-        let addedTags = DefaultSeedData.mergeMissingPresetTags(into: &tags)
-        if addedCats > 0 || addedTags > 0 {
+        let res = DefaultSeedData.syncPresetCatalog(
+            categories: &categories,
+            tags: &tags,
+            transactions: &transactions
+        )
+        if res.changed {
             persist()
         }
-        return (addedCats, addedTags)
+        return (res.addedCategories, res.addedTags)
     }
 
     @discardableResult

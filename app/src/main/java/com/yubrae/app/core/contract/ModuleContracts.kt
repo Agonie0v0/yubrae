@@ -178,7 +178,12 @@ interface LedgerService {
     suspend fun saveAccount(account: AccountEntity): Long
     suspend fun archiveAccount(accountId: Long, archived: Boolean)
     suspend fun deleteAccount(accountId: Long, migrateToAccountId: Long? = null): Result<Unit>
-    suspend fun calibrateAccountBalance(accountId: Long, targetBalanceMicros: Long, note: String = "余额校准"): Result<TransactionEntity>
+    suspend fun calibrateAccountBalance(
+        accountId: Long,
+        targetBalanceMicros: Long,
+        note: String = "余额校准",
+        createRecord: Boolean = true
+    ): Result<TransactionEntity?>
 
     suspend fun saveCategory(category: CategoryEntity): Long
     suspend fun deleteCategory(categoryId: Long)

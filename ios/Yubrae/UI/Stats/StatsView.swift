@@ -35,6 +35,7 @@ public struct StatsView: View {
     @State private var showAllLedgers: Bool = false
     @State private var highlightedCategoryId: String?
     @State private var showAddBudgetSheet = false
+    @State private var activePeriodPicker: StatsGranularity?
 
     public init(store: LedgerStore) {
         self.store = store
@@ -60,16 +61,10 @@ public struct StatsView: View {
         let cal = Calendar.current
         switch granularity {
         case .weekly:
-            var mondayCal = Calendar(identifier: .gregorian)
-            mondayCal.firstWeekday = 2
-            let startOfDay = mondayCal.startOfDay(for: anchorDate)
-            let weekday = mondayCal.component(.weekday, from: startOfDay)
-            let daysFromMonday = (weekday + 5) % 7
-            let monday = mondayCal.date(byAdding: .day, value: -daysFromMonday, to: startOfDay) ?? startOfDay
-            let nextMonday = mondayCal.date(byAdding: .day, value: 7, to: monday) ?? monday
+            let bounds = YubraePeriodHelper.weekBounds(for: anchorDate)
             return (
-                Int64((monday.timeIntervalSince1970 * 1000.0).rounded()),
-                Int64((nextMonday.timeIntervalSince1970 * 1000.0).rounded()) - 1
+                Int64((bounds.start.timeIntervalSince1970 * 1000.0).rounded()),
+                Int64((bounds.end.timeIntervalSince1970 * 1000.0).rounded())
             )
         case .monthly:
             let comps = cal.dateComponents([.year, .month], from: anchorDate)
@@ -227,6 +222,41 @@ public struct StatsView: View {
                 QuickBudgetCreateSheet(store: store)
                     .yubraeSheetStyle(palette: palette)
             }
+            .sheet(item: $activePeriodPicker) { pickerKind in
+                let comps = Calendar.current.dateComponents([.year, .month], from: anchorDate)
+                let currentYear = comps.year ?? 2026
+                let currentMonth = comps.month ?? 1
+                switch pickerKind {
+                case .weekly:
+                    YubraeWeekPickerSheet(initialDate: anchorDate, palette: palette) { picked in
+                        highlightedCategoryId = nil
+                        anchorDate = picked
+                    }
+                    .yubraeSheetStyle(palette: palette)
+                case .monthly:
+                    YubraeYearMonthPickerSheet(
+                        initialYear: currentYear,
+                        initialMonth: currentMonth,
+                        palette: palette
+                    ) { year, month in
+                        highlightedCategoryId = nil
+                        if let nextDate = Calendar.current.date(from: DateComponents(year: year, month: month, day: 15, hour: 12)) {
+                            anchorDate = nextDate
+                        }
+                    }
+                    .yubraeSheetStyle(palette: palette)
+                case .yearly:
+                    YubraeYearPickerSheet(initialYear: currentYear, palette: palette) { pickedYear in
+                        highlightedCategoryId = nil
+                        if let nextDate = Calendar.current.date(from: DateComponents(year: pickedYear, month: 1, day: 15, hour: 12)) {
+                            anchorDate = nextDate
+                        }
+                    }
+                    .yubraeSheetStyle(palette: palette)
+                case .custom:
+                    EmptyView()
+                }
+            }
         }
     }
 
@@ -266,11 +296,25 @@ public struct StatsView: View {
                                 .foregroundColor(palette.primary)
                         }
                         Spacer(minLength: 8)
-                        Text(periodTitle)
-                            .font(.subheadline.weight(.bold))
+                        Button {
+                            activePeriodPicker = granularity
+                        } label: {
+                            HStack(spacing: 4) {
+                                Text(periodTitle)
+                                    .font(.subheadline.weight(.bold))
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.85)
+                                Image(systemName: "chevron.down")
+                                    .font(.caption2.weight(.bold))
+                            }
                             .foregroundColor(palette.textPrimary)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.85)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(Capsule().fill(palette.surfaceSecondary))
+                            .overlay(Capsule().strokeBorder(palette.outline, lineWidth: 0.7))
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel("选择统计周期")
                         Spacer(minLength: 8)
                         Button { shiftAnchor(by: 1) } label: {
                             Image(systemName: "chevron.right.circle.fill")
@@ -308,7 +352,7 @@ public struct StatsView: View {
                     .font(.subheadline.weight(.bold).monospacedDigit())
                     .foregroundColor(accent)
                     .lineLimit(1)
-                    .minimumScaleFactor(0.65)
+                    .minimumScaleFactor(0.45)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
         }

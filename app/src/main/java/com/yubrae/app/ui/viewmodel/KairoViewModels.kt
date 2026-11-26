@@ -1028,12 +1028,18 @@ class KairoMainViewModel(
         }
     }
 
-    fun calibrateAccountBalance(accountId: Long, targetBalanceMicros: Long, note: String, onDone: () -> Unit = {}) {
+    fun calibrateAccountBalance(
+        accountId: Long,
+        targetBalanceMicros: Long,
+        note: String,
+        createRecord: Boolean = true,
+        onDone: () -> Unit = {}
+    ) {
         viewModelScope.launch {
             withContext(Dispatchers.IO) {
-                ledgerService.calibrateAccountBalance(accountId, targetBalanceMicros, note)
+                ledgerService.calibrateAccountBalance(accountId, targetBalanceMicros, note, createRecord)
             }.onSuccess {
-                showMessage("余额已校准")
+                showMessage(if (createRecord) "余额已校准并生成记录" else "账户余额已直接更新")
                 onDone()
             }.onFailure {
                 showMessage("余额校准失败：${it.message}")
@@ -1075,6 +1081,12 @@ class KairoMainViewModel(
             }
             else -> shiftStatsMonth(delta.toLong())
         }
+    }
+
+    fun setStatsAnchorDate(date: LocalDate) {
+        val zone = ZoneId.systemDefault()
+        _statsAnchorMillis.value = date.atTime(12, 0).atZone(zone).toInstant().toEpochMilli()
+        _statsMonth.value = YearMonth.from(date)
     }
 
     fun setStatsCustomRange(startMillis: Long, endMillis: Long) {

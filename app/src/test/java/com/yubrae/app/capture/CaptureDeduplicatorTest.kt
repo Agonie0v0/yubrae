@@ -348,7 +348,7 @@ class CaptureDeduplicatorTest {
         val initialTx = transactionDao.getById(wechatResult.transactionId!!)!!
         assertEquals("拼多多平台商户", initialTx.merchant)
         assertEquals("日用购物", categoryDao.getById(initialTx.categoryId!!)!!.name)
-        assertEquals(listOf("拼多多", "网购"), TagTextCodec.parse(initialTx.tags))
+        assertEquals(listOf("拼多多"), TagTextCodec.parse(initialTx.tags))
 
         // 补齐完整二级分类库（含 家居日用 / 网购百货 等），模拟 8 分钟后打开拼多多订单详情页
         DefaultSeedData.ensurePresetCategories(categoryDao)
@@ -389,7 +389,7 @@ class CaptureDeduplicatorTest {
         assertEquals("家居日用", categoryDao.getById(enrichedTx.categoryId!!)!!.name)
         assertTrue("Expected note to retain product details, got: ${enrichedTx.note}", enrichedTx.note.contains("纯棉四件套"))
         assertTrue("Expected note to retain order no, got: ${enrichedTx.note}", enrichedTx.note.contains("241123-123456789012345"))
-        assertEquals(listOf("拼多多", "网购"), TagTextCodec.parse(enrichedTx.tags))
+        assertEquals(listOf("拼多多"), TagTextCodec.parse(enrichedTx.tags))
 
         // 超过 10 分钟窗口（+12 分钟）的另一笔同金额拼多多订单详情不应误融合到已有交易
         val outsideOrderSnapshot = orderDetailSnapshot.copy(

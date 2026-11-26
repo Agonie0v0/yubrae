@@ -32,245 +32,195 @@ import java.util.Locale
 
 /**
  * 原创多色扁平卡通矢量图标库：
- * - 覆盖 DefaultSeedData 全部一/二级分类与核心账务语义的多色扁平卡通绘图；
- * - 扩展图标使用柔彩贴纸双色合成方案，确保全量 179 枚分类图标与钱包账户图标风格统一。
+ * - 115 个内置一/二级分类与 21 个预置标签均配备独立、零撞图的多色扁平卡通绘图；
+ * - 全量 180+ 分类与标签拓展键均具备高精卡通绘或柔彩贴纸风格，与账户图标体系统一。
  */
 object CartoonCategoryIcons {
 
-    private val bespokeCategoryKeys: Set<String> = setOf(
-        // 餐饮美食与饮品零食
-        "restaurant", "lunch_dining", "dinner_dining", "rice_bowl", "brunch_dining",
-        "delivery_dining", "fastfood", "takeout_dining", "bento",
-        "local_cafe", "coffee", "free_breakfast", "emoji_food_beverage", "breakfast_dining",
-        "bakery_dining", "cake", "cookie", "icecream",
-        "local_grocery_store", "shopping_basket",
-        "kitchen", "soup_kitchen", "ramen_dining",
-        "local_bar", "wine_bar", "sports_bar", "liquor", "tapas", "local_pizza", "egg_alt",
-        // 出行与交通
-        "directions_car", "electric_car", "local_car_wash",
-        "subway", "directions_bus", "tram",
-        "local_taxi", "pedal_bike", "two_wheeler", "electric_scooter",
-        "train", "directions_boat",
-        "local_gas_station", "ev_station", "local_parking", "toll",
-        "build", "handyman",
-        // 购物百货与快递
-        "shopping_bag", "local_mall", "shopping_cart", "add_shopping_cart",
-        "store", "storefront", "local_convenience_store",
-        "local_shipping", "inventory_2", "local_post_office",
-        // 服饰美妆与奢侈品
-        "checkroom", "dry_cleaning", "iron", "style",
-        "face_retouching_natural", "auto_fix_high", "spa", "filter_vintage",
-        "content_cut", "brush", "diamond", "watch",
-        // 居家生活与水电网
-        "home", "cottage", "chair", "bed", "weekend",
-        "bolt", "lightbulb", "water_drop", "bathtub", "ac_unit",
-        "propane_tank", "local_fire_department", "outdoor_grill",
-        "wifi", "phone_android", "smartphone", "sim_card", "router",
-        "cleaning_services", "local_laundry_service", "yard", "local_florist",
-        // 数码娱乐与订阅
-        "devices", "laptop_mac", "desktop_windows", "tablet_mac", "keyboard", "print",
-        "headphones", "speaker", "tv",
-        "subscriptions", "cloud_done", "smart_toy",
-        "music_note", "mic", "sports_esports", "movie", "theater_comedy", "nightlife",
-        "celebration", "confirmation_number",
-        "fitness_center", "sports_soccer", "sports_basketball", "sports_tennis", "pool",
-        "forest", "park", "hiking",
-        // 医疗健康
-        "medical_services", "local_hospital", "medication", "local_pharmacy",
-        "vaccines", "health_and_safety", "monitor_heart", "healing", "bloodtype",
-        // 差旅住宿
-        "flight", "airplane_ticket", "hotel", "luggage", "backpack", "beach_access", "explore", "map",
-        // 教育文化
-        "school", "book", "menu_book", "edit_note", "palette", "science", "translate",
-        // 人情社交与宠物育儿
-        "favorite", "volunteer_activism", "card_giftcard", "redeem",
-        "handshake", "groups", "elderly",
-        "pets", "child_care", "stroller", "toys",
-        // 金融收入报销与其他
-        "currency_exchange", "percent", "calculate", "request_quote",
-        "trending_up", "show_chart", "candlestick_chart", "bar_chart", "multiline_chart", "pie_chart",
-        "trending_down",
-        "more_horiz", "category", "label",
-        "work", "business_center", "payments", "local_atm",
-        "savings", "attach_money", "monetization_on", "euro", "currency_pound", "currency_yen", "currency_bitcoin",
-        "replay", "receipt_long", "sell", "local_offer", "loyalty", "emoji_events", "star",
-        "account_balance", "assured_workload", "account_balance_wallet", "wallet",
-        "credit_card", "credit_score", "add_card"
+    private class RegistryBuilder {
+        val entries = LinkedHashMap<String, CartoonVisualEntry>()
+
+        fun reg(variantId: String, vararg keys: String, drawer: DrawScope.(Path) -> Unit) {
+            val entry = CartoonVisualEntry(variantId = variantId, drawer = drawer)
+            keys.forEach { rawKey ->
+                entries[rawKey.trim().lowercase(Locale.ROOT)] = entry
+            }
+        }
+    }
+
+    private data class CartoonVisualEntry(
+        val variantId: String,
+        val drawer: DrawScope.(Path) -> Unit
     )
 
+    private val cartoonRegistry: Map<String, CartoonVisualEntry> = RegistryBuilder().apply {
+        // 1. 餐饮美食 (9 个内置全独立 + 扩展)
+        reg("dining_plate", "restaurant", "set_meal") { drawDiningPlate(it) }
+        reg("ramen_bowl", "ramen_dining", "lunch_dining", "dinner_dining", "rice_bowl", "brunch_dining") { drawRamenBowl(it) }
+        reg("takeout_box", "delivery_dining", "takeout_dining", "bento") { drawTakeoutBox(it) }
+        reg("fastfood_burger", "fastfood") { drawFastfoodBurger(it) }
+        reg("coffee_cup", "local_cafe", "coffee", "free_breakfast", "breakfast_dining") { drawCoffeeCup(it) }
+        reg("tea_pot", "emoji_food_beverage") { drawTeaPot(it) }
+        reg("cupcake", "bakery_dining", "cake", "cookie", "icecream") { drawCupcake(it) }
+        reg("fresh_apple", "local_grocery_store") { drawFreshApple(it) }
+        reg("cooking_pot", "kitchen", "soup_kitchen") { drawCookingPot() }
+        reg("cocktail_drink", "local_bar", "wine_bar", "sports_bar", "liquor", "tapas", "local_pizza", "egg_alt") { drawCocktailDrink(it) }
+
+        // 2. 出行与交通 (8 个内置全独立 + 扩展)
+        reg("cartoon_car", "directions_car", "electric_car") { drawCartoonCar() }
+        reg("car_repair", "local_car_wash") { drawCarRepair(it) }
+        reg("metro_train", "subway", "tram") { drawMetroTrain() }
+        reg("allowance_bus", "directions_bus") { drawAllowanceBus() }
+        reg("yellow_taxi", "local_taxi") { drawYellowTaxi() }
+        reg("bicycle", "pedal_bike", "two_wheeler", "electric_scooter") { drawBicycle() }
+        reg("high_speed_train", "train", "directions_boat") { drawHighSpeedTrain(it) }
+        reg("gas_pump", "local_gas_station", "ev_station") { drawGasPump(it) }
+        reg("parking_sign", "local_parking", "toll") { drawParkingSign(it) }
+        reg("tools", "handyman", "build") { drawTools(it) }
+
+        // 3. 购物百货与快递 (5 个内置全独立 + 扩展)
+        reg("shopping_bag", "shopping_bag") { drawShoppingBag() }
+        reg("online_mall", "local_mall") { drawOnlineMall() }
+        reg("shopping_cart", "shopping_cart") { drawShoppingCart(it) }
+        reg("stockup_cart", "add_shopping_cart") { drawStockupCart(it) }
+        reg("home_goods", "weekend") { drawHomeGoods() }
+        reg("shop_front", "storefront", "store", "local_convenience_store") { drawShopFront() }
+        reg("parcel_box", "local_shipping", "inventory_2") { drawParcelBox(it) }
+        reg("refund_parcel", "local_post_office") { drawRefundParcel(it) }
+
+        // 4. 服饰美妆与配饰 (5 个内置全独立 + 扩展)
+        reg("fashion_dress", "style") { drawFashionDress(it) }
+        reg("tshirt", "checkroom", "dry_cleaning", "iron") { drawTShirt(it) }
+        reg("lipstick", "face_retouching_natural", "auto_fix_high", "spa", "filter_vintage") { drawLipstick(it) }
+        reg("scissors", "content_cut", "brush") { drawScissors(it) }
+        reg("diamond", "diamond", "watch") { drawDiamond(it) }
+
+        // 5. 居家水电网与通信 (6 个内置全独立 + 扩展)
+        reg("cozy_house", "home", "chair", "bed") { drawCozyHouse(it) }
+        reg("house_key", "cottage") { drawHouseKey(it) }
+        reg("family_house", "family_restroom") { drawFamilyHouse(it) }
+        reg("electric_bolt", "bolt", "lightbulb") { drawElectricBolt(it) }
+        reg("water_drop", "water_drop", "bathtub", "ac_unit") { drawWaterDrop(it) }
+        reg("gas_flame", "propane_tank", "local_fire_department", "outdoor_grill") { drawGasFlame(it) }
+        reg("mobile_card", "wifi", "phone_android", "smartphone", "sim_card", "router") { drawMobileCard() }
+        reg("cleaning_sparkle", "cleaning_services", "local_laundry_service", "yard", "local_florist") { drawCleaningSparkle(it) }
+
+        // 6. 数码家电、订阅与娱乐 (14 个内置全独立 + 扩展)
+        reg("device_hub", "devices") { drawDeviceHub() }
+        reg("laptop", "laptop_mac", "tablet_mac", "keyboard", "print") { drawLaptop() }
+        reg("code_monitor", "desktop_windows") { drawCodeMonitor() }
+        reg("headphones", "headphones", "speaker") { drawHeadphones() }
+        reg("retro_tv", "tv") { drawRetroTv() }
+        reg("sub_cycle", "subscriptions") { drawSubCycle(it) }
+        reg("cloud_sub", "cloud_done") { drawCloudSub(it) }
+        reg("ai_bot", "smart_toy") { drawAiBot() }
+        reg("music_note", "music_note") { drawMusicNote() }
+        reg("creator_mic", "mic") { drawCreatorMic() }
+        reg("gamepad", "sports_esports") { drawGamepad() }
+        reg("leisure_mask", "theater_comedy", "nightlife") { drawLeisureMask(it) }
+        reg("movie_popcorn", "movie") { drawMoviePopcorn(it) }
+        reg("party_popper", "celebration") { drawPartyPopper(it) }
+        reg("scenic_ticket", "confirmation_number") { drawScenicTicket(it) }
+        reg("dumbbell", "fitness_center", "sports_soccer", "sports_basketball", "sports_tennis", "pool") { drawDumbbell() }
+        reg("yoga_lotus", "self_improvement") { drawYogaLotus(it) }
+        reg("pine_tree", "forest", "park", "hiking") { drawPineTree(it) }
+        reg("camera_snap", "camera_alt") { drawCameraSnap() }
+        reg("qr_scanner", "qr_code_scanner") { drawQrScanner() }
+
+        // 7. 医疗健康 (5 个内置全独立 + 扩展)
+        reg("medical_kit", "medical_services") { drawMedicalKit() }
+        reg("hospital", "local_hospital") { drawHospital(it) }
+        reg("medicine_pill", "medication", "local_pharmacy", "vaccines", "bloodtype") { drawMedicinePill() }
+        reg("heart_monitor", "monitor_heart") { drawHeartMonitor(it) }
+        reg("health_shield", "health_and_safety") { drawHealthShield(it) }
+        reg("pet_clinic", "healing") { drawPetClinic(it) }
+        reg("mind_brain", "psychology") { drawMindHeart(it) }
+        reg("eye_care", "visibility") { drawEyeCare() }
+
+        // 8. 差旅住宿 (5 个内置全独立 + 扩展)
+        reg("travel_compass", "explore", "map") { drawTravelCompass(it) }
+        reg("airplane", "flight", "airplane_ticket") { drawAirplane(it) }
+        reg("hotel_building", "hotel") { drawHotelBuilding() }
+        reg("souvenir_pack", "backpack") { drawSouvenirPack(it) }
+        reg("luggage", "luggage", "beach_access") { drawLuggage() }
+        reg("globe_world", "public") { drawGlobeWorld() }
+
+        // 9. 学习成长 (5 个内置全独立)
+        reg("grad_cap", "school") { drawGradCap(it) }
+        reg("book_stack", "book", "menu_book") { drawBookStack() }
+        reg("course_board", "science") { drawCourseBoard(it) }
+        reg("exam_banner", "edit_note") { drawExamBanner(it) }
+        reg("stationery", "palette") { drawStationery(it) }
+
+        // 10. 人情社交、宠物与育儿 (13 个内置全独立 + 标签)
+        reg("cute_heart", "favorite") { drawCuteHeart(it, Color(0xFFF43F5E), Color(0xFFFFA4B6)) }
+        reg("charity_box", "volunteer_activism") { drawCareHeart(it) }
+        reg("elderly_care", "elderly") { drawElderlyCare(it) }
+        reg("red_envelope", "card_giftcard") { drawRedEnvelope() }
+        reg("social_envelope", "card_membership") { drawSocialEnvelope(it) }
+        reg("green_red_packet", "chat") { drawGreenRedPacket(it) }
+        reg("gift_box", "redeem") { drawGiftBox(it) }
+        reg("social_group", "groups") { drawSocialGroup() }
+        reg("social_care", "handshake") { drawSocialCare(it) }
+        reg("person_avatar", "person") { drawPersonAvatar() }
+        reg("pet_paw", "pets") { drawPetPaw() }
+        reg("pet_food_bowl", "set_meal") { drawPetFoodBowl(it) }
+        reg("pet_basket", "shopping_basket") { drawPetBasket(it) }
+        reg("baby_stroller", "stroller") { drawBabyStroller() }
+        reg("baby_bottle", "child_care") { drawBabyBottle() }
+        reg("kids_pinwheel", "toys") { drawKidsPinwheel(it) }
+        reg("early_blocks", "translate") { drawEarlyBlocks() }
+
+        // 11. 金融保险、收入与报销 (全部内置全独立 + 标签)
+        reg("finance_vault", "assured_workload") { drawFinanceVault() }
+        reg("commercial_shield", "verified_user") { drawCommercialShield(it) }
+        reg("verified_seal", "verified") { drawVerifiedSeal(it) }
+        reg("exchange_coins", "currency_exchange") { drawExchangeCoins() }
+        reg("percent_coin", "percent") { drawPercentCoin() }
+        reg("tax_calculator", "calculate") { drawTaxCalculator() }
+        reg("insurance_claim", "request_quote") { drawInsuranceClaim() }
+        reg("trend_up", "trending_up", "show_chart", "multiline_chart") { drawTrendUp(it) }
+        reg("candlestick", "candlestick_chart") { drawCandlestick() }
+        reg("performance_bars", "bar_chart") { drawPerformanceBars() }
+        reg("dividend_pie", "pie_chart") { drawDividendPie() }
+        reg("trend_down", "trending_down") { drawTrendDown(it) }
+        reg("four_grid", "more_horiz", "category", "label") { drawFourGrid() }
+        reg("lost_alert", "priority_high") { drawLostAlert(it) }
+        reg("briefcase", "work") { drawBriefcase() }
+        reg("side_hustle_bag", "business_center") { drawSideHustleBag() }
+        reg("overtime_clock", "schedule") { drawOvertimeClock() }
+        reg("gold_trophy", "emoji_events") { drawGoldTrophy(it) }
+        reg("bonus_star", "star") { drawBonusStar(it) }
+        reg("festival_gift", "cake") { drawFestivalGift() }
+        reg("cash_notes", "payments", "local_atm") { drawCashNotes() }
+        reg("piggy_bank", "savings") { drawPiggyBank() }
+        reg("fx_coin", "monetization_on") { drawFxCoin() }
+        reg("money_pouch", "attach_money", "euro", "currency_pound", "currency_yen", "currency_bitcoin") { drawMoneyPouch(it) }
+        reg("refund_loop", "replay") { drawRefundLoop(it) }
+        reg("receipt_note", "receipt_long") { drawReceiptNote(it) }
+        reg("price_tag", "sell") { drawPriceTag(it) }
+        reg("loyalty_card", "loyalty") { drawLoyaltyCard(it) }
+        reg("coupon_ticket", "local_offer") { drawCouponTicket(it) }
+        reg("bank_building", "account_balance") { drawBankBuilding(it) }
+        reg("housing_fund_card", "badge") { drawHousingFundCard() }
+        reg("cash_register", "point_of_sale") { drawCashRegister() }
+        reg("rent_apartment", "corporate_fare") { drawRentApartment() }
+        reg("leather_wallet", "account_balance_wallet", "wallet") { drawLeatherWallet() }
+        reg("gold_card", "credit_card", "credit_score", "add_card") { drawGoldCard() }
+    }.entries
+
     fun hasBespokeIcon(iconKey: String): Boolean =
-        iconKey.trim().lowercase(Locale.ROOT) in bespokeCategoryKeys
+        iconKey.trim().lowercase(Locale.ROOT) in cartoonRegistry
+
+    internal fun resolveVisualVariantId(iconKey: String): String =
+        cartoonRegistry[iconKey.trim().lowercase(Locale.ROOT)]?.variantId ?: "sticker"
 
     fun drawCartoonCategory(scope: DrawScope, iconKey: String, scratchPath: Path) {
-        val key = iconKey.trim().lowercase(Locale.ROOT)
+        val entry = cartoonRegistry[iconKey.trim().lowercase(Locale.ROOT)] ?: return
         val unit = scope.size.minDimension / 24f
         if (unit <= 0f) return
         scope.scale(scaleX = unit, scaleY = unit, pivot = Offset.Zero) {
-            when (key) {
-                // 1. 餐饮主食
-                "restaurant", "lunch_dining", "dinner_dining", "rice_bowl", "ramen_dining", "brunch_dining" ->
-                    drawRamenBowl(scratchPath)
-                "delivery_dining", "fastfood", "takeout_dining", "bento" ->
-                    drawTakeoutBox(scratchPath)
-                "local_cafe", "coffee", "free_breakfast", "emoji_food_beverage", "breakfast_dining" ->
-                    drawCoffeeCup(scratchPath)
-                "bakery_dining", "cake", "cookie", "icecream" ->
-                    drawCupcake(scratchPath)
-                "local_grocery_store", "shopping_basket" ->
-                    drawFreshApple(scratchPath)
-                "kitchen", "soup_kitchen" ->
-                    drawCookingPot()
-                "local_bar", "wine_bar", "sports_bar", "liquor", "tapas", "local_pizza", "egg_alt" ->
-                    drawCocktailDrink(scratchPath)
-
-                // 2. 出行与交通
-                "directions_car", "electric_car", "local_car_wash" ->
-                    drawCartoonCar()
-                "subway", "directions_bus", "tram" ->
-                    drawMetroTrain()
-                "local_taxi" ->
-                    drawYellowTaxi()
-                "pedal_bike", "two_wheeler", "electric_scooter" ->
-                    drawBicycle()
-                "train", "directions_boat" ->
-                    drawHighSpeedTrain(scratchPath)
-                "local_gas_station", "ev_station" ->
-                    drawGasPump(scratchPath)
-                "local_parking", "toll" ->
-                    drawParkingSign(scratchPath)
-                "build", "handyman" ->
-                    drawTools(scratchPath)
-
-                // 3. 购物百货与快递
-                "shopping_bag", "local_mall" ->
-                    drawShoppingBag()
-                "shopping_cart", "add_shopping_cart" ->
-                    drawShoppingCart(scratchPath)
-                "store", "storefront", "local_convenience_store" ->
-                    drawShopFront()
-                "local_shipping", "inventory_2", "local_post_office" ->
-                    drawParcelBox(scratchPath)
-
-                // 4. 服饰美妆
-                "checkroom", "dry_cleaning", "iron", "style" ->
-                    drawTShirt(scratchPath)
-                "face_retouching_natural", "auto_fix_high", "spa", "filter_vintage" ->
-                    drawLipstick(scratchPath)
-                "content_cut", "brush" ->
-                    drawScissors(scratchPath)
-                "diamond", "watch" ->
-                    drawDiamond(scratchPath)
-
-                // 5. 居家水电网
-                "home", "cottage", "chair", "bed", "weekend" ->
-                    drawCozyHouse(scratchPath)
-                "bolt", "lightbulb" ->
-                    drawElectricBolt(scratchPath)
-                "water_drop", "bathtub", "ac_unit" ->
-                    drawWaterDrop(scratchPath)
-                "propane_tank", "local_fire_department", "outdoor_grill" ->
-                    drawGasFlame(scratchPath)
-                "wifi", "phone_android", "smartphone", "sim_card", "router" ->
-                    drawMobileCard()
-                "cleaning_services", "local_laundry_service", "yard", "local_florist" ->
-                    drawCleaningSparkle(scratchPath)
-
-                // 6. 数码与娱乐
-                "devices", "laptop_mac", "desktop_windows", "tablet_mac", "keyboard", "print" ->
-                    drawLaptop()
-                "headphones", "speaker" ->
-                    drawHeadphones()
-                "tv" ->
-                    drawRetroTv()
-                "subscriptions", "cloud_done" ->
-                    drawCloudSub(scratchPath)
-                "smart_toy" ->
-                    drawAiBot()
-                "music_note", "mic" ->
-                    drawMusicNote()
-                "sports_esports" ->
-                    drawGamepad()
-                "movie", "theater_comedy", "nightlife" ->
-                    drawMoviePopcorn(scratchPath)
-                "celebration", "confirmation_number" ->
-                    drawPartyPopper(scratchPath)
-                "fitness_center", "sports_soccer", "sports_basketball", "sports_tennis", "pool" ->
-                    drawDumbbell()
-                "forest", "park", "hiking" ->
-                    drawPineTree(scratchPath)
-
-                // 7. 医疗健康
-                "medical_services", "healing" ->
-                    drawMedicalKit()
-                "local_hospital" ->
-                    drawHospital(scratchPath)
-                "medication", "local_pharmacy", "vaccines", "bloodtype" ->
-                    drawMedicinePill()
-                "health_and_safety", "monitor_heart" ->
-                    drawHealthShield(scratchPath)
-
-                // 8. 差旅住宿
-                "flight", "airplane_ticket" ->
-                    drawAirplane(scratchPath)
-                "hotel" ->
-                    drawHotelBuilding()
-                "luggage", "backpack", "beach_access", "explore", "map" ->
-                    drawLuggage()
-
-                // 9. 教育文化
-                "school", "science", "translate" ->
-                    drawGradCap(scratchPath)
-                "book", "menu_book", "palette" ->
-                    drawBookStack()
-                "edit_note" ->
-                    drawExamBanner(scratchPath)
-
-                // 10. 人情社交、宠物育儿
-                "favorite" ->
-                    drawCuteHeart(scratchPath, Color(0xFFF43F5E), Color(0xFFFFA4B6))
-                "volunteer_activism" ->
-                    drawCareHeart(scratchPath)
-                "card_giftcard" ->
-                    drawRedEnvelope()
-                "redeem" ->
-                    drawGiftBox(scratchPath)
-                "handshake", "groups", "elderly" ->
-                    drawSocialCare(scratchPath)
-                "pets" ->
-                    drawPetPaw()
-                "child_care", "stroller", "toys" ->
-                    drawBabyBottle()
-
-                // 11. 金融收入报销与杂项
-                "currency_exchange" ->
-                    drawExchangeCoins()
-                "percent", "calculate", "request_quote" ->
-                    drawPercentCoin()
-                "trending_up", "show_chart", "candlestick_chart", "bar_chart", "multiline_chart", "pie_chart" ->
-                    drawTrendUp(scratchPath)
-                "trending_down" ->
-                    drawTrendDown(scratchPath)
-                "more_horiz", "category", "label" ->
-                    drawFourGrid()
-                "work", "business_center" ->
-                    drawBriefcase()
-                "payments", "local_atm" ->
-                    drawCashNotes()
-                "savings", "attach_money", "monetization_on", "euro", "currency_pound", "currency_yen", "currency_bitcoin" ->
-                    drawMoneyPouch(scratchPath)
-                "replay" ->
-                    drawRefundLoop(scratchPath)
-                "receipt_long" ->
-                    drawReceiptNote(scratchPath)
-                "sell", "local_offer", "loyalty", "emoji_events", "star" ->
-                    drawPriceTag(scratchPath)
-                "account_balance", "assured_workload" ->
-                    drawBankBuilding(scratchPath)
-                "account_balance_wallet", "wallet" ->
-                    drawLeatherWallet()
-                "credit_card", "credit_score", "add_card" ->
-                    drawGoldCard()
-            }
+            entry.drawer(this, scratchPath)
         }
     }
 }
@@ -1426,4 +1376,641 @@ private fun DrawScope.drawGoldCard() {
     drawRoundRect(Color(0xFFF59E0B), topLeft = Offset(3f, 5.2f), size = Size(18f, 13.4f), cornerRadius = CornerRadius(2.8f, 2.8f))
     drawRect(Color(0xFF92400E), topLeft = Offset(3f, 8.2f), size = Size(18f, 2.6f))
     drawRoundRect(Color(0xFFFEF08A), topLeft = Offset(5.2f, 12.8f), size = Size(4.2f, 3f), cornerRadius = CornerRadius(0.8f, 0.8f))
+}
+
+private fun DrawScope.drawDiningPlate(p: Path) {
+    drawCircle(color = Color(0xFFFED7AA), radius = 7.4f, center = Offset(12f, 12.4f))
+    drawCircle(color = Color(0xFFFFF7ED), radius = 5.2f, center = Offset(12f, 12.4f))
+    drawCircle(color = Color(0xFFFB923C), radius = 2.4f, center = Offset(12f, 12.4f))
+    // 左叉
+    drawLine(Color(0xFFEA580C), Offset(3.4f, 6.2f), Offset(3.4f, 18.6f), strokeWidth = 1.4f, cap = StrokeCap.Round)
+    drawLine(Color(0xFFEA580C), Offset(2.3f, 6.2f), Offset(2.3f, 9.6f), strokeWidth = 1.1f, cap = StrokeCap.Round)
+    drawLine(Color(0xFFEA580C), Offset(4.5f, 6.2f), Offset(4.5f, 9.6f), strokeWidth = 1.1f, cap = StrokeCap.Round)
+    // 右刀
+    drawLine(Color(0xFFEA580C), Offset(20.6f, 6.2f), Offset(20.6f, 18.6f), strokeWidth = 1.6f, cap = StrokeCap.Round)
+    p.reset()
+}
+
+private fun DrawScope.drawFastfoodBurger(p: Path) {
+    drawArc(
+        color = Color(0xFFF59E0B),
+        startAngle = 180f,
+        sweepAngle = 180f,
+        useCenter = true,
+        topLeft = Offset(4.5f, 4.5f),
+        size = Size(15f, 10f)
+    )
+    drawRoundRect(Color(0xFF22C55E), topLeft = Offset(4f, 9.8f), size = Size(16f, 2f), cornerRadius = CornerRadius(1f, 1f))
+    drawRoundRect(Color(0xFF92400E), topLeft = Offset(4.2f, 12f), size = Size(15.6f, 2.8f), cornerRadius = CornerRadius(1.2f, 1.2f))
+    drawRoundRect(Color(0xFFFBBF24), topLeft = Offset(4.6f, 15f), size = Size(14.8f, 3.8f), cornerRadius = CornerRadius(1.8f, 1.8f))
+    drawCircle(Color(0xFFFEF3C7), radius = 0.7f, center = Offset(9f, 7.2f))
+    drawCircle(Color(0xFFFEF3C7), radius = 0.7f, center = Offset(14.8f, 7.2f))
+    p.reset()
+}
+
+private fun DrawScope.drawTeaPot(p: Path) {
+    drawLine(Color(0xFF84CC16), Offset(9.5f, 4.5f), Offset(10f, 2.8f), strokeWidth = 1.2f, cap = StrokeCap.Round)
+    drawLine(Color(0xFF84CC16), Offset(14f, 4.5f), Offset(14.5f, 2.8f), strokeWidth = 1.2f, cap = StrokeCap.Round)
+    drawCircle(color = Color(0xFFB45309), radius = 1.4f, center = Offset(11.6f, 6.8f))
+    drawOval(color = Color(0xFF15803D), topLeft = Offset(5.6f, 8.2f), size = Size(12f, 11.4f))
+    drawRoundRect(Color(0xFF22C55E), topLeft = Offset(8f, 7.4f), size = Size(7.2f, 2.2f), cornerRadius = CornerRadius(1f, 1f))
+    drawArc(
+        color = Color(0xFF15803D),
+        startAngle = -85f,
+        sweepAngle = 170f,
+        useCenter = false,
+        topLeft = Offset(15.2f, 10.2f),
+        size = Size(5f, 6f),
+        style = Stroke(width = 1.7f, cap = StrokeCap.Round)
+    )
+    p.reset()
+    p.moveTo(6.2f, 12.6f)
+    p.lineTo(3.2f, 9.6f)
+    drawPath(p, color = Color(0xFF16A34A), style = Stroke(width = 2f, cap = StrokeCap.Round))
+    drawCircle(color = Color(0xFFBBF7D0), radius = 1.4f, center = Offset(11.6f, 13.8f))
+}
+
+private fun DrawScope.drawCarRepair(p: Path) {
+    drawCircle(color = Color(0xFF334155), radius = 7.6f, center = Offset(12f, 12f))
+    drawCircle(color = Color(0xFF38BDF8), radius = 4.6f, center = Offset(12f, 12f))
+    drawCircle(color = Color(0xFFFEF3C7), radius = 2.1f, center = Offset(12f, 12f))
+    drawCircle(color = Color(0xFFF59E0B), radius = 2.4f, center = Offset(17.6f, 6.4f))
+    p.reset()
+}
+
+private fun DrawScope.drawAllowanceBus() {
+    drawRoundRect(Color(0xFF2563EB), topLeft = Offset(4.6f, 4f), size = Size(14.8f, 14.2f), cornerRadius = CornerRadius(3.4f, 3.4f))
+    drawRoundRect(Color(0xFFDBEAFE), topLeft = Offset(6.4f, 6.2f), size = Size(11.2f, 5.2f), cornerRadius = CornerRadius(1.4f, 1.4f))
+    drawRoundRect(Color(0xFFFDE047), topLeft = Offset(6.6f, 13.6f), size = Size(3f, 2f), cornerRadius = CornerRadius(0.8f, 0.8f))
+    drawRoundRect(Color(0xFFFDE047), topLeft = Offset(14.4f, 13.6f), size = Size(3f, 2f), cornerRadius = CornerRadius(0.8f, 0.8f))
+    drawRoundRect(Color(0xFF1E293B), topLeft = Offset(6.4f, 18f), size = Size(2.6f, 2.4f), cornerRadius = CornerRadius(0.9f, 0.9f))
+    drawRoundRect(Color(0xFF1E293B), topLeft = Offset(15f, 18f), size = Size(2.6f, 2.4f), cornerRadius = CornerRadius(0.9f, 0.9f))
+}
+
+private fun DrawScope.drawOnlineMall() {
+    drawArc(
+        color = Color(0xFF8B5CF6),
+        startAngle = 180f,
+        sweepAngle = 180f,
+        useCenter = false,
+        topLeft = Offset(8.4f, 3.4f),
+        size = Size(7.2f, 5.6f),
+        style = Stroke(width = 1.8f, cap = StrokeCap.Round)
+    )
+    drawRoundRect(Color(0xFF6366F1), topLeft = Offset(4.4f, 6.8f), size = Size(15.2f, 13.4f), cornerRadius = CornerRadius(3.2f, 3.2f))
+    drawCircle(color = Color(0xFFFDE047), radius = 1.1f, center = Offset(9.2f, 11.4f))
+    drawCircle(color = Color(0xFFFDE047), radius = 1.1f, center = Offset(14.8f, 11.4f))
+    drawArc(
+        color = Color.White,
+        startAngle = 15f,
+        sweepAngle = 150f,
+        useCenter = false,
+        topLeft = Offset(8.6f, 12.6f),
+        size = Size(6.8f, 4.2f),
+        style = Stroke(width = 1.6f, cap = StrokeCap.Round)
+    )
+}
+
+private fun DrawScope.drawStockupCart(p: Path) {
+    drawShoppingCart(p)
+    drawCircle(color = Color(0xFFF59E0B), radius = 3.8f, center = Offset(17.5f, 6.6f))
+    drawLine(Color.White, Offset(15.7f, 6.6f), Offset(19.3f, 6.6f), strokeWidth = 1.5f, cap = StrokeCap.Round)
+    drawLine(Color.White, Offset(17.5f, 4.8f), Offset(17.5f, 8.4f), strokeWidth = 1.5f, cap = StrokeCap.Round)
+}
+
+private fun DrawScope.drawHomeGoods() {
+    drawRoundRect(Color(0xFFEA580C), topLeft = Offset(5.2f, 6.6f), size = Size(13.6f, 7.6f), cornerRadius = CornerRadius(3f, 3f))
+    drawRoundRect(Color(0xFFFB923C), topLeft = Offset(3.4f, 10.6f), size = Size(17.2f, 6.6f), cornerRadius = CornerRadius(2.4f, 2.4f))
+    drawRoundRect(Color(0xFFFED7AA), topLeft = Offset(6.2f, 11.8f), size = Size(11.6f, 2.8f), cornerRadius = CornerRadius(1.2f, 1.2f))
+    drawLine(Color(0xFF92400E), Offset(6f, 17.2f), Offset(6f, 19.8f), strokeWidth = 1.8f, cap = StrokeCap.Round)
+    drawLine(Color(0xFF92400E), Offset(18f, 17.2f), Offset(18f, 19.8f), strokeWidth = 1.8f, cap = StrokeCap.Round)
+}
+
+private fun DrawScope.drawRefundParcel(p: Path) {
+    drawRoundRect(Color(0xFF38BDF8), topLeft = Offset(3.8f, 6.2f), size = Size(16.4f, 12.2f), cornerRadius = CornerRadius(2.6f, 2.6f))
+    p.reset()
+    p.moveTo(4.4f, 7f)
+    p.lineTo(12f, 13f)
+    p.lineTo(19.6f, 7f)
+    drawPath(p, color = Color.White, style = Stroke(width = 1.6f, cap = StrokeCap.Round, join = StrokeJoin.Round))
+    drawCircle(color = Color(0xFFFACC15), radius = 3.2f, center = Offset(17.6f, 16.4f))
+    drawLine(Color(0xFF1E293B), Offset(16.2f, 16.4f), Offset(19f, 16.4f), strokeWidth = 1.4f, cap = StrokeCap.Round)
+}
+
+private fun DrawScope.drawFashionDress(p: Path) {
+    p.reset()
+    p.moveTo(8.5f, 4.4f)
+    p.lineTo(15.5f, 4.4f)
+    p.lineTo(14.5f, 10.2f)
+    p.lineTo(19f, 19.6f)
+    p.lineTo(5f, 19.6f)
+    p.lineTo(9.5f, 10.2f)
+    p.close()
+    drawPath(p, color = Color(0xFFF43F5E))
+    drawRoundRect(Color(0xFFFDE047), topLeft = Offset(9f, 9.6f), size = Size(6f, 1.8f), cornerRadius = CornerRadius(0.9f, 0.9f))
+}
+
+private fun DrawScope.drawHouseKey(p: Path) {
+    drawCircle(color = Color(0xFFF59E0B), radius = 4.6f, center = Offset(8.2f, 9.6f))
+    drawCircle(color = Color(0xFFFEF3C7), radius = 2f, center = Offset(8.2f, 9.6f))
+    drawRoundRect(Color(0xFFF59E0B), topLeft = Offset(11.4f, 11f), size = Size(8.8f, 2.6f), cornerRadius = CornerRadius(1f, 1f))
+    drawRoundRect(Color(0xFFD97706), topLeft = Offset(15.4f, 13.4f), size = Size(2f, 3.6f), cornerRadius = CornerRadius(0.8f, 0.8f))
+    drawRoundRect(Color(0xFFD97706), topLeft = Offset(18.2f, 13.4f), size = Size(2f, 2.8f), cornerRadius = CornerRadius(0.8f, 0.8f))
+    p.reset()
+}
+
+private fun DrawScope.drawFamilyHouse(p: Path) {
+    drawCozyHouse(p)
+    drawCircle(color = Color(0xFFFB7185), radius = 2.6f, center = Offset(18.2f, 6.2f))
+}
+
+private fun DrawScope.drawDeviceHub() {
+    drawRoundRect(Color(0xFF4F46E5), topLeft = Offset(3.4f, 5.2f), size = Size(12.2f, 13.6f), cornerRadius = CornerRadius(2.4f, 2.4f))
+    drawRoundRect(Color(0xFFE0E7FF), topLeft = Offset(4.8f, 6.8f), size = Size(9.4f, 10f), cornerRadius = CornerRadius(1f, 1f))
+    drawRoundRect(Color(0xFF0EA5E9), topLeft = Offset(13.2f, 9.2f), size = Size(7.4f, 10.6f), cornerRadius = CornerRadius(1.8f, 1.8f))
+    drawRoundRect(Color(0xFFE0F2FE), topLeft = Offset(14.3f, 10.6f), size = Size(5.2f, 7.2f), cornerRadius = CornerRadius(0.8f, 0.8f))
+}
+
+private fun DrawScope.drawCodeMonitor() {
+    drawRoundRect(Color(0xFF1E293B), topLeft = Offset(3.6f, 4.4f), size = Size(16.8f, 11.4f), cornerRadius = CornerRadius(2.2f, 2.2f))
+    drawRoundRect(Color(0xFF0EA5E9), topLeft = Offset(5.2f, 6f), size = Size(13.6f, 8.2f), cornerRadius = CornerRadius(1f, 1f))
+    drawLine(Color(0xFFBAE6FD), Offset(7f, 9f), Offset(13.2f, 9f), strokeWidth = 1.4f, cap = StrokeCap.Round)
+    drawLine(Color(0xFFFDE047), Offset(7f, 11.6f), Offset(16f, 11.6f), strokeWidth = 1.4f, cap = StrokeCap.Round)
+    drawRect(Color(0xFF64748B), topLeft = Offset(10.5f, 15.8f), size = Size(3f, 2.6f))
+    drawRoundRect(Color(0xFF475569), topLeft = Offset(7.4f, 18.2f), size = Size(9.2f, 2f), cornerRadius = CornerRadius(1f, 1f))
+}
+
+private fun DrawScope.drawSubCycle(p: Path) {
+    drawCircle(color = Color(0xFF7C3AED), radius = 9.2f, center = Offset(12f, 12f))
+    drawArc(
+        color = Color(0xFFFDE047),
+        startAngle = -45f,
+        sweepAngle = 260f,
+        useCenter = false,
+        topLeft = Offset(5.6f, 5.6f),
+        size = Size(12.8f, 12.8f),
+        style = Stroke(width = 1.8f, cap = StrokeCap.Round)
+    )
+    p.reset()
+    p.moveTo(10.2f, 9f)
+    p.lineTo(15.2f, 12f)
+    p.lineTo(10.2f, 15f)
+    p.close()
+    drawPath(p, color = Color.White)
+}
+
+private fun DrawScope.drawCreatorMic() {
+    drawRoundRect(Color(0xFFF59E0B), topLeft = Offset(8.6f, 3.6f), size = Size(6.8f, 9.8f), cornerRadius = CornerRadius(3.4f, 3.4f))
+    drawLine(Color(0xFFFEF3C7), Offset(10.4f, 7.2f), Offset(13.6f, 7.2f), strokeWidth = 1.3f, cap = StrokeCap.Round)
+    drawArc(
+        color = Color(0xFF475569),
+        startAngle = 0f,
+        sweepAngle = 180f,
+        useCenter = false,
+        topLeft = Offset(6.4f, 7.4f),
+        size = Size(11.2f, 8.2f),
+        style = Stroke(width = 1.7f, cap = StrokeCap.Round)
+    )
+    drawLine(Color(0xFF475569), Offset(12f, 15.6f), Offset(12f, 19.6f), strokeWidth = 1.8f, cap = StrokeCap.Round)
+    drawLine(Color(0xFF475569), Offset(8.6f, 19.8f), Offset(15.4f, 19.8f), strokeWidth = 1.8f, cap = StrokeCap.Round)
+}
+
+private fun DrawScope.drawLeisureMask(p: Path) {
+    p.reset()
+    p.moveTo(4.6f, 5.4f)
+    p.lineTo(19.4f, 5.4f)
+    p.lineTo(18.4f, 14.6f)
+    p.cubicTo(17.8f, 18.4f, 15f, 20.4f, 12f, 20.4f)
+    p.cubicTo(9f, 20.4f, 6.2f, 18.4f, 5.6f, 14.6f)
+    p.close()
+    drawPath(p, color = Color(0xFFEC4899))
+    drawCircle(color = Color.White, radius = 1.3f, center = Offset(9f, 10.6f))
+    drawCircle(color = Color.White, radius = 1.3f, center = Offset(15f, 10.6f))
+    drawArc(
+        color = Color(0xFFFDE047),
+        startAngle = 15f,
+        sweepAngle = 150f,
+        useCenter = false,
+        topLeft = Offset(8.5f, 12.6f),
+        size = Size(7f, 4.2f),
+        style = Stroke(width = 1.6f, cap = StrokeCap.Round)
+    )
+}
+
+private fun DrawScope.drawScenicTicket(p: Path) {
+    drawRoundRect(Color(0xFFF97316), topLeft = Offset(3.4f, 6.2f), size = Size(17.2f, 11.6f), cornerRadius = CornerRadius(2.6f, 2.6f))
+    drawRoundRect(Color(0xFFFFEDD5), topLeft = Offset(7.2f, 8.4f), size = Size(9.6f, 7.2f), cornerRadius = CornerRadius(1.2f, 1.2f))
+    drawCircle(color = Color.White, radius = 1.6f, center = Offset(3.4f, 12f))
+    drawCircle(color = Color.White, radius = 1.6f, center = Offset(20.6f, 12f))
+    p.reset()
+}
+
+private fun DrawScope.drawYogaLotus(p: Path) {
+    drawCircle(color = Color(0xFF14B8A6), radius = 2.6f, center = Offset(12f, 6.2f))
+    p.reset()
+    p.moveTo(12f, 9.6f)
+    p.lineTo(17.6f, 14.2f)
+    p.lineTo(14.8f, 18.6f)
+    p.lineTo(9.2f, 18.6f)
+    p.lineTo(6.4f, 14.2f)
+    p.close()
+    drawPath(p, color = Color(0xFF2DD4BF))
+    drawLine(Color(0xFF0D9488), Offset(5f, 18.6f), Offset(19f, 18.6f), strokeWidth = 2f, cap = StrokeCap.Round)
+}
+
+private fun DrawScope.drawCameraSnap() {
+    drawRoundRect(Color(0xFF64748B), topLeft = Offset(8.4f, 4.4f), size = Size(7.2f, 3.2f), cornerRadius = CornerRadius(1.2f, 1.2f))
+    drawRoundRect(Color(0xFF334155), topLeft = Offset(3.6f, 6.8f), size = Size(16.8f, 12.6f), cornerRadius = CornerRadius(3f, 3f))
+    drawCircle(color = Color(0xFF38BDF8), radius = 3.8f, center = Offset(12f, 13.1f))
+    drawCircle(color = Color.White, radius = 1.5f, center = Offset(12f, 13.1f))
+    drawCircle(color = Color(0xFFF43F5E), radius = 1.1f, center = Offset(17.4f, 9.4f))
+}
+
+private fun DrawScope.drawQrScanner() {
+    drawRoundRect(Color(0xFF0EA5E9), topLeft = Offset(4.2f, 4.2f), size = Size(6f, 6f), cornerRadius = CornerRadius(1.2f, 1.2f), style = Stroke(width = 1.8f))
+    drawRoundRect(Color(0xFF0EA5E9), topLeft = Offset(13.8f, 4.2f), size = Size(6f, 6f), cornerRadius = CornerRadius(1.2f, 1.2f), style = Stroke(width = 1.8f))
+    drawRoundRect(Color(0xFF0EA5E9), topLeft = Offset(4.2f, 13.8f), size = Size(6f, 6f), cornerRadius = CornerRadius(1.2f, 1.2f), style = Stroke(width = 1.8f))
+    drawRoundRect(Color(0xFFF59E0B), topLeft = Offset(14.2f, 14.2f), size = Size(5.2f, 5.2f), cornerRadius = CornerRadius(1.2f, 1.2f))
+    drawLine(Color(0xFFEF4444), Offset(3.5f, 12f), Offset(20.5f, 12f), strokeWidth = 1.5f, cap = StrokeCap.Round)
+}
+
+private fun DrawScope.drawHeartMonitor(p: Path) {
+    drawCuteHeart(p, Color(0xFFEF4444), Color(0xFFFDA4AF))
+    p.reset()
+    p.moveTo(5.6f, 12f)
+    p.lineTo(9.2f, 12f)
+    p.lineTo(10.8f, 9f)
+    p.lineTo(13.2f, 15f)
+    p.lineTo(14.8f, 12f)
+    p.lineTo(18.4f, 12f)
+    drawPath(p, color = Color.White, style = Stroke(width = 1.5f, cap = StrokeCap.Round, join = StrokeJoin.Round))
+}
+
+private fun DrawScope.drawPetClinic(p: Path) {
+    rotate(-45f, pivot = Offset(12f, 12f)) {
+        drawRoundRect(Color(0xFFFB923C), topLeft = Offset(3.8f, 8.2f), size = Size(16.4f, 7.6f), cornerRadius = CornerRadius(3.8f, 3.8f))
+        drawRoundRect(Color(0xFFFFEDD5), topLeft = Offset(8.4f, 8.8f), size = Size(7.2f, 6.4f), cornerRadius = CornerRadius(1.2f, 1.2f))
+    }
+    drawCircle(color = Color(0xFFEF4444), radius = 1.4f, center = Offset(12f, 12f))
+    p.reset()
+}
+
+private fun DrawScope.drawMindHeart(p: Path) {
+    drawCircle(color = Color(0xFF8B5CF6), radius = 7.6f, center = Offset(12f, 11f))
+    drawRoundRect(Color(0xFF8B5CF6), topLeft = Offset(9f, 16.5f), size = Size(6f, 4f), cornerRadius = CornerRadius(1.5f, 1.5f))
+    p.reset()
+    p.moveTo(12f, 15.6f)
+    p.cubicTo(7.4f, 12.6f, 7.2f, 8.6f, 9.6f, 7.4f)
+    p.cubicTo(11f, 6.8f, 12f, 8.2f, 12f, 8.8f)
+    p.cubicTo(12f, 8.2f, 13f, 6.8f, 14.4f, 7.4f)
+    p.cubicTo(16.8f, 8.6f, 16.6f, 12.6f, 12f, 15.6f)
+    p.close()
+    drawPath(p, color = Color(0xFFFDE047))
+}
+
+private fun DrawScope.drawEyeCare() {
+    drawOval(color = Color(0xFFE0F2FE), topLeft = Offset(3.4f, 6.8f), size = Size(17.2f, 10.4f))
+    drawOval(color = Color(0xFF0284C7), topLeft = Offset(3.4f, 6.8f), size = Size(17.2f, 10.4f), style = Stroke(width = 1.6f))
+    drawCircle(color = Color(0xFF0284C7), radius = 3.4f, center = Offset(12f, 12f))
+    drawCircle(color = Color.White, radius = 1.3f, center = Offset(11f, 11f))
+}
+
+private fun DrawScope.drawTravelCompass(p: Path) {
+    drawCircle(color = Color(0xFF2563EB), radius = 9.2f, center = Offset(12f, 12f))
+    drawCircle(color = Color(0xFFDBEAFE), radius = 6.8f, center = Offset(12f, 12f))
+    p.reset()
+    p.moveTo(15.2f, 8.8f)
+    p.lineTo(13.2f, 13.2f)
+    p.lineTo(8.8f, 15.2f)
+    p.lineTo(10.8f, 10.8f)
+    p.close()
+    drawPath(p, color = Color(0xFFEF4444))
+    drawCircle(color = Color(0xFF1E293B), radius = 1.1f, center = Offset(12f, 12f))
+}
+
+private fun DrawScope.drawSouvenirPack(p: Path) {
+    drawArc(
+        color = Color(0xFFB45309),
+        startAngle = 180f,
+        sweepAngle = 180f,
+        useCenter = false,
+        topLeft = Offset(8.6f, 3.4f),
+        size = Size(6.8f, 4.6f),
+        style = Stroke(width = 1.7f, cap = StrokeCap.Round)
+    )
+    drawRoundRect(Color(0xFF0EA5E9), topLeft = Offset(5.4f, 6.2f), size = Size(13.2f, 14f), cornerRadius = CornerRadius(4f, 4f))
+    drawRoundRect(Color(0xFFFDE047), topLeft = Offset(7.8f, 12.6f), size = Size(8.4f, 5.4f), cornerRadius = CornerRadius(1.8f, 1.8f))
+    p.reset()
+}
+
+private fun DrawScope.drawGlobeWorld() {
+    drawCircle(color = Color(0xFF0EA5E9), radius = 9f, center = Offset(12f, 12f))
+    drawOval(color = Color.White, topLeft = Offset(8.2f, 3.4f), size = Size(7.6f, 17.2f), style = Stroke(width = 1.4f))
+    drawLine(Color.White, Offset(3.5f, 12f), Offset(20.5f, 12f), strokeWidth = 1.4f)
+    drawLine(Color(0xFFBAE6FD), Offset(5f, 7.6f), Offset(19f, 7.6f), strokeWidth = 1.2f)
+    drawLine(Color(0xFFBAE6FD), Offset(5f, 16.4f), Offset(19f, 16.4f), strokeWidth = 1.2f)
+}
+
+private fun DrawScope.drawCourseBoard(p: Path) {
+    drawRoundRect(Color(0xFF0D9488), topLeft = Offset(3.8f, 4.6f), size = Size(16.4f, 11.4f), cornerRadius = CornerRadius(2.2f, 2.2f))
+    drawRoundRect(Color(0xFF99F6E4), topLeft = Offset(5.6f, 6.4f), size = Size(12.8f, 7.8f), cornerRadius = CornerRadius(1f, 1f))
+    drawLine(Color(0xFF0F766E), Offset(7.4f, 9f), Offset(14.6f, 9f), strokeWidth = 1.5f, cap = StrokeCap.Round)
+    drawLine(Color(0xFFF59E0B), Offset(7.4f, 11.8f), Offset(16.2f, 11.8f), strokeWidth = 1.5f, cap = StrokeCap.Round)
+    drawLine(Color(0xFF64748B), Offset(9.2f, 16f), Offset(7.4f, 20f), strokeWidth = 1.6f, cap = StrokeCap.Round)
+    drawLine(Color(0xFF64748B), Offset(14.8f, 16f), Offset(16.6f, 20f), strokeWidth = 1.6f, cap = StrokeCap.Round)
+    p.reset()
+}
+
+private fun DrawScope.drawStationery(p: Path) {
+    rotate(-38f, pivot = Offset(12f, 12f)) {
+        drawRoundRect(Color(0xFFFBBF24), topLeft = Offset(9.6f, 5.2f), size = Size(4.8f, 11.6f), cornerRadius = CornerRadius(1f, 1f))
+        drawRoundRect(Color(0xFFFB7185), topLeft = Offset(9.6f, 3.4f), size = Size(4.8f, 2.6f), cornerRadius = CornerRadius(1f, 1f))
+        p.reset()
+        p.moveTo(9.6f, 16.8f)
+        p.lineTo(14.4f, 16.8f)
+        p.lineTo(12f, 21f)
+        p.close()
+        drawPath(p, color = Color(0xFFFEF3C7))
+    }
+}
+
+private fun DrawScope.drawElderlyCare(p: Path) {
+    drawCircle(color = Color(0xFFFEF3C7), radius = 8.6f, center = Offset(12f, 12f))
+    drawCuteHeart(p, Color(0xFFF97316), Color(0xFFFDE047))
+    drawCircle(color = Color(0xFFEA580C), radius = 2.1f, center = Offset(17.5f, 6.5f))
+}
+
+private fun DrawScope.drawSocialEnvelope(p: Path) {
+    drawRoundRect(Color(0xFFEC4899), topLeft = Offset(3.8f, 6f), size = Size(16.4f, 12f), cornerRadius = CornerRadius(2.6f, 2.6f))
+    p.reset()
+    p.moveTo(4.4f, 6.8f)
+    p.lineTo(12f, 12.6f)
+    p.lineTo(19.6f, 6.8f)
+    drawPath(p, color = Color(0xFFFCE7F3), style = Stroke(width = 1.6f, cap = StrokeCap.Round, join = StrokeJoin.Round))
+    drawCircle(color = Color(0xFFFDE047), radius = 2.1f, center = Offset(12f, 12.6f))
+}
+
+private fun DrawScope.drawGreenRedPacket(p: Path) {
+    drawCircle(color = Color(0xFF07C160), radius = 9.4f, center = Offset(12f, 12f))
+    drawRoundRect(Color(0xFFEF4444), topLeft = Offset(7.8f, 6.4f), size = Size(8.4f, 11.2f), cornerRadius = CornerRadius(1.8f, 1.8f))
+    drawCircle(color = Color(0xFFFDE047), radius = 2f, center = Offset(12f, 11f))
+    p.reset()
+}
+
+private fun DrawScope.drawSocialGroup() {
+    drawCircle(color = Color(0xFF38BDF8), radius = 2.5f, center = Offset(7.6f, 8.8f))
+    drawCircle(color = Color(0xFFEC4899), radius = 3f, center = Offset(12f, 7.6f))
+    drawCircle(color = Color(0xFFF59E0B), radius = 2.5f, center = Offset(16.4f, 8.8f))
+    drawRoundRect(Color(0xFF0EA5E9), topLeft = Offset(4.2f, 12.4f), size = Size(6.4f, 6f), cornerRadius = CornerRadius(2.6f, 2.6f))
+    drawRoundRect(Color(0xFFF59E0B), topLeft = Offset(13.4f, 12.4f), size = Size(6.4f, 6f), cornerRadius = CornerRadius(2.6f, 2.6f))
+    drawRoundRect(Color(0xFFF43F5E), topLeft = Offset(8.2f, 11.4f), size = Size(7.6f, 7.6f), cornerRadius = CornerRadius(3f, 3f))
+}
+
+private fun DrawScope.drawPersonAvatar() {
+    drawCircle(color = Color(0xFF2AA876), radius = 9f, center = Offset(12f, 12f))
+    drawCircle(color = Color.White, radius = 3.2f, center = Offset(12f, 9f))
+    drawRoundRect(Color.White, topLeft = Offset(6.8f, 13.4f), size = Size(10.4f, 5f), cornerRadius = CornerRadius(2.5f, 2.5f))
+}
+
+private fun DrawScope.drawPetFoodBowl(p: Path) {
+    drawCircle(color = Color(0xFFFBBF24), radius = 2.1f, center = Offset(9.4f, 9.6f))
+    drawCircle(color = Color(0xFFFBBF24), radius = 2.1f, center = Offset(12f, 8.8f))
+    drawCircle(color = Color(0xFFFBBF24), radius = 2.1f, center = Offset(14.6f, 9.6f))
+    p.reset()
+    p.moveTo(4.6f, 12.2f)
+    p.lineTo(19.4f, 12.2f)
+    p.lineTo(20.6f, 19.2f)
+    p.lineTo(3.4f, 19.2f)
+    p.close()
+    drawPath(p, color = Color(0xFFEA580C))
+    drawRoundRect(Color.White, topLeft = Offset(8.8f, 14.8f), size = Size(6.4f, 2f), cornerRadius = CornerRadius(1f, 1f))
+}
+
+private fun DrawScope.drawPetBasket(p: Path) {
+    // 卡通毛线球+玩具铃铛，表现宠物用品
+    drawCircle(color = Color(0xFFA855F7), radius = 7.4f, center = Offset(11.4f, 11.8f))
+    drawArc(Color(0xFFE9D5FF), startAngle = -30f, sweepAngle = 160f, useCenter = false, topLeft = Offset(5.8f, 6.2f), size = Size(11.2f, 11.2f), style = Stroke(width = 1.4f, cap = StrokeCap.Round))
+    drawArc(Color(0xFFE9D5FF), startAngle = 110f, sweepAngle = 150f, useCenter = false, topLeft = Offset(5.8f, 6.2f), size = Size(11.2f, 11.2f), style = Stroke(width = 1.4f, cap = StrokeCap.Round))
+    p.reset()
+    p.moveTo(15f, 18.2f)
+    p.cubicTo(17.8f, 20.6f, 20.4f, 18.4f, 20.8f, 15.8f)
+    drawPath(p, color = Color(0xFFF59E0B), style = Stroke(width = 1.6f, cap = StrokeCap.Round))
+}
+
+private fun DrawScope.drawBabyStroller() {
+    drawArc(
+        color = Color(0xFF38BDF8),
+        startAngle = 180f,
+        sweepAngle = 90f,
+        useCenter = true,
+        topLeft = Offset(5.2f, 5.2f),
+        size = Size(12.8f, 12.8f)
+    )
+    drawRoundRect(Color(0xFF0EA5E9), topLeft = Offset(5.2f, 11.4f), size = Size(12.8f, 5f), cornerRadius = CornerRadius(2.4f, 2.4f))
+    drawLine(Color(0xFF64748B), Offset(18f, 11.6f), Offset(20.6f, 7.6f), strokeWidth = 1.8f, cap = StrokeCap.Round)
+    drawCircle(color = Color(0xFF1E293B), radius = 2.1f, center = Offset(7.8f, 18.6f))
+    drawCircle(color = Color(0xFF1E293B), radius = 2.1f, center = Offset(15.6f, 18.6f))
+}
+
+private fun DrawScope.drawKidsPinwheel(p: Path) {
+    drawLine(Color(0xFF92400E), Offset(12f, 11.6f), Offset(12f, 20.6f), strokeWidth = 1.8f, cap = StrokeCap.Round)
+    drawCircle(color = Color(0xFFEF4444), radius = 3.2f, center = Offset(12f, 7.2f))
+    drawCircle(color = Color(0xFF38BDF8), radius = 3.2f, center = Offset(16.4f, 11.6f))
+    drawCircle(color = Color(0xFFFACC15), radius = 3.2f, center = Offset(12f, 16f))
+    drawCircle(color = Color(0xFF22C55E), radius = 3.2f, center = Offset(7.6f, 11.6f))
+    drawCircle(color = Color.White, radius = 1.6f, center = Offset(12f, 11.6f))
+    p.reset()
+}
+
+private fun DrawScope.drawEarlyBlocks() {
+    drawRoundRect(Color(0xFFF59E0B), topLeft = Offset(7.6f, 4.4f), size = Size(8.8f, 7.2f), cornerRadius = CornerRadius(1.8f, 1.8f))
+    drawRoundRect(Color(0xFF38BDF8), topLeft = Offset(4f, 12.2f), size = Size(7.4f, 7.4f), cornerRadius = CornerRadius(1.8f, 1.8f))
+    drawRoundRect(Color(0xFFEC4899), topLeft = Offset(12.6f, 12.2f), size = Size(7.4f, 7.4f), cornerRadius = CornerRadius(1.8f, 1.8f))
+    drawCircle(color = Color.White, radius = 1.4f, center = Offset(12f, 8f))
+    drawCircle(color = Color.White, radius = 1.2f, center = Offset(7.7f, 15.9f))
+    drawCircle(color = Color.White, radius = 1.2f, center = Offset(16.3f, 15.9f))
+}
+
+private fun DrawScope.drawFinanceVault() {
+    drawRoundRect(Color(0xFF334155), topLeft = Offset(3.8f, 4.4f), size = Size(16.4f, 15.2f), cornerRadius = CornerRadius(3f, 3f))
+    drawRoundRect(Color(0xFF475569), topLeft = Offset(5.6f, 6.2f), size = Size(12.8f, 11.6f), cornerRadius = CornerRadius(1.8f, 1.8f))
+    drawCircle(color = Color(0xFFFACC15), radius = 3.4f, center = Offset(12f, 12f))
+    drawCircle(color = Color(0xFF92400E), radius = 1.2f, center = Offset(12f, 12f))
+}
+
+private fun DrawScope.drawCommercialShield(p: Path) {
+    p.reset()
+    p.moveTo(12f, 3.5f)
+    p.lineTo(19f, 6.5f)
+    p.lineTo(19f, 12.2f)
+    p.cubicTo(19f, 16.6f, 15.6f, 19.6f, 12f, 20.8f)
+    p.cubicTo(8.4f, 19.6f, 5f, 16.6f, 5f, 12.2f)
+    p.lineTo(5f, 6.5f)
+    p.close()
+    drawPath(p, color = Color(0xFF2563EB))
+    drawLine(Color(0xFFFDE047), Offset(9.2f, 12.2f), Offset(11.4f, 14.4f), strokeWidth = 2f, cap = StrokeCap.Round)
+    drawLine(Color(0xFFFDE047), Offset(11.4f, 14.4f), Offset(15.2f, 9.6f), strokeWidth = 2f, cap = StrokeCap.Round)
+}
+
+private fun DrawScope.drawVerifiedSeal(p: Path) {
+    drawCircle(color = Color(0xFF16A34A), radius = 8.8f, center = Offset(12f, 12f))
+    drawCircle(color = Color(0xFFBBF7D0), radius = 6.4f, center = Offset(12f, 12f), style = Stroke(width = 1.4f))
+    drawLine(Color.White, Offset(8.8f, 12.2f), Offset(11.2f, 14.6f), strokeWidth = 2f, cap = StrokeCap.Round)
+    drawLine(Color.White, Offset(11.2f, 14.6f), Offset(15.6f, 9.4f), strokeWidth = 2f, cap = StrokeCap.Round)
+    p.reset()
+}
+
+private fun DrawScope.drawTaxCalculator() {
+    drawRoundRect(Color(0xFF0D9488), topLeft = Offset(5.2f, 3.6f), size = Size(13.6f, 16.8f), cornerRadius = CornerRadius(2.6f, 2.6f))
+    drawRoundRect(Color(0xFFCCFBF1), topLeft = Offset(7f, 5.4f), size = Size(10f, 3.8f), cornerRadius = CornerRadius(1f, 1f))
+    drawCircle(color = Color(0xFFFDE047), radius = 1.2f, center = Offset(8.4f, 12.2f))
+    drawCircle(color = Color.White, radius = 1.2f, center = Offset(12f, 12.2f))
+    drawCircle(color = Color.White, radius = 1.2f, center = Offset(15.6f, 12.2f))
+    drawCircle(color = Color.White, radius = 1.2f, center = Offset(8.4f, 16.2f))
+    drawCircle(color = Color.White, radius = 1.2f, center = Offset(12f, 16.2f))
+    drawCircle(color = Color(0xFFF97316), radius = 1.2f, center = Offset(15.6f, 16.2f))
+}
+
+private fun DrawScope.drawInsuranceClaim() {
+    drawRoundRect(Color(0xFF6366F1), topLeft = Offset(5.4f, 3.8f), size = Size(13.2f, 16.4f), cornerRadius = CornerRadius(2.4f, 2.4f))
+    drawRoundRect(Color(0xFFEEF2FF), topLeft = Offset(7f, 5.6f), size = Size(10f, 12.8f), cornerRadius = CornerRadius(1.2f, 1.2f))
+    drawCircle(color = Color(0xFFF59E0B), radius = 2.2f, center = Offset(12f, 10.2f))
+    drawLine(Color(0xFF4F46E5), Offset(8.8f, 15f), Offset(15.2f, 15f), strokeWidth = 1.5f, cap = StrokeCap.Round)
+}
+
+private fun DrawScope.drawCandlestick() {
+    drawRoundRect(Color(0xFF1E293B), topLeft = Offset(3.4f, 4f), size = Size(17.2f, 16f), cornerRadius = CornerRadius(3.4f, 3.4f))
+    drawLine(Color(0xFFEF4444), Offset(8f, 6.2f), Offset(8f, 17.8f), strokeWidth = 1.3f, cap = StrokeCap.Round)
+    drawRoundRect(Color(0xFFEF4444), topLeft = Offset(6.6f, 8.6f), size = Size(2.8f, 6f), cornerRadius = CornerRadius(0.8f, 0.8f))
+    drawLine(Color(0xFF22C55E), Offset(12f, 7f), Offset(12f, 17f), strokeWidth = 1.3f, cap = StrokeCap.Round)
+    drawRoundRect(Color(0xFF22C55E), topLeft = Offset(10.6f, 9.8f), size = Size(2.8f, 4.6f), cornerRadius = CornerRadius(0.8f, 0.8f))
+    drawLine(Color(0xFFEF4444), Offset(16f, 5.8f), Offset(16f, 15.8f), strokeWidth = 1.3f, cap = StrokeCap.Round)
+    drawRoundRect(Color(0xFFEF4444), topLeft = Offset(14.6f, 7.2f), size = Size(2.8f, 5.6f), cornerRadius = CornerRadius(0.8f, 0.8f))
+}
+
+private fun DrawScope.drawPerformanceBars() {
+    drawRoundRect(Color(0xFFE0F2FE), topLeft = Offset(3.5f, 4f), size = Size(17f, 16f), cornerRadius = CornerRadius(3.5f, 3.5f))
+    drawRoundRect(Color(0xFF38BDF8), topLeft = Offset(6.2f, 12.6f), size = Size(2.8f, 5.2f), cornerRadius = CornerRadius(1f, 1f))
+    drawRoundRect(Color(0xFFF59E0B), topLeft = Offset(10.6f, 9.6f), size = Size(2.8f, 8.2f), cornerRadius = CornerRadius(1f, 1f))
+    drawRoundRect(Color(0xFF16A34A), topLeft = Offset(15f, 6.8f), size = Size(2.8f, 11f), cornerRadius = CornerRadius(1f, 1f))
+}
+
+private fun DrawScope.drawDividendPie() {
+    drawArc(color = Color(0xFF0EA5E9), startAngle = -90f, sweepAngle = 150f, useCenter = true, topLeft = Offset(4f, 4f), size = Size(16f, 16f))
+    drawArc(color = Color(0xFFF59E0B), startAngle = 60f, sweepAngle = 110f, useCenter = true, topLeft = Offset(4f, 4f), size = Size(16f, 16f))
+    drawArc(color = Color(0xFF22C55E), startAngle = 170f, sweepAngle = 100f, useCenter = true, topLeft = Offset(4f, 4f), size = Size(16f, 16f))
+}
+
+private fun DrawScope.drawLostAlert(p: Path) {
+    p.reset()
+    p.moveTo(12f, 3.8f)
+    p.lineTo(20.6f, 19.2f)
+    p.lineTo(3.4f, 19.2f)
+    p.close()
+    drawPath(p, color = Color(0xFFF59E0B))
+    drawLine(Color.White, Offset(12f, 9.2f), Offset(12f, 14f), strokeWidth = 2f, cap = StrokeCap.Round)
+    drawCircle(color = Color.White, radius = 1.2f, center = Offset(12f, 16.8f))
+}
+
+private fun DrawScope.drawSideHustleBag() {
+    drawRoundRect(Color(0xFF0EA5E9), topLeft = Offset(4.4f, 6.2f), size = Size(15.2f, 13.6f), cornerRadius = CornerRadius(3.4f, 3.4f))
+    drawRoundRect(Color(0xFF38BDF8), topLeft = Offset(4.4f, 6.2f), size = Size(15.2f, 6.4f), cornerRadius = CornerRadius(3f, 3f))
+    drawRoundRect(Color(0xFFFDE047), topLeft = Offset(10.4f, 11.4f), size = Size(3.2f, 2.6f), cornerRadius = CornerRadius(0.8f, 0.8f))
+    drawLine(Color(0xFF0284C7), Offset(8.6f, 4.2f), Offset(15.4f, 4.2f), strokeWidth = 1.8f, cap = StrokeCap.Round)
+}
+
+private fun DrawScope.drawOvertimeClock() {
+    drawCircle(color = Color(0xFF16A34A), radius = 8.4f, center = Offset(12f, 12.6f))
+    drawCircle(color = Color.White, radius = 6f, center = Offset(12f, 12.6f))
+    drawLine(Color(0xFFF97316), Offset(12f, 12.6f), Offset(12f, 8.8f), strokeWidth = 1.6f, cap = StrokeCap.Round)
+    drawLine(Color(0xFFF97316), Offset(12f, 12.6f), Offset(15f, 14f), strokeWidth = 1.6f, cap = StrokeCap.Round)
+    drawCircle(color = Color(0xFFF59E0B), radius = 1.8f, center = Offset(6f, 6f))
+    drawCircle(color = Color(0xFFF59E0B), radius = 1.8f, center = Offset(18f, 6f))
+}
+
+private fun DrawScope.drawGoldTrophy(p: Path) {
+    drawRoundRect(Color(0xFFF59E0B), topLeft = Offset(7.2f, 4.2f), size = Size(9.6f, 8.6f), cornerRadius = CornerRadius(2.6f, 2.6f))
+    drawArc(color = Color(0xFFD97706), startAngle = 90f, sweepAngle = 180f, useCenter = false, topLeft = Offset(4.4f, 5.4f), size = Size(4.6f, 5.2f), style = Stroke(width = 1.5f))
+    drawArc(color = Color(0xFFD97706), startAngle = -90f, sweepAngle = 180f, useCenter = false, topLeft = Offset(15f, 5.4f), size = Size(4.6f, 5.2f), style = Stroke(width = 1.5f))
+    drawRect(Color(0xFFD97706), topLeft = Offset(10.6f, 12.8f), size = Size(2.8f, 4f))
+    drawRoundRect(Color(0xFF92400E), topLeft = Offset(7.6f, 16.8f), size = Size(8.8f, 3f), cornerRadius = CornerRadius(1.2f, 1.2f))
+    p.reset()
+}
+
+private fun DrawScope.drawBonusStar(p: Path) {
+    drawCircle(color = Color(0xFF15803D), radius = 9.2f, center = Offset(12f, 12f))
+    p.reset()
+    p.moveTo(12f, 5.4f)
+    p.lineTo(13.8f, 9.8f)
+    p.lineTo(18.4f, 10.1f)
+    p.lineTo(14.8f, 13.1f)
+    p.lineTo(16f, 17.6f)
+    p.lineTo(12f, 15.1f)
+    p.lineTo(8f, 17.6f)
+    p.lineTo(9.2f, 13.1f)
+    p.lineTo(5.6f, 10.1f)
+    p.lineTo(10.2f, 9.8f)
+    p.close()
+    drawPath(p, color = Color(0xFFFDE047))
+}
+
+private fun DrawScope.drawFestivalGift() {
+    drawCircle(color = Color(0xFFEF4444), radius = 1.7f, center = Offset(12f, 5.4f))
+    drawRoundRect(Color(0xFFFCE7F3), topLeft = Offset(6.8f, 7.6f), size = Size(10.4f, 4.8f), cornerRadius = CornerRadius(1.8f, 1.8f))
+    drawRoundRect(Color(0xFFF43F5E), topLeft = Offset(4.4f, 12.4f), size = Size(15.2f, 6.8f), cornerRadius = CornerRadius(2.2f, 2.2f))
+    drawLine(Color(0xFFFDE047), Offset(6.4f, 15.6f), Offset(17.6f, 15.6f), strokeWidth = 1.6f, cap = StrokeCap.Round)
+}
+
+private fun DrawScope.drawPiggyBank() {
+    drawOval(color = Color(0xFFF472B6), topLeft = Offset(4.2f, 8.2f), size = Size(15f, 10.8f))
+    drawCircle(color = Color(0xFFEC4899), radius = 2.4f, center = Offset(7.2f, 8f))
+    drawRoundRect(Color(0xFFFB7185), topLeft = Offset(17.8f, 12f), size = Size(2.8f, 3.8f), cornerRadius = CornerRadius(1.2f, 1.2f))
+    drawCircle(color = Color(0xFFFDE047), radius = 2.4f, center = Offset(11.6f, 5.4f))
+    drawLine(Color(0xFFEC4899), Offset(7.6f, 18.2f), Offset(7.6f, 20.4f), strokeWidth = 2f, cap = StrokeCap.Round)
+    drawLine(Color(0xFFEC4899), Offset(15.6f, 18.2f), Offset(15.6f, 20.4f), strokeWidth = 2f, cap = StrokeCap.Round)
+    drawCircle(color = Color(0xFF1E293B), radius = 0.9f, center = Offset(15.6f, 11.4f))
+}
+
+private fun DrawScope.drawFxCoin() {
+    drawCircle(color = Color(0xFFF59E0B), radius = 9.2f, center = Offset(12f, 12f))
+    drawCircle(color = Color(0xFFFDE047), radius = 6.8f, center = Offset(12f, 12f))
+    drawLine(Color(0xFFB45309), Offset(12f, 7.8f), Offset(12f, 16.2f), strokeWidth = 1.6f, cap = StrokeCap.Round)
+    drawLine(Color(0xFFB45309), Offset(9.4f, 10.6f), Offset(14.6f, 10.6f), strokeWidth = 1.4f, cap = StrokeCap.Round)
+    drawLine(Color(0xFFB45309), Offset(9.4f, 13.4f), Offset(14.6f, 13.4f), strokeWidth = 1.4f, cap = StrokeCap.Round)
+}
+
+private fun DrawScope.drawLoyaltyCard(p: Path) {
+    drawPriceTag(p)
+    drawCircle(color = Color(0xFFE11D48), radius = 2.6f, center = Offset(10.8f, 12.6f))
+}
+
+private fun DrawScope.drawCouponTicket(p: Path) {
+    drawRoundRect(Color(0xFFEF4444), topLeft = Offset(3.4f, 6.2f), size = Size(17.2f, 11.6f), cornerRadius = CornerRadius(2.6f, 2.6f))
+    drawCircle(color = Color(0xFFFDE047), radius = 3.2f, center = Offset(12f, 12f))
+    drawCircle(color = Color.White, radius = 1.5f, center = Offset(3.4f, 12f))
+    drawCircle(color = Color.White, radius = 1.5f, center = Offset(20.6f, 12f))
+    p.reset()
+}
+
+private fun DrawScope.drawHousingFundCard() {
+    drawRoundRect(Color(0xFF006874), topLeft = Offset(3.4f, 5.4f), size = Size(17.2f, 13.2f), cornerRadius = CornerRadius(2.8f, 2.8f))
+    drawCircle(color = Color(0xFF99F6E4), radius = 2.4f, center = Offset(8.4f, 11.2f))
+    drawLine(Color.White, Offset(12.6f, 9.6f), Offset(18f, 9.6f), strokeWidth = 1.6f, cap = StrokeCap.Round)
+    drawLine(Color(0xFFFDE047), Offset(12.6f, 13.4f), Offset(17.2f, 13.4f), strokeWidth = 1.6f, cap = StrokeCap.Round)
+}
+
+private fun DrawScope.drawCashRegister() {
+    drawRoundRect(Color(0xFFEA580C), topLeft = Offset(5.2f, 4.2f), size = Size(13.6f, 15.8f), cornerRadius = CornerRadius(2.8f, 2.8f))
+    drawRoundRect(Color(0xFFE0F2FE), topLeft = Offset(7.2f, 6.2f), size = Size(9.6f, 4.8f), cornerRadius = CornerRadius(1.2f, 1.2f))
+    drawRoundRect(Color(0xFFFDE047), topLeft = Offset(7.4f, 13f), size = Size(9.2f, 2.6f), cornerRadius = CornerRadius(0.8f, 0.8f))
+    drawLine(Color.White, Offset(8f, 17.6f), Offset(16f, 17.6f), strokeWidth = 1.6f, cap = StrokeCap.Round)
+}
+
+private fun DrawScope.drawRentApartment() {
+    drawRoundRect(Color(0xFF0284C7), topLeft = Offset(5.4f, 3.8f), size = Size(13.2f, 16.4f), cornerRadius = CornerRadius(2.4f, 2.4f))
+    drawRoundRect(Color(0xFFFDE047), topLeft = Offset(7.8f, 6.4f), size = Size(2.6f, 2.4f), cornerRadius = CornerRadius(0.6f, 0.6f))
+    drawRoundRect(Color(0xFFFDE047), topLeft = Offset(13.6f, 6.4f), size = Size(2.6f, 2.4f), cornerRadius = CornerRadius(0.6f, 0.6f))
+    drawRoundRect(Color(0xFFBAE6FD), topLeft = Offset(7.8f, 10.6f), size = Size(2.6f, 2.4f), cornerRadius = CornerRadius(0.6f, 0.6f))
+    drawRoundRect(Color(0xFFBAE6FD), topLeft = Offset(13.6f, 10.6f), size = Size(2.6f, 2.4f), cornerRadius = CornerRadius(0.6f, 0.6f))
+    drawRoundRect(Color(0xFFF97316), topLeft = Offset(10.2f, 15.6f), size = Size(3.6f, 4.6f), cornerRadius = CornerRadius(1f, 1f))
 }

@@ -675,8 +675,8 @@ fun AssetsScreen(
         CalibrateBalanceDialog(
             account = acc,
             privacyMasked = privacyMasked,
-            onConfirm = { targetMicros, note ->
-                viewModel.calibrateAccountBalance(acc.id, targetMicros, note) {
+            onConfirm = { targetMicros, note, createRecord ->
+                viewModel.calibrateAccountBalance(acc.id, targetMicros, note, createRecord) {
                     calibrateTarget = null
                 }
             },
@@ -1536,9 +1536,10 @@ internal fun AccountEditorDialog(
 internal fun CalibrateBalanceDialog(
     account: AccountEntity,
     privacyMasked: Boolean = LocalPrivacyMasked.current,
-    onConfirm: (Long, String) -> Unit,
+    onConfirm: (Long, String, Boolean) -> Unit,
     onDismiss: () -> Unit
 ) {
+    val semantic = KairoTheme.semantic
     val digits = CurrencyCatalog.find(account.currencyCode).minorDigits
     var targetInput by remember {
         mutableStateOf(
@@ -1546,7 +1547,11 @@ internal fun CalibrateBalanceDialog(
         )
     }
     var noteInput by remember { mutableStateOf("余额校准") }
+    var createRecord by remember { mutableStateOf(true) }
     var errorMsg by remember { mutableStateOf<String?>(null) }
+
+    val parsedTargetMicros = remember(targetInput) { MoneyAmount.parseToMicros(targetInput) }
+    val deltaMicros = parsedTargetMicros?.let { it - account.balanceMicros }
 
     YubraeDialog(
         onDismissRequest = onDismiss,
@@ -1560,7 +1565,8 @@ internal fun CalibrateBalanceDialog(
                     if (targetMicros == null) {
                         errorMsg = "请输入有效数字金额"
                     } else {
-                        onConfirm(targetMicros, noteInput.trim().ifEmpty { "余额校准" })
+                        val finalNote = if (createRecord) noteInput.trim().ifEmpty { "余额校准" } else ""
+                        onConfirm(targetMicros, finalNote, createRecord)
                     }
                 },
                 shape = RoundedCornerShape(12.dp)
@@ -1588,21 +1594,104 @@ internal fun CalibrateBalanceDialog(
             )
             OutlinedTextField(
                 value = targetInput,
-                onValueChange = { targetInput = it },
+                onValueChange = {
+                    targetInput = it
+                    errorMsg = null
+                },
                 label = { Text("实际余额 (${account.currencyCode})") },
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                 singleLine = true,
                 shape = RoundedCornerShape(14.dp),
                 modifier = Modifier.fillMaxWidth()
             )
-            OutlinedTextField(
-                value = noteInput,
-                onValueChange = { noteInput = it },
-                label = { Text("备注") },
-                singleLine = true,
+            if (deltaMicros != null) {
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerLow,
+                    border = BorderStroke(0.8.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "差额变动",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Text(
+                            text = formatPrivacyAmount(
+                                privacyMasked,
+                                MoneyAmount.format(
+                                    amountMicros = deltaMicros,
+                                    currencyCode = account.currencyCode,
+                                    showSign = true,
+                                    showCurrencyCode = true
+                                )
+                            ),
+                            style = MaterialTheme.typography.bodyMedium.tabular(),
+                            fontWeight = FontWeight.SemiBold,
+                            color = when {
+                                deltaMicros > 0L -> semantic.income
+                                deltaMicros < 0L -> semantic.expense
+                                else -> MaterialTheme.colorScheme.onSurfaceVariant
+                            }
+                        )
+                    }
+                }
+            }
+            Surface(
                 shape = RoundedCornerShape(14.dp),
-                modifier = Modifier.fillMaxWidth()
-            )
+                color = MaterialTheme.colorScheme.surfaceContainerLow,
+                border = BorderStroke(0.8.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(14.dp))
+                    .clickable { createRecord = !createRecord }
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f).padding(end = 10.dp)) {
+                        Text(
+                            text = "生成差额变动记录",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Medium
+                        )
+                        Text(
+                            text = if (createRecord) {
+                                "在流水中生成余额校准记录，删除可回滚"
+                            } else {
+                                "仅直接修改账户余额，不写入流水明细"
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Switch(
+                        checked = createRecord,
+                        onCheckedChange = { createRecord = it }
+                    )
+                }
+            }
+            AnimatedVisibility(visible = createRecord) {
+                OutlinedTextField(
+                    value = noteInput,
+                    onValueChange = { noteInput = it },
+                    label = { Text("备注") },
+                    singleLine = true,
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
             errorMsg?.let {
                 Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
             }

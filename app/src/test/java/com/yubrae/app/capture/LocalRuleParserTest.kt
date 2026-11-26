@@ -339,7 +339,7 @@ class LocalRuleParserTest {
         )
         assertNotNull(catFoodDraft)
         assertEquals("宠物食品", catFoodDraft!!.categoryName)
-        assertEquals(listOf("淘宝", "网购"), TagTextCodec.parse(catFoodDraft.tags))
+        assertEquals(listOf("淘宝"), TagTextCodec.parse(catFoodDraft.tags))
 
         val takeoutDraft = parser.parse(
             CaptureInput(
@@ -352,7 +352,7 @@ class LocalRuleParserTest {
         )
         assertNotNull(takeoutDraft)
         assertEquals("外卖", takeoutDraft!!.categoryName)
-        assertEquals(listOf("美团", "外卖"), TagTextCodec.parse(takeoutDraft.tags))
+        assertEquals(listOf("美团"), TagTextCodec.parse(takeoutDraft.tags))
 
         val bookDraft = parser.parse(
             CaptureInput(

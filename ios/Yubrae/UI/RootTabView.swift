@@ -173,7 +173,7 @@ public struct RootTabView: View {
                     .zIndex(100)
             }
         }
-        .sheet(item: $quickRecordContext) { ctx in
+        .fullScreenCover(item: $quickRecordContext) { ctx in
             QuickRecordSheet(store: store, editingTransaction: ctx.editingTransaction)
                 .yubraeSheetStyle(palette: palette)
         }

@@ -30,9 +30,9 @@ object JsCategoryMapper {
         "快递" to listOf("快递邮寄", "日用购物"),
         "网购代付" to listOf("网购百货", "日用购物"),
         "烟酒" to listOf("烟酒茶", "餐饮美食"),
-        "搬家" to listOf("家政服务", "物业维修", "居家物业", "其他杂项", "其他支出"),
+        "搬家" to listOf("家政服务", "物业维修", "居家物业", "其他支出"),
         "购物" to listOf("超市便利", "网购百货", "家居日用", "日用购物"),
-        "党费会费" to listOf("其他杂项", "其他支出"),
+        "党费会费" to listOf("其他支出"),
         "话费网费" to listOf("话费宽带", "居家物业"),
         "水电煤" to listOf("水电燃气", "居家物业"),
         "保险" to listOf("商业保险", "医疗保险", "金融保险"),
@@ -47,11 +47,11 @@ object JsCategoryMapper {
         "旅行" to listOf("酒店民宿", "旅游门票", "差旅住宿"),
         "打赏" to listOf("聚会玩乐", "软件会员", "休闲娱乐", "人情社交"),
         "聚会" to listOf("聚餐请客", "聚会玩乐", "餐饮美食", "休闲娱乐"),
-        "收藏" to listOf("特产纪念", "聚会玩乐", "日用购物", "休闲娱乐", "其他杂项", "其他支出"),
+        "收藏" to listOf("特产纪念", "聚会玩乐", "日用购物", "休闲娱乐", "其他支出"),
         "娱乐" to listOf("聚会玩乐", "休闲娱乐"),
         "医疗" to listOf("看病挂号", "买药保健", "医疗健康"),
         "学习" to listOf("书籍资料", "课程培训", "文具办公", "学习成长"),
-        "罚款" to listOf("利息罚息", "意外丢失", "其他杂项", "其他支出"),
+        "罚款" to listOf("利息罚息", "意外丢失", "其他支出"),
         "捐赠" to listOf("公益捐赠", "其他支出"),
         "公交地铁" to listOf("地铁公交", "交通出行"),
         "打车" to listOf("网约打车", "交通出行"),
@@ -60,12 +60,12 @@ object JsCategoryMapper {
         "汽车加油" to listOf("加油充电", "养车维修", "交通出行"),
         "育儿" to listOf("奶粉辅食", "童装玩具", "早教培训", "亲子育儿"),
         "发红包" to listOf("红包礼金", "送礼请客", "人情社交"),
-        "工资" to listOf("其他杂项", "其他支出"),
+        "工资" to listOf("其他支出"),
         "收红包" to listOf("红包礼金", "人情社交"),
-        "退款" to listOf("其他杂项", "其他支出"),
-        "公积金" to listOf("其他杂项", "其他支出"),
-        "外快" to listOf("其他杂项", "其他支出"),
-        "其他" to listOf("其他杂项", "其他支出")
+        "退款" to listOf("其他支出"),
+        "公积金" to listOf("其他支出"),
+        "外快" to listOf("其他支出"),
+        "其他" to listOf("其他支出")
     )
 
     private val INCOME_MAPPINGS: Map<String, List<String>> = mapOf(
@@ -90,7 +90,7 @@ object JsCategoryMapper {
     fun mapToYubraeCandidates(externalCategory: String, transactionType: String): List<String> {
         val cleaned = externalCategory.trim()
         val isIncome = transactionType.equals(TransactionType.INCOME, ignoreCase = true)
-        val fallback = if (isIncome) listOf("其他收入") else listOf("其他杂项", "其他支出")
+        val fallback = if (isIncome) listOf("其他收入") else listOf("其他支出")
         if (cleaned.isEmpty()) return fallback
 
         if (isIncome) {

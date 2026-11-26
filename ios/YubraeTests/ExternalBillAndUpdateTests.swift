@@ -599,4 +599,95 @@ final class ExternalBillAndUpdateTests: XCTestCase {
         let receiptIntent = YubraeReceiptImageIntent()
         _ = try await receiptIntent.perform()
     }
+
+    // MARK: - QuickExprEvaluator Direct Evaluation & Period Pickers Tests (Issues #6, #9, #10, #11)
+
+    func testQuickExprEvaluatorDirectOperatorEvaluation() {
+        XCTAssertTrue(QuickExprEvaluator.containsOperator("120+35×2"))
+        XCTAssertEqual(QuickExprEvaluator.evaluateToMicros("120+35×2"), 1_900_000)
+
+        XCTAssertTrue(QuickExprEvaluator.containsOperator("50+"))
+        XCTAssertEqual(QuickExprEvaluator.evaluateToMicros("50+"), 500_000)
+
+        XCTAssertTrue(QuickExprEvaluator.containsOperator("10÷0"))
+        XCTAssertNil(QuickExprEvaluator.evaluateToMicros("10÷0"))
+
+        XCTAssertTrue(QuickExprEvaluator.containsOperator("10-20"))
+        XCTAssertNil(QuickExprEvaluator.evaluateToMicros("10-20"))
+
+        XCTAssertNil(QuickExprEvaluator.evaluateToMicros("10-10"))
+        XCTAssertFalse(QuickExprEvaluator.containsOperator("-10"))
+        XCTAssertFalse(QuickExprEvaluator.containsOperator("88.50"))
+    }
+
+    func testYubraePeriodHelperWeekYearAndSummary() throws {
+        let tz = try XCTUnwrap(TimeZone(secondsFromGMT: 8 * 3600))
+        let cal = YubraePeriodHelper.mondayCalendar(timeZone: tz)
+
+        // 1. 普通周（2026-11-25 周三 -> 周一 11/23 ~ 周日 11/29）
+        let wed = try XCTUnwrap(cal.date(from: DateComponents(year: 2026, month: 11, day: 25, hour: 14, minute: 30)))
+        let normalBounds = YubraePeriodHelper.weekBounds(for: wed, calendar: cal)
+        let normalStart = cal.dateComponents([.year, .month, .day, .weekday], from: normalBounds.start)
+        let normalEnd = cal.dateComponents([.year, .month, .day, .weekday], from: normalBounds.end)
+        XCTAssertEqual(normalStart.year, 2026)
+        XCTAssertEqual(normalStart.month, 11)
+        XCTAssertEqual(normalStart.day, 23)
+        XCTAssertEqual(normalStart.weekday, 2) // Monday
+        XCTAssertEqual(normalEnd.year, 2026)
+        XCTAssertEqual(normalEnd.month, 11)
+        XCTAssertEqual(normalEnd.day, 29)
+        XCTAssertEqual(normalEnd.weekday, 1) // Sunday
+        XCTAssertTrue(normalBounds.start <= wed && wed <= normalBounds.end)
+        XCTAssertEqual(YubraePeriodHelper.formatWeekRangeText(for: wed, calendar: cal), "2026/11/23 - 11/29")
+
+        // 2. 闰年跨月（2024-02-29 周四 -> 周一 02/26 ~ 周日 03/03）
+        let leapDay = try XCTUnwrap(cal.date(from: DateComponents(year: 2024, month: 2, day: 29, hour: 9, minute: 0)))
+        let leapBounds = YubraePeriodHelper.weekBounds(for: leapDay, calendar: cal)
+        let leapStart = cal.dateComponents([.year, .month, .day], from: leapBounds.start)
+        let leapEnd = cal.dateComponents([.year, .month, .day], from: leapBounds.end)
+        XCTAssertEqual(leapStart.year, 2024)
+        XCTAssertEqual(leapStart.month, 2)
+        XCTAssertEqual(leapStart.day, 26)
+        XCTAssertEqual(leapEnd.year, 2024)
+        XCTAssertEqual(leapEnd.month, 3)
+        XCTAssertEqual(leapEnd.day, 3)
+        XCTAssertEqual(YubraePeriodHelper.formatWeekRangeText(for: leapDay, calendar: cal), "2024/02/26 - 03/03")
+
+        // 3. 跨年周（2025-12-31 周三 -> 周一 2025/12/29 ~ 周日 2026/01/04，校验非 week-year）
+        let yearEnd = try XCTUnwrap(cal.date(from: DateComponents(year: 2025, month: 12, day: 31, hour: 23, minute: 0)))
+        let crossBounds = YubraePeriodHelper.weekBounds(for: yearEnd, calendar: cal)
+        let crossStart = cal.dateComponents([.year, .month, .day], from: crossBounds.start)
+        let crossEnd = cal.dateComponents([.year, .month, .day], from: crossBounds.end)
+        XCTAssertEqual(crossStart.year, 2025)
+        XCTAssertEqual(crossStart.month, 12)
+        XCTAssertEqual(crossStart.day, 29)
+        XCTAssertEqual(crossEnd.year, 2026)
+        XCTAssertEqual(crossEnd.month, 1)
+        XCTAssertEqual(crossEnd.day, 4)
+        XCTAssertEqual(YubraePeriodHelper.formatWeekRangeText(for: yearEnd, calendar: cal), "2025/12/29 - 01/04")
+
+        // 4. 12 年分页网格与负数保护
+        XCTAssertEqual(YubraePeriodHelper.yearGridRange(for: 2026), Array(2016...2027))
+        XCTAssertEqual(YubraePeriodHelper.yearGridRange(for: 2016), Array(2016...2027))
+        XCTAssertEqual(YubraePeriodHelper.yearGridRange(for: 2027), Array(2016...2027))
+        XCTAssertEqual(YubraePeriodHelper.yearGridRange(for: 2028), Array(2028...2039))
+        let negGrid = YubraePeriodHelper.yearGridRange(for: -15)
+        XCTAssertEqual(negGrid.count, 12)
+        XCTAssertTrue(negGrid.allSatisfy { $0 >= 1 })
+        XCTAssertEqual(YubraePeriodHelper.yearGridRange(for: 0), Array(1...12))
+
+        // 5. 月度收支汇总复制文案
+        let copyText = YubraePeriodHelper.formatMonthSummaryCopyText(
+            title: "2026年11月",
+            currency: "CNY",
+            expenseText: "¥12,345,678.90",
+            incomeText: "¥9,876,543.21",
+            balanceText: "-¥2,469,135.69"
+        )
+        XCTAssertTrue(copyText.contains("2026年11月"))
+        XCTAssertTrue(copyText.contains("CNY"))
+        XCTAssertTrue(copyText.contains("本月支出：¥12,345,678.90"))
+        XCTAssertTrue(copyText.contains("本月收入：¥9,876,543.21"))
+        XCTAssertTrue(copyText.contains("月度结余：-¥2,469,135.69"))
+    }
 }

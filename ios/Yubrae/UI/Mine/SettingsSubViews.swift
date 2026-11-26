@@ -196,7 +196,30 @@ public struct CategoryManagementView: View {
     @State private var iconKey = "category"
     @State private var colorHex: Int64 = 0xFF2AA876
 
-    private let iconChoices = ["restaurant", "local_cafe", "directions_car", "shopping_bag", "home", "subscriptions", "medical_services", "flight", "school", "favorite", "pets", "work", "payments", "trending_up", "category"]
+    private let iconChoices = [
+        "restaurant", "ramen_dining", "delivery_dining", "local_cafe", "bakery_dining",
+        "local_grocery_store", "kitchen", "local_bar", "emoji_food_beverage",
+        "directions_car", "subway", "local_taxi", "pedal_bike", "train", "local_gas_station",
+        "local_parking", "local_car_wash", "shopping_bag", "local_mall", "shopping_cart",
+        "weekend", "local_shipping", "style", "checkroom", "face_retouching_natural",
+        "content_cut", "diamond", "devices", "laptop_mac", "headphones", "tv",
+        "home", "cottage", "bolt", "handyman", "wifi", "cleaning_services",
+        "subscriptions", "cloud_done", "smart_toy", "music_note", "sports_esports",
+        "theater_comedy", "movie", "celebration", "fitness_center", "forest",
+        "medical_services", "local_hospital", "medication", "monitor_heart", "health_and_safety",
+        "explore", "flight", "hotel", "confirmation_number", "backpack",
+        "school", "book", "science", "edit_note", "palette",
+        "groups", "card_giftcard", "redeem", "elderly", "favorite",
+        "pets", "set_meal", "shopping_basket", "healing",
+        "stroller", "child_care", "toys", "translate",
+        "work", "payments", "schedule", "emoji_events",
+        "star", "bar_chart", "directions_bus", "cake",
+        "trending_up", "candlestick_chart", "savings", "pie_chart", "monetization_on",
+        "replay", "receipt_long", "local_post_office", "request_quote",
+        "business_center", "desktop_windows", "mic", "sell",
+        "storefront", "point_of_sale", "corporate_fare",
+        "account_balance", "badge", "calculate", "local_offer", "attach_money", "category"
+    ]
 
     public init(store: LedgerStore) {
         self.store = store
@@ -407,10 +430,16 @@ public struct TagManagementView: View {
             ForEach(groupedTags) { section in
                 Section(section.group) {
                     ForEach(section.items) { tag in
-                        HStack {
-                            Circle()
-                                .fill(Color(argbHex: tag.colorHex))
-                                .frame(width: 10, height: 10)
+                        HStack(spacing: 10) {
+                            let tagTint = Color(argbHex: tag.colorHex)
+                            ZStack {
+                                Circle()
+                                    .fill(tagTint.opacity(0.16))
+                                Image(systemName: DefaultSeedData.sfSymbol(for: tag.icon.isEmpty ? "sell" : tag.icon))
+                                    .font(.system(size: 12, weight: .semibold))
+                                    .foregroundColor(tagTint)
+                            }
+                            .frame(width: 24, height: 24)
                             Text("#\(tag.name)")
                                 .font(.subheadline)
                                 .lineLimit(1)

@@ -152,7 +152,7 @@ class RecordUsageRankerTest {
         assertEquals(0xFF123456L, color1)
 
         val (icon2, color2) = RecordUsageRanker.suggestCategoryStyle("宠物驱虫", null)
-        assertEquals("pets", icon2)
+        assertEquals("healing", icon2)
         assertEquals(0xFFD97706L, color2)
     }
 }

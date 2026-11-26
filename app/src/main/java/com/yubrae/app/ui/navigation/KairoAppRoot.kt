@@ -972,8 +972,8 @@ private fun AccountDetailHost(
         onBack = onBack,
         onQuickRecord = { onQuickRecord(targetAccount.id) },
         onQuickTransfer = { onQuickTransfer(targetAccount.id) },
-        onCalibrateBalance = { targetBalance, note ->
-            viewModel.calibrateAccountBalance(targetAccount.id, targetBalance, note)
+        onCalibrateBalance = { targetBalance, note, createRecord ->
+            viewModel.calibrateAccountBalance(targetAccount.id, targetBalance, note, createRecord)
         },
         onEditAccount = { updated -> viewModel.saveAccount(updated) },
         onToggleArchive = { archived ->

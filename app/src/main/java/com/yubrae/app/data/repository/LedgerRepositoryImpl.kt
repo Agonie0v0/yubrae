@@ -93,7 +93,8 @@ class LedgerRepositoryImpl(
         inTransaction = { block -> db.withTransaction { block() } },
         tagDao = db.tagDao(),
         presetCatalogSeeder = {
-            DefaultSeedData.ensurePresetCategories(db) to DefaultSeedData.ensurePresetTags(db)
+            DefaultSeedData.ensurePresetCategories(db.categoryDao(), db.transactionDao()) to
+                DefaultSeedData.ensurePresetTags(db.tagDao())
         },
         updateSettings = { transform -> settingsStore.update(transform) },
         accountAliasDao = db.accountAliasDao()
@@ -519,8 +520,9 @@ class LedgerRepositoryImpl(
     override suspend fun calibrateAccountBalance(
         accountId: Long,
         targetBalanceMicros: Long,
-        note: String
-    ): Result<TransactionEntity> {
+        note: String,
+        createRecord: Boolean
+    ): Result<TransactionEntity?> {
         return try {
             runInTransaction {
                 val account = accountDao.getById(accountId)
@@ -528,6 +530,12 @@ class LedgerRepositoryImpl(
                         IllegalArgumentException("账户不存在: $accountId")
                     )
                 val delta = targetBalanceMicros - account.balanceMicros
+                if (!createRecord) {
+                    if (delta != 0L) {
+                        accountDao.adjustBalance(account.id, delta, clockMillisProvider())
+                    }
+                    return@runInTransaction Result.success(null)
+                }
                 saveTransactionInternal(
                     RecordTransactionRequest(
                         type = TransactionType.ADJUST,
@@ -1217,7 +1225,7 @@ class LedgerRepositoryImpl(
 
     override suspend fun ensurePresetCatalogSeeded(): Pair<Int, Int> {
         presetCatalogSeeder?.let { return it() }
-        val addedCategories = DefaultSeedData.ensurePresetCategories(categoryDao)
+        val addedCategories = DefaultSeedData.ensurePresetCategories(categoryDao, transactionDao)
         val addedTags = tagDao?.let { DefaultSeedData.ensurePresetTags(it) } ?: 0
         return addedCategories to addedTags
     }

@@ -1740,6 +1740,7 @@ internal fun CurrencyInlinePickerPanel(
 /**
  * 舒适触控 4 列数字计算器键盘（支持 + - × ÷ 四则算式与「再记一笔」双按钮模式）。
  */
+@Suppress("UNUSED_PARAMETER")
 @Composable
 internal fun CompactCalculatorKeypad(
     hasOperator: Boolean,
@@ -1813,27 +1814,7 @@ internal fun CompactCalculatorKeypad(
                     }
                 }
 
-                if (hasOperator) {
-                    Button(
-                        onClick = onEquals,
-                        shape = RoundedCornerShape(11.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = MaterialTheme.colorScheme.primary,
-                            contentColor = MaterialTheme.colorScheme.onPrimary
-                        ),
-                        contentPadding = PaddingValues(0.dp),
-                        modifier = Modifier
-                            .width(colWidth)
-                            .height(keyHeight * 2 + gap)
-                    ) {
-                        Text(
-                            text = "=",
-                            style = MaterialTheme.typography.headlineSmall.tabular(),
-                            fontWeight = FontWeight.Bold,
-                            maxLines = 1
-                        )
-                    }
-                } else if (showSaveAndContinue && onSaveAndContinue != null) {
+                if (showSaveAndContinue && onSaveAndContinue != null) {
                     Column(
                         modifier = Modifier.width(colWidth),
                         verticalArrangement = Arrangement.spacedBy(gap)

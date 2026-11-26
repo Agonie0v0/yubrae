@@ -31,6 +31,8 @@ public struct TransactionsView: View {
     @State private var searchText: String = ""
     @State private var selectedFilter: TransactionFilter = .all
     @State private var showAllLedgers: Bool = false
+    @State private var showMonthPickerSheet: Bool = false
+    @State private var showMonthSummarySheet: Bool = false
 
     public init(
         store: LedgerStore,
@@ -207,6 +209,36 @@ public struct TransactionsView: View {
                     }
                 }
             }
+            .sheet(isPresented: $showMonthPickerSheet) {
+                YubraeYearMonthPickerSheet(
+                    initialYear: selectedYear,
+                    initialMonth: selectedMonth,
+                    palette: palette
+                ) { year, month in
+                    selectedYear = year
+                    selectedMonth = month
+                }
+                .yubraeSheetStyle(palette: palette)
+            }
+            .sheet(isPresented: $showMonthSummarySheet) {
+                let baseCur = store.settings.baseCurrency
+                let masked = store.settings.privacyMaskEnabled
+                let expText = YubraeTheme.masked(MoneyAmount.format(monthExpenseMicros, currencyCode: baseCur), isMasked: masked)
+                let incText = YubraeTheme.masked(MoneyAmount.format(monthIncomeMicros, currencyCode: baseCur), isMasked: masked)
+                let netText = YubraeTheme.masked(MoneyAmount.format(monthIncomeMicros - monthExpenseMicros, currencyCode: baseCur, showSign: true), isMasked: masked)
+                YubraeMonthSummaryDetailSheet(
+                    title: "\(String(selectedYear))年\(selectedMonth)月",
+                    currency: baseCur,
+                    expenseText: expText,
+                    incomeText: incText,
+                    balanceText: netText,
+                    transactionCount: monthTransactions.count,
+                    palette: palette
+                ) { msg in
+                    store.toastMessage = msg
+                }
+                .yubraeSheetStyle(palette: palette)
+            }
         }
     }
 
@@ -262,7 +294,7 @@ public struct TransactionsView: View {
 
         return VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 8) {
-                HStack(spacing: 12) {
+                HStack(spacing: 8) {
                     Button { shiftMonth(by: -1) } label: {
                         Image(systemName: "chevron.left")
                             .font(.subheadline.weight(.bold))
@@ -270,11 +302,27 @@ public struct TransactionsView: View {
                             .frame(width: 28, height: 28)
                             .background(Circle().fill(Color.white.opacity(0.18)))
                     }
-                    Text("\(String(selectedYear))年\(selectedMonth)月")
-                        .font(.headline.weight(.bold))
+                    .buttonStyle(.plain)
+
+                    Button {
+                        showMonthPickerSheet = true
+                    } label: {
+                        HStack(spacing: 4) {
+                            Text("\(String(selectedYear))年\(selectedMonth)月")
+                                .font(.headline.weight(.bold))
+                                .lineLimit(1)
+                                .fixedSize(horizontal: true, vertical: false)
+                            Image(systemName: "chevron.down")
+                                .font(.caption2.weight(.bold))
+                        }
                         .foregroundColor(.white)
-                        .lineLimit(1)
-                        .fixedSize(horizontal: true, vertical: false)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(Capsule().fill(Color.white.opacity(0.18)))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("选择年月")
+
                     Button { shiftMonth(by: 1) } label: {
                         Image(systemName: "chevron.right")
                             .font(.subheadline.weight(.bold))
@@ -282,6 +330,7 @@ public struct TransactionsView: View {
                             .frame(width: 28, height: 28)
                             .background(Circle().fill(Color.white.opacity(0.18)))
                     }
+                    .buttonStyle(.plain)
                 }
                 Spacer(minLength: 6)
                 Text("\(monthTransactions.count) 笔明细")
@@ -294,48 +343,66 @@ public struct TransactionsView: View {
                     .background(Capsule().fill(Color.white.opacity(0.18)))
             }
 
-            VStack(alignment: .leading, spacing: 4) {
-                Text("本月支出 (\(baseCur))")
-                    .font(.caption)
-                    .foregroundColor(.white.opacity(0.84))
-                    .lineLimit(1)
-                Text(expText)
-                    .font(.system(size: 30, weight: .bold, design: .rounded))
-                    .foregroundColor(.white)
-                    .minimumScaleFactor(0.75)
-                    .lineLimit(1)
-            }
+            Button {
+                showMonthSummarySheet = true
+            } label: {
+                VStack(alignment: .leading, spacing: 14) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack(spacing: 4) {
+                            Text("本月支出 (\(baseCur))")
+                                .font(.caption)
+                                .foregroundColor(.white.opacity(0.84))
+                                .lineLimit(1)
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 9, weight: .semibold))
+                                .foregroundColor(.white.opacity(0.68))
+                        }
+                        Text(expText)
+                            .font(.system(size: 30, weight: .bold, design: .rounded))
+                            .foregroundColor(.white)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .minimumScaleFactor(0.45)
+                            .lineLimit(1)
+                    }
 
-            HStack(spacing: 16) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("本月收入")
-                        .font(.caption2)
-                        .foregroundColor(.white.opacity(0.78))
-                        .lineLimit(1)
-                        .fixedSize(horizontal: true, vertical: false)
-                    Text(incText)
-                        .font(.subheadline.weight(.semibold).monospacedDigit())
-                        .foregroundColor(.white)
-                        .lineLimit(1)
-                        .fixedSize(horizontal: true, vertical: false)
+                    HStack(spacing: 12) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("本月收入")
+                                .font(.caption2)
+                                .foregroundColor(.white.opacity(0.78))
+                                .lineLimit(1)
+                            Text(incText)
+                                .font(.subheadline.weight(.semibold).monospacedDigit())
+                                .foregroundColor(.white)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .minimumScaleFactor(0.45)
+                                .lineLimit(1)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                        Divider()
+                            .frame(height: 24)
+                            .background(Color.white.opacity(0.3))
+
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("月度结余")
+                                .font(.caption2)
+                                .foregroundColor(.white.opacity(0.78))
+                                .lineLimit(1)
+                            Text(netText)
+                                .font(.subheadline.weight(.semibold).monospacedDigit())
+                                .foregroundColor(.white)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .minimumScaleFactor(0.45)
+                                .lineLimit(1)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
                 }
-                Divider()
-                    .frame(height: 24)
-                    .background(Color.white.opacity(0.3))
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("月度结余")
-                        .font(.caption2)
-                        .foregroundColor(.white.opacity(0.78))
-                        .lineLimit(1)
-                        .fixedSize(horizontal: true, vertical: false)
-                    Text(netText)
-                        .font(.subheadline.weight(.semibold).monospacedDigit())
-                        .foregroundColor(.white)
-                        .lineLimit(1)
-                        .fixedSize(horizontal: true, vertical: false)
-                }
-                Spacer(minLength: 0)
+                .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
+            .accessibilityLabel("查看本月收支详情")
         }
         .padding(18)
         .background(

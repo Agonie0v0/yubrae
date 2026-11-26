@@ -16,10 +16,13 @@ import com.yubrae.app.data.db.LedgerEntity
 import com.yubrae.app.data.db.ParseRuleEntity
 import com.yubrae.app.data.db.TagEntity
 import com.yubrae.app.data.db.TagTextCodec
+import com.yubrae.app.data.db.TransactionEntity
 import com.yubrae.app.data.db.TransactionType
 import com.yubrae.app.data.network.ExchangeRateApi
 import com.yubrae.app.data.repository.ExchangeRateRepositoryImpl
 import com.yubrae.app.data.repository.LedgerRepositoryImpl
+import com.yubrae.app.ui.components.CartoonCategoryIcons
+import com.yubrae.app.ui.components.KairoIcons
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import okhttp3.OkHttpClient
@@ -89,29 +92,36 @@ class DefaultSeedDataTest {
     }
 
     @Test
-    fun ensurePresetTags_seeds28TagsIn4GroupsAndPreservesExistingAndBackfillsSystemIcons() = runTest {
+    fun ensurePresetTags_seeds21TagsIn4GroupsAndPreservesCustomAndUpgradesSystemIcons() = runTest {
         val tagDao = FakeTagDao()
-        val customId = tagDao.insert(
+        val customSameNameId = tagDao.insert(
             TagEntity(name = "外卖", groupName = "自定义组", colorHex = 0xFF123456L, sortOrder = 1, isSystem = false)
         )
-        val legacySystemId = tagDao.insert(
-            TagEntity(name = "网购", groupName = "渠道平台", colorHex = 0xFF2563EBL, sortOrder = 20, isSystem = true, icon = "")
+        val redundantSystemId = tagDao.insert(
+            TagEntity(name = "公司报销", groupName = "对象账务", colorHex = 0xFF1677FFL, sortOrder = 260, isSystem = true, icon = "receipt_long")
+        )
+        val legacyFamilyId = tagDao.insert(
+            TagEntity(name = "家人", groupName = "对象账务", colorHex = 0xFFEA580CL, sortOrder = 170, isSystem = true, icon = "home")
+        )
+        val legacyStockupId = tagDao.insert(
+            TagEntity(name = "大促囤货", groupName = "场景行程", colorHex = 0xFF9333EAL, sortOrder = 100, isSystem = true, icon = "shopping_basket")
         )
 
         val added = DefaultSeedData.ensurePresetTags(tagDao)
-        assertEquals(26, added)
+        assertEquals(19, added)
 
         val all = tagDao.getAll()
-        assertEquals(28, all.size)
+        // 21 个官方标签 + 1 个用户自建的 “外卖” 标签；冗余系统标签 “公司报销” 已被无损清理
+        assertEquals(22, all.size)
+        assertFalse(all.any { it.id == redundantSystemId || (it.name == "公司报销" && it.isSystem) })
 
         val customExisting = all.first { it.name == "外卖" }
-        assertEquals(customId, customExisting.id)
+        assertEquals(customSameNameId, customExisting.id)
         assertEquals("自定义组", customExisting.groupName)
         assertEquals("", customExisting.icon)
 
-        val legacySystem = all.first { it.name == "网购" }
-        assertEquals(legacySystemId, legacySystem.id)
-        assertEquals("shopping_cart", legacySystem.icon)
+        assertEquals("family_restroom", all.first { it.id == legacyFamilyId }.icon)
+        assertEquals("add_shopping_cart", all.first { it.id == legacyStockupId }.icon)
 
         val expectedIcons = mapOf(
             "拼多多" to "loyalty",
@@ -123,30 +133,103 @@ class DefaultSeedDataTest {
             "通勤" to "subway",
             "差旅" to "luggage",
             "旅行" to "flight",
-            "聚餐" to "celebration",
-            "大促囤货" to "shopping_basket",
+            "大促囤货" to "add_shopping_cart",
             "刚需" to "verified",
-            "定期订阅" to "subscriptions",
             "分期" to "credit_card",
             "优惠立减" to "local_offer",
             "冲动消费" to "bolt",
             "大额" to "diamond",
             "自己" to "person",
-            "家人" to "home",
+            "家人" to "family_restroom",
             "伴侣" to "favorite",
-            "宠物" to "pets",
-            "请客" to "redeem",
             "AA" to "groups",
-            "公司报销" to "receipt_long",
             "可抵税" to "calculate",
-            "装修" to "build"
+            "装修" to "handyman"
         )
+        assertEquals(21, expectedIcons.size)
         expectedIcons.forEach { (name, iconKey) ->
             val tag = all.first { it.name == name }
             assertEquals("Unexpected icon key for tag $name", iconKey, tag.icon)
         }
 
         assertEquals(0, DefaultSeedData.ensurePresetTags(tagDao))
+    }
+
+    @Test
+    fun presetCategoriesAndTags_haveNoDuplicatesAndUniqueBespokeIcons() = runTest {
+        val catDao = FakeCategoryDao()
+        val tagDao = FakeTagDao()
+        DefaultSeedData.ensurePresetCategories(catDao)
+        DefaultSeedData.ensurePresetTags(tagDao)
+
+        val categories = catDao.getAll()
+        val tags = tagDao.getAll()
+
+        // 1. 数量与去重校验：25 大类 + 90 二级 = 115 分类；21 标签；分类与标签零重名
+        assertEquals(115, categories.size)
+        assertEquals(21, tags.size)
+        val catNameKeys = categories.map { it.name to it.type }.toSet()
+        assertEquals(115, catNameKeys.size)
+        val tagNames = tags.map { it.name }.toSet()
+        assertEquals(21, tagNames.size)
+        assertTrue(
+            "Category and Tag names must not collide: ${categories.map { it.name }.toSet().intersect(tagNames)}",
+            categories.map { it.name }.toSet().intersect(tagNames).isEmpty()
+        )
+
+        // 2. 全部 115 个内置分类图标键 & 卡通视觉图案 100% 唯一、零撞图
+        val catIcons = categories.map { it.icon }
+        assertTrue(catIcons.all { it.isNotBlank() && CartoonCategoryIcons.hasBespokeIcon(it) })
+        assertEquals(115, catIcons.toSet().size)
+        val catVisualVariants = catIcons.map { CartoonCategoryIcons.resolveVisualVariantId(it) }.toSet()
+        assertEquals("Expected 115 distinct cartoon drawings, got ${catVisualVariants.size}", 115, catVisualVariants.size)
+
+        // 3. 全部 21 个内置标签图标键 & Vector 图标 100% 唯一、全部适配卡通绘与标签库
+        val tagIcons = tags.map { it.icon }
+        assertTrue(tagIcons.all { it.isNotBlank() && CartoonCategoryIcons.hasBespokeIcon(it) })
+        assertEquals(21, tagIcons.toSet().size)
+        assertEquals(21, tagIcons.mapNotNull { KairoIcons.tagIcon(it) }.toSet().size)
+    }
+
+    @Test
+    fun ensurePresetCategories_upgradesLegacySystemIconsPreservingUserChoiceAndMigratingRemovedOtherMisc() = runTest {
+        val categoryDao = FakeCategoryDao()
+        val transactionDao = FakeTransactionDao()
+
+        val mealsSubId = categoryDao.insert(
+            CategoryEntity(parentId = null, name = "三餐外食", type = TransactionType.EXPENSE, icon = "lunch_dining", isSystem = true)
+        )
+        val customIconCatId = categoryDao.insert(
+            CategoryEntity(parentId = null, name = "烟酒茶", type = TransactionType.EXPENSE, icon = "star", isSystem = true)
+        )
+        val otherExpenseParentId = categoryDao.insert(
+            CategoryEntity(parentId = null, name = "其他支出", type = TransactionType.EXPENSE, icon = "more_horiz", isSystem = true)
+        )
+        val legacyOtherMiscId = categoryDao.insert(
+            CategoryEntity(parentId = otherExpenseParentId, name = "其他杂项", type = TransactionType.EXPENSE, icon = "category", isSystem = true)
+        )
+        val txId = transactionDao.insert(
+            TransactionEntity(
+                type = TransactionType.EXPENSE,
+                timestamp = 1_760_000_000_000L,
+                origAmountMicros = 1_000_000L,
+                origCurrency = "CNY",
+                accountId = 1L,
+                accountAmountMicros = 1_000_000L,
+                accountCurrency = "CNY",
+                categoryId = legacyOtherMiscId,
+                merchant = "测试杂项消费"
+            )
+        )
+
+        DefaultSeedData.ensurePresetCategories(categoryDao, transactionDao)
+
+        // 旧系统默认 icon 被无损升级；用户手动修改过的 icon 原样保留；其他杂项被清理且交易迁移到其他支出
+        assertEquals("ramen_dining", categoryDao.getById(mealsSubId)!!.icon)
+        assertEquals("star", categoryDao.getById(customIconCatId)!!.icon)
+        assertEquals(null, categoryDao.getById(legacyOtherMiscId))
+        assertEquals(otherExpenseParentId, transactionDao.getById(txId)!!.categoryId)
+        assertEquals(115, categoryDao.getAll().size)
     }
 
     @Test
@@ -281,7 +364,7 @@ class DefaultSeedDataTest {
 
         val (catsAdded, tagsAdded) = repo.ensurePresetCatalogSeeded()
         assertTrue(catsAdded > 0)
-        assertEquals(28, tagsAdded)
+        assertEquals(21, tagsAdded)
         assertEquals(0 to 0, repo.ensurePresetCatalogSeeded())
 
         val id1 = repo.saveTag(TagEntity(name = "手冲咖啡", groupName = "日常", colorHex = 0xFFEA580CL))
@@ -330,9 +413,10 @@ class DefaultSeedDataTest {
         )
         assertEquals(listOf(secondId), ledgerDao.getAll().map { it.id })
         assertFalse(ledgerDao.getAll().any { it.name == "默认账本" })
-        assertEquals(28, tagDao.getAll().size)
+        assertEquals(21, tagDao.getAll().size)
         assertTrue(tagDao.getAll().all { it.icon.isNotBlank() })
-        assertEquals("delivery_dining", tagDao.getAll().first { it.name == "外卖" }.icon)
+        assertEquals("loyalty", tagDao.getAll().first { it.name == "拼多多" }.icon)
+        assertEquals("family_restroom", tagDao.getAll().first { it.name == "家人" }.icon)
     }
 
     @Test

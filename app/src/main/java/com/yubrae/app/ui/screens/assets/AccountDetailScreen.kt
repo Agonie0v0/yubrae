@@ -133,7 +133,7 @@ fun AccountDetailScreen(
     onBack: () -> Unit,
     onQuickRecord: () -> Unit,
     onQuickTransfer: () -> Unit,
-    onCalibrateBalance: (Long, String) -> Unit,
+    onCalibrateBalance: (Long, String, Boolean) -> Unit,
     onEditAccount: (AccountEntity) -> Unit,
     onToggleArchive: (Boolean) -> Unit,
     onDeleteAccount: (Long?) -> Unit = {},
@@ -438,8 +438,8 @@ fun AccountDetailScreen(
         CalibrateBalanceDialog(
             account = account,
             privacyMasked = privacyMasked,
-            onConfirm = { targetMicros, note ->
-                onCalibrateBalance(targetMicros, note)
+            onConfirm = { targetMicros, note, createRecord ->
+                onCalibrateBalance(targetMicros, note, createRecord)
                 showCalibrateDialog = false
             },
             onDismiss = { showCalibrateDialog = false }

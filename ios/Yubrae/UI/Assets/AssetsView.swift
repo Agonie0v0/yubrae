@@ -775,7 +775,7 @@ private struct AccountEditorSheet: View {
                         Button {
                             showCalibration = true
                         } label: {
-                            Label("余额校准（自动生成差额校准记录）", systemImage: "slider.horizontal.3")
+                            Label("余额校准", systemImage: "slider.horizontal.3")
                         }
                         Button(role: .destructive) {
                             showDeleteConfirm = true
@@ -863,6 +863,7 @@ private struct BalanceCalibrationSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var targetBalanceText: String
     @State private var noteText: String = "余额校准"
+    @State private var createRecord: Bool = true
 
     init(store: LedgerStore, account: AccountDto) {
         self.store = store
@@ -892,19 +893,26 @@ private struct BalanceCalibrationSheet: View {
                             .fontWeight(.semibold)
                     }
                 }
-                Section("目标实际余额") {
+                Section {
                     TextField("输入当前实际余额", text: $targetBalanceText)
                         .keyboardType(.numbersAndPunctuation)
-                    TextField("备注", text: $noteText)
                     if let delta = deltaMicros {
                         HStack {
                             Text("差额变动")
                             Spacer()
                             Text(MoneyAmount.format(delta, currencyCode: account.currencyCode, showSign: true, showCurrencyCode: true))
-                                .foregroundColor(delta >= 0 ? .green : .red)
+                                .foregroundColor(delta > 0 ? .green : (delta < 0 ? .red : .secondary))
                                 .fontWeight(.semibold)
                         }
                     }
+                    Toggle("生成差额变动记录", isOn: $createRecord)
+                    if createRecord {
+                        TextField("备注", text: $noteText)
+                    }
+                } header: {
+                    Text("目标实际余额")
+                } footer: {
+                    Text(createRecord ? "将在流水中生成一条余额校准记录，删除该记录可回滚账户余额。" : "关闭后将直接修改账户余额，不写入流水明细。")
                 }
             }
             .navigationTitle("余额校准")
@@ -917,8 +925,15 @@ private struct BalanceCalibrationSheet: View {
                     Button("确认校准") {
                         guard let target = MoneyAmount.parseToMicros(targetBalanceText) else { return }
                         do {
-                            _ = try store.calibrateAccountBalance(accountId: account.id, targetBalanceMicros: target, note: noteText)
-                            store.toastMessage = "已完成「\(account.name)」余额校准"
+                            _ = try store.calibrateAccountBalance(
+                                accountId: account.id,
+                                targetBalanceMicros: target,
+                                note: noteText,
+                                createRecord: createRecord
+                            )
+                            store.toastMessage = createRecord
+                                ? "已完成「\(account.name)」余额校准并生成记录"
+                                : "已直接更新「\(account.name)」余额"
                             dismiss()
                         } catch {
                             store.lastErrorMessage = error.localizedDescription
