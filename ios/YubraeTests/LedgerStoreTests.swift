@@ -296,11 +296,12 @@ final class LedgerStoreTests: XCTestCase {
         }
     }
 
+    @MainActor
     func testDeleteAccountCascadeRollbackAndMigrationAndAllowDeletingAllDefaults() throws {
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("yubrae-acc-del-\(UUID().uuidString)", isDirectory: true)
+        let dir = makeTempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
-        let store = LedgerStore(baseDirectory: dir, enableSeedData: true)
+        let tz = TimeZone(secondsFromGMT: 8 * 3600)!
+        let store = LedgerStore(storageDirectory: dir, useKeychain: false, timeZone: tz)
 
         XCTAssertFalse(store.accounts.isEmpty)
         let wechat = try XCTUnwrap(store.accounts.first { $0.name == "微信零钱" })
@@ -349,7 +350,7 @@ final class LedgerStoreTests: XCTestCase {
         }
         XCTAssertTrue(store.accounts.isEmpty)
 
-        let reopened = LedgerStore(baseDirectory: dir, enableSeedData: true)
+        let reopened = LedgerStore(storageDirectory: dir, useKeychain: false, timeZone: tz)
         XCTAssertTrue(reopened.accounts.isEmpty)
     }
 }

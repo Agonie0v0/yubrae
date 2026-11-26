@@ -654,8 +654,8 @@ public final class LedgerStore: ObservableObject {
                         )
                         transactions[i].accountAmountMicros = converted
                         transactions[i].rateToAccountMicros = MoneyAmount.computeRate(
-                            fromAmountMicros: transactions[i].origAmountMicros,
-                            toAmountMicros: converted
+                            origAmountMicros: transactions[i].origAmountMicros,
+                            targetAmountMicros: converted
                         )
                     }
                     changed = true
