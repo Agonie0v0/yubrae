@@ -275,7 +275,9 @@ data class ParsedBillDraft(
     val parserUsed: String = "LOCAL_RULE",
     val externalOrderNo: String = "",
     val manualAccountAmountMicros: Long? = null,
-    val tags: String = ""
+    val tags: String = "",
+    val toAccountId: Long? = null,
+    val toAccountHint: String = ""
 )
 
 data class CaptureHandleResult(
@@ -311,6 +313,13 @@ interface CaptureEngine {
 
     suspend fun handleIncomingCapture(input: CaptureInput, showFloatingPrompt: Boolean = true): CaptureHandleResult
     suspend fun testParseText(title: String, content: String, sourcePackage: String = "*", allowLlm: Boolean = false): Result<ParsedBillDraft?>
+    suspend fun testParseText(
+        title: String,
+        content: String,
+        sourcePackage: String = "*",
+        allowLlm: Boolean = false,
+        channel: String = CaptureChannel.NOTIFICATION
+    ): Result<ParsedBillDraft?> = testParseText(title, content, sourcePackage, allowLlm)
     suspend fun testLlmConnection(): Result<String>
     suspend fun promoteLogToAliasOrRule(logId: Long, accountId: Long, matchPattern: String, matchType: String): Result<Unit>
 

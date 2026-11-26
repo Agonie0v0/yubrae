@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "version": "2026.11.26.1",
+  "updatedAt": "2026-11-26T03:27:56Z",
+  "minAppVersion": "1.2.2",
+  "rulesUrl": "https://raw.githubusercontent.com/Agonie0v0/yubrae/main/rules/rules.zip",
+  "sha256": "64faf4d4a4ebe24888d0dfccea9527104db76ada9028020b0276941d3285f6cf",
+  "sizeBytes": 141211,
+  "ruleCount": 128,
+  "smsCount": 50,
+  "noticeCount": 57,
+  "ocrCount": 21,
+  "changelog": "融合 AutoAccounting 短信/通知/屏幕识别规则与智能分类词库"
+}

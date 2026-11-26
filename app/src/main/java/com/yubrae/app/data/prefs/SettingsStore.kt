@@ -94,7 +94,12 @@ data class AppSettings(
     val autoCheckUpdateEnabled: Boolean = true,
     val lastUpdateCheckMillis: Long = 0L,
     val ignoredUpdateTag: String = "",
-    val updateMirrorPrefix: String = ""
+    val updateMirrorPrefix: String = "",
+    val jsRulesEnabled: Boolean = true,
+    val jsOcrFallbackEnabled: Boolean = true,
+    val jsCategoryFallbackEnabled: Boolean = true,
+    val cloudRuleManifestUrl: String = "",
+    val lastRuleSyncMillis: Long = 0L
 )
 
 class SettingsStore(private val context: Context) {
@@ -140,6 +145,11 @@ class SettingsStore(private val context: Context) {
         val LAST_UPDATE_CHECK = longPreferencesKey("last_update_check")
         val IGNORED_UPDATE_TAG = stringPreferencesKey("ignored_update_tag")
         val UPDATE_MIRROR_PREFIX = stringPreferencesKey("update_mirror_prefix")
+        val JS_RULES_ENABLED = booleanPreferencesKey("js_rules_enabled")
+        val JS_OCR_FALLBACK_ENABLED = booleanPreferencesKey("js_ocr_fallback_enabled")
+        val JS_CATEGORY_FALLBACK_ENABLED = booleanPreferencesKey("js_category_fallback_enabled")
+        val CLOUD_RULE_MANIFEST_URL = stringPreferencesKey("cloud_rule_manifest_url")
+        val LAST_RULE_SYNC = longPreferencesKey("last_rule_sync")
     }
 
     val settingsFlow: Flow<AppSettings> = context.kairoDataStore.data.map { prefs ->
@@ -199,7 +209,12 @@ class SettingsStore(private val context: Context) {
             autoCheckUpdateEnabled = prefs[Keys.AUTO_CHECK_UPDATE] ?: true,
             lastUpdateCheckMillis = prefs[Keys.LAST_UPDATE_CHECK] ?: 0L,
             ignoredUpdateTag = prefs[Keys.IGNORED_UPDATE_TAG] ?: "",
-            updateMirrorPrefix = prefs[Keys.UPDATE_MIRROR_PREFIX] ?: ""
+            updateMirrorPrefix = prefs[Keys.UPDATE_MIRROR_PREFIX] ?: "",
+            jsRulesEnabled = prefs[Keys.JS_RULES_ENABLED] ?: true,
+            jsOcrFallbackEnabled = prefs[Keys.JS_OCR_FALLBACK_ENABLED] ?: true,
+            jsCategoryFallbackEnabled = prefs[Keys.JS_CATEGORY_FALLBACK_ENABLED] ?: true,
+            cloudRuleManifestUrl = prefs[Keys.CLOUD_RULE_MANIFEST_URL] ?: "",
+            lastRuleSyncMillis = prefs[Keys.LAST_RULE_SYNC] ?: 0L
         )
     }
 
@@ -253,6 +268,11 @@ class SettingsStore(private val context: Context) {
             prefs[Keys.LAST_UPDATE_CHECK] = settings.lastUpdateCheckMillis
             prefs[Keys.IGNORED_UPDATE_TAG] = settings.ignoredUpdateTag
             prefs[Keys.UPDATE_MIRROR_PREFIX] = settings.updateMirrorPrefix
+            prefs[Keys.JS_RULES_ENABLED] = settings.jsRulesEnabled
+            prefs[Keys.JS_OCR_FALLBACK_ENABLED] = settings.jsOcrFallbackEnabled
+            prefs[Keys.JS_CATEGORY_FALLBACK_ENABLED] = settings.jsCategoryFallbackEnabled
+            prefs[Keys.CLOUD_RULE_MANIFEST_URL] = settings.cloudRuleManifestUrl
+            prefs[Keys.LAST_RULE_SYNC] = settings.lastRuleSyncMillis
         }
     }
 
@@ -266,5 +286,9 @@ class SettingsStore(private val context: Context) {
 
     suspend fun markUpdateChecked(epochMillis: Long = System.currentTimeMillis()) {
         context.kairoDataStore.edit { it[Keys.LAST_UPDATE_CHECK] = epochMillis }
+    }
+
+    suspend fun markRuleSynced(epochMillis: Long = System.currentTimeMillis()) {
+        context.kairoDataStore.edit { it[Keys.LAST_RULE_SYNC] = epochMillis }
     }
 }

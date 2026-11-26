@@ -147,6 +147,7 @@ dependencies {
     implementation("net.sourceforge.jexcelapi:jxl:2.6.12") {
         exclude(group = "log4j", module = "log4j")
     }
+    implementation("org.mozilla:rhino:1.7.15")
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")

@@ -82,6 +82,12 @@ class KairoNotificationListenerService : NotificationListenerService() {
         container: com.yubrae.app.AppContainer
     ): Boolean {
         if (pkg in DEFAULT_WATCHED_PACKAGES) return true
+        val dynamicNoticePackages = runCatching {
+            container.cloudRuleRepository.currentWatchedNoticePackages()
+        }.getOrDefault(emptySet())
+        if (pkg in dynamicNoticePackages || dynamicNoticePackages.any { it.equals(pkg, ignoreCase = true) }) {
+            return true
+        }
         val db = container.database
         val hasAlias = runCatching {
             db.accountAliasDao().getEnabled().any {
@@ -154,11 +160,11 @@ class KairoNotificationListenerService : NotificationListenerService() {
         private val WECHAT_GROUP_PREFIX_REGEX = Regex("^\\[\\d+条\\]")
 
         private val WECHAT_PAYMENT_TITLES = setOf(
-            "微信支付", "微信收款", "微信收款助手", "微信收款商业版", "微信转账", "服务通知", "零钱通"
+            "微信支付", "微信收款", "微信收款助手", "微信收款商业版", "微信转账", "服务通知", "零钱通", "退款发起通知"
         )
 
         private val WECHAT_PAYMENT_CONTENT_CUES = listOf(
-            "微信支付", "付款", "支付成功", "收款", "已存入零钱", "二维码收款", "赞赏码", "扣款成功"
+            "微信支付", "付款", "支付成功", "收款", "已存入零钱", "二维码收款", "赞赏码", "扣款成功", "已扣费", "退款金额"
         )
 
         private val IGNORED_SYSTEM_PACKAGES = setOf(

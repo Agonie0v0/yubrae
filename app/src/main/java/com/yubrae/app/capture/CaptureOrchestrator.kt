@@ -1,6 +1,8 @@
 package com.yubrae.app.capture
 
 import android.content.Context
+import com.yubrae.app.capture.rules.SandboxedJsRuleEngine
+import com.yubrae.app.capture.screen.ScreenBillParser
 import com.yubrae.app.capture.screen.ScreenPageKind
 import com.yubrae.app.capture.screen.ScreenParseOutcome
 import com.yubrae.app.capture.screen.ScreenSnapshot
@@ -77,7 +79,8 @@ class CaptureOrchestrator(
         accountCurrency: String,
         sourceBadge: String,
         settings: AppSettings
-    ) -> Unit)? = null
+    ) -> Unit)? = null,
+    private val jsRuleEngine: SandboxedJsRuleEngine? = null
 ) : CaptureEngine {
 
     constructor(
@@ -85,7 +88,8 @@ class CaptureOrchestrator(
         db: KairoDatabase,
         settingsStore: SettingsStore,
         okHttpClient: OkHttpClient,
-        ledgerService: LedgerService
+        ledgerService: LedgerService,
+        jsRuleEngine: SandboxedJsRuleEngine? = null
     ) : this(
         rawCaptureLogDao = db.rawCaptureLogDao(),
         accountAliasDao = db.accountAliasDao(),
@@ -120,7 +124,8 @@ class CaptureOrchestrator(
                 accountCurrency = accountCurrency,
                 sourceBadge = sourceBadge
             )
-        }
+        },
+        jsRuleEngine = jsRuleEngine
     )
 
     private val captureMutex = Mutex()
@@ -176,19 +181,20 @@ class CaptureOrchestrator(
             return CaptureHandleResult(logId = logId, status = ParseStatus.IGNORED, message = msg)
         }
 
-        // 3. 本地规则 + 启发式兜底解析
+        // 3. 本地规则优先级：用户自定义正则 -> JS 规则引擎 -> 内置正则 -> 启发式兜底
         val rules = parseRuleDao.getEnabled()
         val aliases = accountAliasDao.getEnabled()
         val allAccounts = accountDao.getAll()
         val activeAccounts = allAccounts.filter { !it.archived }.ifEmpty { allAccounts }
         val categories = categoryDao.getAll()
 
-        var draft = localRuleParser.parse(
+        var draft = parseLocalDraft(
             input = input,
             rules = rules,
             aliases = aliases,
-            accounts = activeAccounts,
-            categories = categories
+            activeAccounts = activeAccounts,
+            categories = categories,
+            settings = settings
         )
         var matchedStatus = ParseStatus.MATCHED_LOCAL
         var llmErrorMessage: String? = null
@@ -236,7 +242,8 @@ class CaptureOrchestrator(
             activeAccounts = activeAccounts,
             categories = categories,
             settings = settings,
-            showFloatingPrompt = showFloatingPrompt
+            showFloatingPrompt = showFloatingPrompt,
+            aliases = aliases
         )
     }
 
@@ -330,7 +337,8 @@ class CaptureOrchestrator(
             activeAccounts = activeAccounts,
             categories = categories,
             settings = settings,
-            showFloatingPrompt = showFloatingPrompt
+            showFloatingPrompt = showFloatingPrompt,
+            aliases = aliases
         )
     }
 
@@ -406,11 +414,36 @@ class CaptureOrchestrator(
 
         val allAccounts = accountDao.getAll()
         val activeAccounts = allAccounts.filter { !it.archived }.ifEmpty { allAccounts }
+        val aliases = accountAliasDao.getEnabled()
         val categories = categoryDao.getAll()
 
         var draft = outcome.draft
         var matchedStatus = ParseStatus.MATCHED_LOCAL
         var llmErrorMessage: String? = null
+
+        if (draft == null &&
+            outcome.ignoredReason.isBlank() &&
+            settings.jsRulesEnabled &&
+            settings.jsOcrFallbackEnabled &&
+            jsRuleEngine != null
+        ) {
+            val ocrText = snapshot.texts.joinToString("\n")
+            if (ocrText.isNotBlank()) {
+                val ocrDraft = jsRuleEngine.parseScreenOcr(
+                    packageName = snapshot.packageName,
+                    screenText = ocrText,
+                    timestampMillis = snapshot.capturedAtMillis,
+                    aliases = aliases,
+                    accounts = activeAccounts,
+                    categories = categories,
+                    enableCategoryJs = settings.jsCategoryFallbackEnabled
+                )
+                if (ocrDraft != null) {
+                    draft = ocrDraft
+                    matchedStatus = ParseStatus.MATCHED_LOCAL
+                }
+            }
+        }
 
         if (draft == null && outcome.shouldFallbackToLlm && settings.llmEnabled && settings.llmApiKey.isNotBlank()) {
             val screenInput = CaptureInput(
@@ -486,7 +519,8 @@ class CaptureOrchestrator(
             screenOrderNo = resolvedDraft.externalOrderNo.ifBlank { cleanOrderNo },
             screenDedupFingerprint = outcome.dedupFingerprint,
             capturedAtMillis = snapshot.capturedAtMillis,
-            sourceBadge = sourceBadge
+            sourceBadge = sourceBadge,
+            aliases = aliases
         )
     }
 
@@ -506,7 +540,8 @@ class CaptureOrchestrator(
         screenOrderNo: String = "",
         screenDedupFingerprint: String = "",
         capturedAtMillis: Long = initialLog.capturedAt,
-        sourceBadge: String = ""
+        sourceBadge: String = "",
+        aliases: List<AccountAliasEntity> = emptyList()
     ): CaptureHandleResult {
         val accountsById = activeAccounts.associateBy { it.id }
         val categoriesById = categories.associateBy { it.id }
@@ -537,12 +572,28 @@ class CaptureOrchestrator(
         }
 
         val effectiveOrderNo = screenOrderNo.trim().ifBlank { draft.externalOrderNo.trim() }
+        val effectiveAliases = if (aliases.isNotEmpty()) {
+            aliases
+        } else if (draft.type == TransactionType.TRANSFER && draft.toAccountId == null && draft.toAccountHint.isNotBlank()) {
+            accountAliasDao.getEnabled()
+        } else {
+            emptyList()
+        }
+        val transferResolution = resolveTransferSemantics(
+            draft = draft,
+            resolvedFromId = resolvedAccountId,
+            activeAccounts = activeAccounts,
+            accountsById = accountsById,
+            aliases = effectiveAliases
+        )
+        val resolvedFromAccountId = transferResolution.fromAccountId
         val finalDraft = draft.copy(
-            accountId = resolvedAccountId,
+            type = transferResolution.type,
+            accountId = resolvedFromAccountId,
+            toAccountId = transferResolution.toAccountId,
             externalOrderNo = effectiveOrderNo
         )
         val draftJson = draftToJson(finalDraft, effectiveOrderNo, screenDedupFingerprint, screenPageKind)
-        val finalNote = appendOrderNoIfMissing(finalDraft.note, effectiveOrderNo)
 
         return captureMutex.withLock {
             // 1. 强单号防重（若关联交易仍存在，绝不重复记账或弹窗；若用户已手工删掉则允许重新补记）
@@ -775,14 +826,30 @@ class CaptureOrchestrator(
                 )
             }
 
-            val effectiveDraft = applyHistoricalMerchantCategoryMemory(
-                draft = finalDraft,
-                categoriesById = categoriesById
-            )
+            val effectiveDraft = if (finalDraft.type == TransactionType.TRANSFER) {
+                finalDraft
+            } else {
+                applyHistoricalMerchantCategoryMemory(
+                    draft = finalDraft,
+                    categoriesById = categoriesById
+                )
+            }
             val effectiveDraftJson = if (effectiveDraft != finalDraft) {
                 draftToJson(effectiveDraft, effectiveOrderNo, screenDedupFingerprint, screenPageKind)
             } else {
                 draftJson
+            }
+            val noteWithOrder = appendOrderNoIfMissing(effectiveDraft.note, effectiveOrderNo)
+            val finalNote = if (transferResolution.degradedToHintTag.isNotBlank() &&
+                !noteWithOrder.contains(transferResolution.degradedToHintTag)
+            ) {
+                if (noteWithOrder.isBlank()) {
+                    transferResolution.degradedToHintTag
+                } else {
+                    "$noteWithOrder ${transferResolution.degradedToHintTag}"
+                }
+            } else {
+                noteWithOrder
             }
 
             val shouldPromptFloating = showFloatingPrompt && settings.floatingConfirmEnabled
@@ -799,8 +866,9 @@ class CaptureOrchestrator(
                 timestamp = effectiveDraft.timestamp,
                 origAmountMicros = effectiveDraft.origAmountMicros,
                 origCurrency = effectiveDraft.origCurrency,
-                accountId = resolvedAccountId,
+                accountId = resolvedFromAccountId,
                 manualAccountAmountMicros = effectiveDraft.manualAccountAmountMicros,
+                toAccountId = if (effectiveDraft.type == TransactionType.TRANSFER) effectiveDraft.toAccountId else null,
                 categoryId = effectiveDraft.categoryId,
                 merchant = effectiveDraft.merchant,
                 note = finalNote,
@@ -824,7 +892,7 @@ class CaptureOrchestrator(
                         )
                     )
                     if (shouldPromptFloating) {
-                        val accountName = accountsById[resolvedAccountId]?.name.orEmpty()
+                        val accountName = accountsById[resolvedFromAccountId]?.name.orEmpty()
                         runCatching {
                             if (richFloatingPromptLauncher != null) {
                                 richFloatingPromptLauncher.invoke(
@@ -877,31 +945,128 @@ class CaptureOrchestrator(
         content: String,
         sourcePackage: String,
         allowLlm: Boolean
+    ): Result<ParsedBillDraft?> = testParseText(
+        title = title,
+        content = content,
+        sourcePackage = sourcePackage,
+        allowLlm = allowLlm,
+        channel = CaptureChannel.NOTIFICATION
+    )
+
+    override suspend fun testParseText(
+        title: String,
+        content: String,
+        sourcePackage: String,
+        allowLlm: Boolean,
+        channel: String
     ): Result<ParsedBillDraft?> {
+        val settings = runCatching { settingsProvider() }.getOrDefault(AppSettings())
+        val aliases = accountAliasDao.getEnabled()
+        val allAccounts = accountDao.getAll()
+        val activeAccounts = allAccounts.filter { !it.archived }.ifEmpty { allAccounts }
+        val categories = categoryDao.getAll()
+        val now = System.currentTimeMillis()
+
+        if (channel.equals(CaptureChannel.SCREEN, ignoreCase = true)) {
+            val contentLines = content.lines()
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+            val screenLines = contentLines.ifEmpty {
+                title.trim().takeIf { it.isNotEmpty() }?.let { listOf(it) } ?: emptyList()
+            }
+            if (screenLines.isEmpty()) {
+                return Result.success(null)
+            }
+
+            val screenParser = ScreenBillParser(localRuleParser)
+            val snapshot = ScreenSnapshot(
+                packageName = sourcePackage,
+                className = "",
+                texts = screenLines,
+                capturedAtMillis = now
+            )
+            var outcome = screenParser.parse(
+                snapshot = snapshot,
+                aliases = aliases,
+                accounts = activeAccounts,
+                categories = categories
+            )
+            if (outcome.draft != null) {
+                return Result.success(outcome.draft)
+            }
+
+            val cleanTitle = title.trim()
+            if (outcome.ignoredReason.isBlank() &&
+                cleanTitle.isNotEmpty() &&
+                contentLines.isNotEmpty() &&
+                !contentLines.contains(cleanTitle)
+            ) {
+                val withTitleOutcome = screenParser.parse(
+                    snapshot = snapshot.copy(texts = listOf(cleanTitle) + contentLines),
+                    aliases = aliases,
+                    accounts = activeAccounts,
+                    categories = categories
+                )
+                if (withTitleOutcome.draft != null) {
+                    return Result.success(withTitleOutcome.draft)
+                }
+                if (withTitleOutcome.ignoredReason.isNotBlank()) {
+                    outcome = withTitleOutcome
+                }
+            }
+
+            if (outcome.ignoredReason.isBlank() &&
+                settings.jsRulesEnabled &&
+                settings.jsOcrFallbackEnabled &&
+                jsRuleEngine != null
+            ) {
+                val ocrDraft = jsRuleEngine.parseScreenOcr(
+                    packageName = sourcePackage,
+                    screenText = screenLines.joinToString("\n"),
+                    timestampMillis = now,
+                    aliases = aliases,
+                    accounts = activeAccounts,
+                    categories = categories,
+                    enableCategoryJs = settings.jsCategoryFallbackEnabled
+                )
+                if (ocrDraft != null) {
+                    return Result.success(ocrDraft)
+                }
+            }
+
+            if (!allowLlm || outcome.ignoredReason.isNotBlank()) {
+                return Result.success(null)
+            }
+            val screenInput = CaptureInput(
+                channel = CaptureChannel.SCREEN,
+                sourcePackage = sourcePackage,
+                title = title,
+                content = screenLines.joinToString("\n"),
+                timestamp = now
+            )
+            return llmBillParser.parse(screenInput, settings, activeAccounts, categories)
+        }
+
         if (localRuleParser.isNoise(title, content)) {
             return Result.success(null)
         }
 
         val rules = parseRuleDao.getEnabled()
-        val aliases = accountAliasDao.getEnabled()
-        val allAccounts = accountDao.getAll()
-        val activeAccounts = allAccounts.filter { !it.archived }.ifEmpty { allAccounts }
-        val categories = categoryDao.getAll()
-
         val input = CaptureInput(
-            channel = CaptureChannel.NOTIFICATION,
+            channel = channel,
             sourcePackage = sourcePackage,
             title = title,
             content = content,
-            timestamp = System.currentTimeMillis()
+            timestamp = now
         )
 
-        val localDraft = localRuleParser.parse(
+        val localDraft = parseLocalDraft(
             input = input,
             rules = rules,
             aliases = aliases,
-            accounts = activeAccounts,
-            categories = categories
+            activeAccounts = activeAccounts,
+            categories = categories,
+            settings = settings
         )
         if (localDraft != null) {
             return Result.success(localDraft)
@@ -911,7 +1076,6 @@ class CaptureOrchestrator(
             return Result.success(null)
         }
 
-        val settings = settingsProvider()
         return llmBillParser.parse(input, settings, activeAccounts, categories)
     }
 
@@ -982,6 +1146,179 @@ class CaptureOrchestrator(
     override suspend fun inspectPermissions(): DevicePermissionReport = permissionInspector()
 
     override suspend fun tryRootGrantPermissions(): Result<String> = rootGranter()
+
+    private fun parseLocalDraft(
+        input: CaptureInput,
+        rules: List<ParseRuleEntity>,
+        aliases: List<AccountAliasEntity>,
+        activeAccounts: List<AccountEntity>,
+        categories: List<CategoryEntity>,
+        settings: AppSettings
+    ): ParsedBillDraft? {
+        val customRules = rules.filter { !it.isBuiltIn }
+        if (customRules.isNotEmpty()) {
+            localRuleParser.parseExplicitRules(
+                input = input,
+                rules = customRules,
+                aliases = aliases,
+                accounts = activeAccounts,
+                categories = categories
+            )?.let { return it }
+        }
+
+        if (settings.jsRulesEnabled && jsRuleEngine != null) {
+            jsRuleEngine.parseIncoming(
+                input = input,
+                aliases = aliases,
+                accounts = activeAccounts,
+                categories = categories,
+                enableCategoryJs = settings.jsCategoryFallbackEnabled
+            )?.let { return it }
+        }
+
+        val builtInRules = rules.filter { it.isBuiltIn }
+        if (builtInRules.isNotEmpty()) {
+            localRuleParser.parseExplicitRules(
+                input = input,
+                rules = builtInRules,
+                aliases = aliases,
+                accounts = activeAccounts,
+                categories = categories
+            )?.let { return it }
+        }
+
+        return localRuleParser.parseHeuristicallyOnly(
+            input = input,
+            aliases = aliases,
+            accounts = activeAccounts,
+            categories = categories
+        )
+    }
+
+    private data class TransferResolution(
+        val type: String,
+        val fromAccountId: Long,
+        val toAccountId: Long?,
+        val degradedToHintTag: String = ""
+    )
+
+    private fun resolveTransferSemantics(
+        draft: ParsedBillDraft,
+        resolvedFromId: Long,
+        activeAccounts: List<AccountEntity>,
+        accountsById: Map<Long, AccountEntity>,
+        aliases: List<AccountAliasEntity>
+    ): TransferResolution {
+        if (draft.type != TransactionType.TRANSFER) {
+            return TransferResolution(
+                type = draft.type,
+                fromAccountId = resolvedFromId,
+                toAccountId = null
+            )
+        }
+
+        val resolvedToId = draft.toAccountId?.takeIf { it in accountsById }
+            ?: draft.toAccountHint.takeIf { it.isNotBlank() }?.let { hint ->
+                resolveStrictAccountByHint(hint, activeAccounts, aliases)
+            }
+
+        var fromId = resolvedFromId
+        if (resolvedToId != null && resolvedToId == fromId && draft.accountHint.isBlank()) {
+            val altFromId = activeAccounts.firstOrNull {
+                it.id != resolvedToId && it.currencyCode.equals(draft.origCurrency, ignoreCase = true)
+            }?.id ?: activeAccounts.firstOrNull { it.id != resolvedToId }?.id
+            if (altFromId != null) {
+                fromId = altFromId
+            }
+        }
+
+        if (resolvedToId != null && fromId != resolvedToId) {
+            return TransferResolution(
+                type = TransactionType.TRANSFER,
+                fromAccountId = fromId,
+                toAccountId = resolvedToId
+            )
+        }
+
+        val cleanHint = draft.toAccountHint.trim()
+        val fallbackTag = if (cleanHint.isNotBlank()) "[转入:$cleanHint]" else ""
+        return TransferResolution(
+            type = TransactionType.EXPENSE,
+            fromAccountId = resolvedFromId,
+            toAccountId = null,
+            degradedToHintTag = fallbackTag
+        )
+    }
+
+    private fun resolveStrictAccountByHint(
+        hint: String,
+        accounts: List<AccountEntity>,
+        aliases: List<AccountAliasEntity>
+    ): Long? {
+        val cleanHint = hint.trim()
+        if (cleanHint.isEmpty() || accounts.isEmpty()) return null
+
+        // 1. 精确匹配账户名
+        accounts.firstOrNull { it.name.equals(cleanHint, ignoreCase = true) }?.let { return it.id }
+
+        // 2. 账户名包含提示词
+        accounts.firstOrNull { it.name.contains(cleanHint, ignoreCase = true) }?.let { return it.id }
+
+        // 3. 别名严格匹配（不回退到 accounts.firstOrNull()）
+        val activeIds = accounts.map { it.id }.toSet()
+        val enabledAliases = aliases
+            .filter { it.enabled && it.accountId in activeIds }
+            .sortedWith(compareByDescending<AccountAliasEntity> { it.priority }.thenBy { it.id })
+
+        val cardLast4 = localRuleParser.extractAccountHint(cleanHint).ifBlank {
+            if (cleanHint.length == 4 && cleanHint.all { it.isDigit() }) cleanHint else ""
+        }
+        if (cardLast4.isNotBlank()) {
+            val last4Regex = Regex("(?<!\\d)${Regex.escape(cardLast4)}(?!\\d)")
+            for (alias in enabledAliases) {
+                if (!alias.matchType.equals(AliasMatchType.CARD_LAST4, ignoreCase = true)) continue
+                val pattern = alias.pattern.trim()
+                if (pattern.isNotEmpty() &&
+                    (cardLast4.equals(pattern, ignoreCase = true) || last4Regex.containsMatchIn(cleanHint))
+                ) {
+                    return alias.accountId
+                }
+            }
+            accounts.firstOrNull { last4Regex.containsMatchIn(it.name) }?.let { return it.id }
+        }
+
+        for (alias in enabledAliases) {
+            val pattern = alias.pattern.trim()
+            if (pattern.isEmpty()) continue
+            val matched = when (alias.matchType.uppercase(Locale.ROOT)) {
+                AliasMatchType.REGEX -> runCatching {
+                    Regex(pattern, RegexOption.IGNORE_CASE).containsMatchIn(cleanHint)
+                }.getOrDefault(false)
+                AliasMatchType.KEYWORD -> pattern.equals(cleanHint, ignoreCase = true) ||
+                    (cleanHint.contains(pattern, ignoreCase = true) &&
+                        !isGenericShellAccountKeyword(pattern, cleanHint))
+                AliasMatchType.PACKAGE -> pattern.equals(cleanHint, ignoreCase = true)
+                else -> false
+            }
+            if (matched) return alias.accountId
+        }
+
+        // 4. 提示词包含完整非泛化账户名（如 "光大银行信用卡(1234)" 匹配 "光大银行"）
+        accounts.firstOrNull { acc ->
+            acc.name.length >= 2 &&
+                cleanHint.contains(acc.name, ignoreCase = true) &&
+                !isGenericShellAccountKeyword(acc.name, cleanHint)
+        }?.let { return it.id }
+
+        return null
+    }
+
+    private fun isGenericShellAccountKeyword(candidate: String, fullHint: String): Boolean {
+        val normCandidate = candidate.trim().lowercase(Locale.ROOT)
+        val normHint = fullHint.trim().lowercase(Locale.ROOT)
+        if (normCandidate == normHint) return false
+        return normCandidate in GENERIC_TRANSFER_SHELL_KEYWORDS
+    }
 
     private fun isChannelEnabled(channel: String, settings: AppSettings): Boolean = when (channel) {
         CaptureChannel.NOTIFICATION -> settings.notificationCaptureEnabled
@@ -1308,6 +1645,12 @@ class CaptureOrchestrator(
         put("origCurrency", draft.origCurrency)
         put("accountId", draft.accountId)
         put("accountHint", draft.accountHint)
+        draft.toAccountId?.let {
+            put("toAccountId", it)
+        }
+        if (draft.toAccountHint.isNotBlank()) {
+            put("toAccountHint", draft.toAccountHint)
+        }
         put("categoryId", draft.categoryId)
         put("categoryName", draft.categoryName)
         put("merchant", draft.merchant)
@@ -1356,6 +1699,10 @@ class CaptureOrchestrator(
             AliasMatchType.CARD_LAST4,
             AliasMatchType.KEYWORD,
             AliasMatchType.REGEX
+        )
+
+        private val GENERIC_TRANSFER_SHELL_KEYWORDS = setOf(
+            "支付宝", "微信", "微信支付", "微信零钱", "云闪付", "银联", "银行", "钱包"
         )
 
         fun defaultUnsupportedPermissionReport(): DevicePermissionReport = DevicePermissionReport(

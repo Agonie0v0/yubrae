@@ -35,6 +35,10 @@ class KairoApplication : Application() {
             runCatching { KairoWidgetUpdater.updateAll(this@KairoApplication) }
         }
 
+        appScope.launch {
+            runCatching { container.cloudRuleRepository.initialize() }
+        }
+
         // 根据自动备份开关动态调度 WebDAV 周期任务
         appScope.launch {
             container.settingsStore.settingsFlow

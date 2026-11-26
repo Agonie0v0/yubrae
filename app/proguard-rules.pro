@@ -24,3 +24,6 @@
 -dontwarn jxl.**
 -dontwarn org.apache.log4j.**
 -keep class jxl.** { *; }
+-dontwarn org.mozilla.javascript.**
+-dontwarn org.mozilla.classfile.**
+-keep class org.mozilla.javascript.** { *; }

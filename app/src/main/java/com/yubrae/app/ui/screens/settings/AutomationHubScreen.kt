@@ -176,6 +176,7 @@ fun MineHubScreen(
     val report by viewModel.permissionReport.collectAsStateWithLifecycle()
     val logs by viewModel.captureLogs.collectAsStateWithLifecycle()
     val rules by viewModel.parseRules.collectAsStateWithLifecycle()
+    val cloudRuleStatus by viewModel.cloudRuleStatus.collectAsStateWithLifecycle()
     val recurringRules by viewModel.recurringRules.collectAsStateWithLifecycle()
     val transactions by viewModel.allTransactions.collectAsStateWithLifecycle()
     val ledgers by viewModel.ledgers.collectAsStateWithLifecycle()
@@ -321,11 +322,19 @@ fun MineHubScreen(
                             onClick = { onNavigate(SettingsRoutes.LOGS) }
                         )
                         CompactHairlineDivider(startIndent = 58.dp)
+                        val enabledRuleTotal = remember(
+                            rules,
+                            settings.jsRulesEnabled,
+                            cloudRuleStatus.totalCount
+                        ) {
+                            rules.count { it.enabled } +
+                                if (settings.jsRulesEnabled) cloudRuleStatus.totalCount else 0
+                        }
                         HubNavRow(
                             icon = Icons.AutoMirrored.Rounded.Rule,
                             title = "指纹与规则",
-                            subtitle = "文本沙盒、账户指纹与 NFC/正则规则",
-                            statusText = "${rules.count { it.enabled }} 条",
+                            subtitle = "云端规则库、文本沙盒、账户指纹与正则",
+                            statusText = "$enabledRuleTotal 条",
                             onClick = { onNavigate(SettingsRoutes.RULES) }
                         )
                         CompactHairlineDivider(startIndent = 58.dp)

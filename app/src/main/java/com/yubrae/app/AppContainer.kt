@@ -2,6 +2,7 @@ package com.yubrae.app
 
 import android.content.Context
 import com.yubrae.app.capture.CaptureOrchestrator
+import com.yubrae.app.capture.rules.CloudRuleRepository
 import com.yubrae.app.core.contract.BillImporter
 import com.yubrae.app.core.contract.CaptureEngine
 import com.yubrae.app.core.contract.CloudSyncService
@@ -45,12 +46,18 @@ class AppContainer(context: Context) {
         settingsStore = settingsStore
     )
 
+    val cloudRuleRepository: CloudRuleRepository = CloudRuleRepository(
+        context = appContext,
+        okHttpClient = okHttpClient
+    )
+
     val captureEngine: CaptureEngine = CaptureOrchestrator(
         context = appContext,
         db = database,
         settingsStore = settingsStore,
         okHttpClient = okHttpClient,
-        ledgerService = ledgerService
+        ledgerService = ledgerService,
+        jsRuleEngine = cloudRuleRepository.ruleEngine
     )
 
     val billImporter: BillImporter = YimuCsvImporter(

@@ -9,6 +9,8 @@ import com.yubrae.app.AppContainer
 import com.yubrae.app.BuildConfig
 import com.yubrae.app.capture.LlmBillParser
 import com.yubrae.app.capture.SmartInputParser
+import com.yubrae.app.capture.rules.CloudRuleStatus
+import com.yubrae.app.capture.rules.CloudRuleUpdateResult
 import com.yubrae.app.core.contract.BudgetProgress
 import com.yubrae.app.core.contract.CategoryStat
 import com.yubrae.app.core.contract.ConversionPreview
@@ -214,6 +216,7 @@ class KairoMainViewModel(
     private val captureEngine = container.requireCaptureEngine()
     private val billImporter = container.requireBillImporter()
     private val cloudSyncService = container.requireCloudSyncService()
+    private val cloudRuleRepository = container.cloudRuleRepository
     private val settingsStore = container.settingsStore
     private val llmBillParser = LlmBillParser(container.okHttpClient)
     private val smartInputParser = SmartInputParser(llmBillParser = llmBillParser)
@@ -737,6 +740,11 @@ class KairoMainViewModel(
 
     private val _sandboxState = MutableStateFlow(SandboxTestUiState())
     val sandboxState: StateFlow<SandboxTestUiState> = _sandboxState.asStateFlow()
+
+    val cloudRuleStatus: StateFlow<CloudRuleStatus> = cloudRuleRepository.status
+    private val _cloudRuleSyncing = MutableStateFlow(false)
+    val cloudRuleSyncing: StateFlow<Boolean> = _cloudRuleSyncing.asStateFlow()
+    private var pendingRuleUrlSaveJob: Job? = null
 
     private val _llmTestResult = MutableStateFlow<Result<String>?>(null)
     val llmTestResult: StateFlow<Result<String>?> = _llmTestResult.asStateFlow()
@@ -1497,11 +1505,23 @@ class KairoMainViewModel(
         }
     }
 
-    fun runSandboxTest(title: String, content: String, sourcePackage: String, allowLlm: Boolean) {
+    fun runSandboxTest(
+        title: String,
+        content: String,
+        sourcePackage: String,
+        allowLlm: Boolean,
+        channel: String = CaptureChannel.NOTIFICATION
+    ) {
         viewModelScope.launch {
             _sandboxState.value = SandboxTestUiState(isRunning = true)
             val result = withContext(Dispatchers.IO) {
-                captureEngine.testParseText(title, content, sourcePackage.ifBlank { "*" }, allowLlm)
+                captureEngine.testParseText(
+                    title = title,
+                    content = content,
+                    sourcePackage = sourcePackage.ifBlank { "*" },
+                    allowLlm = allowLlm,
+                    channel = channel
+                )
             }
             _sandboxState.value = result.fold(
                 onSuccess = { draft ->
@@ -1522,6 +1542,116 @@ class KairoMainViewModel(
                 }
             )
         }
+    }
+
+    fun checkAndUpdateCloudRules(force: Boolean = false) {
+        if (_cloudRuleSyncing.value) return
+        viewModelScope.launch {
+            _cloudRuleSyncing.value = true
+            try {
+                pendingMirrorSaveJob?.join()
+                pendingRuleUrlSaveJob?.join()
+                val snapshot = withContext(Dispatchers.IO) { settingsStore.getSnapshot() }
+                val result = withContext(Dispatchers.IO) {
+                    cloudRuleRepository.checkAndUpdate(
+                        manifestUrl = snapshot.cloudRuleManifestUrl,
+                        mirrorPrefix = snapshot.updateMirrorPrefix,
+                        force = force
+                    )
+                }
+                when (result) {
+                    is CloudRuleUpdateResult.Updated -> {
+                        withContext(Dispatchers.IO) { settingsStore.markRuleSynced() }
+                        showMessage("规则库已更新至 ${result.status.version}（共 ${result.status.totalCount} 条规则）")
+                    }
+                    is CloudRuleUpdateResult.UpToDate -> {
+                        withContext(Dispatchers.IO) { settingsStore.markRuleSynced() }
+                        showMessage("云端规则库已是最新 (${result.status.version})")
+                    }
+                    is CloudRuleUpdateResult.Failed -> {
+                        showMessage("规则库检查更新失败：${result.reason}")
+                    }
+                }
+            } catch (ce: CancellationException) {
+                throw ce
+            } catch (err: Exception) {
+                showMessage("规则库检查更新失败：${err.message ?: "未知错误"}")
+            } finally {
+                _cloudRuleSyncing.value = false
+            }
+        }
+    }
+
+    fun importLocalRuleZip(fileName: String, bytes: ByteArray) {
+        if (_cloudRuleSyncing.value) {
+            showMessage("规则库正在同步中，请稍候")
+            return
+        }
+        viewModelScope.launch {
+            _cloudRuleSyncing.value = true
+            try {
+                val result = withContext(Dispatchers.IO) {
+                    cloudRuleRepository.importLocalZip(bytes = bytes, fileName = fileName)
+                }
+                result.onSuccess { status ->
+                    withContext(Dispatchers.IO) { settingsStore.markRuleSynced() }
+                    showMessage("已导入本地规则包「$fileName」，生效 ${status.totalCount} 条规则")
+                }.onFailure { err ->
+                    showMessage("导入规则包失败：${err.message ?: "请检查压缩包格式"}")
+                }
+            } catch (ce: CancellationException) {
+                throw ce
+            } finally {
+                _cloudRuleSyncing.value = false
+            }
+        }
+    }
+
+    fun resetCloudRulesToBuiltin() {
+        if (_cloudRuleSyncing.value) {
+            showMessage("规则库正在同步中，请稍候")
+            return
+        }
+        viewModelScope.launch {
+            _cloudRuleSyncing.value = true
+            try {
+                val result = withContext(Dispatchers.IO) {
+                    cloudRuleRepository.resetToBuiltin()
+                }
+                result.onSuccess { status ->
+                    showMessage("已恢复内置基线规则库 (${status.version} · ${status.totalCount} 条)")
+                }.onFailure { err ->
+                    showMessage("恢复内置规则库失败：${err.message ?: "未知错误"}")
+                }
+            } catch (ce: CancellationException) {
+                throw ce
+            } finally {
+                _cloudRuleSyncing.value = false
+            }
+        }
+    }
+
+    fun validateCloudRuleManifestUrl(rawUrl: String): String? =
+        cloudRuleRepository.validateSubscriptionUrl(rawUrl)
+
+    fun saveCloudRuleManifestUrl(rawUrl: String): Boolean {
+        val cleaned = rawUrl.trim()
+        val error = cloudRuleRepository.validateSubscriptionUrl(cleaned)
+        if (error != null) {
+            showMessage(error)
+            return false
+        }
+        val prevSave = pendingRuleUrlSaveJob
+        pendingRuleUrlSaveJob = viewModelScope.launch {
+            prevSave?.join()
+            withContext(Dispatchers.IO) {
+                settingsStore.update { it.copy(cloudRuleManifestUrl = cleaned) }
+            }
+        }
+        showMessage(
+            if (cleaned.isEmpty()) "已恢复默认规则订阅地址" else "已保存自定义规则订阅地址"
+        )
+        return true
     }
 
     fun saveAndTestLlm(updatedSettings: AppSettings) {

@@ -101,6 +101,46 @@ class LocalRuleParser {
         )
     }
 
+    fun parseExplicitRules(
+        input: CaptureInput,
+        rules: List<ParseRuleEntity>,
+        aliases: List<AccountAliasEntity>,
+        accounts: List<AccountEntity>,
+        categories: List<CategoryEntity>
+    ): ParsedBillDraft? {
+        if (isNoise(input.title, input.content)) return null
+
+        val activeAccounts = accounts.filter { !it.archived }.ifEmpty { accounts }
+        val sortedRules = rules
+            .filter { it.enabled }
+            .sortedWith(compareByDescending<ParseRuleEntity> { it.priority }.thenBy { it.id })
+
+        return matchByParseRules(
+            input = input,
+            rules = sortedRules,
+            aliases = aliases,
+            accounts = activeAccounts,
+            categories = categories
+        )
+    }
+
+    fun parseHeuristicallyOnly(
+        input: CaptureInput,
+        aliases: List<AccountAliasEntity>,
+        accounts: List<AccountEntity>,
+        categories: List<CategoryEntity>
+    ): ParsedBillDraft? {
+        if (isNoise(input.title, input.content)) return null
+
+        val activeAccounts = accounts.filter { !it.archived }.ifEmpty { accounts }
+        return parseHeuristically(
+            input = input,
+            aliases = aliases,
+            accounts = activeAccounts,
+            categories = categories
+        )
+    }
+
     private fun matchByParseRules(
         input: CaptureInput,
         rules: List<ParseRuleEntity>,
