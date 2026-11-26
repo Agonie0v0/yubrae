@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 private struct AccountEditContext: Identifiable {
     let id = UUID()
@@ -80,7 +81,7 @@ public struct AssetsView: View {
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 10)
-                .padding(.bottom, 120)
+                .padding(.bottom, 40)
             }
             .background(palette.background.ignoresSafeArea())
             .navigationTitle("资产")
@@ -155,11 +156,13 @@ public struct AssetsView: View {
         let liabStr = YubraeTheme.masked(MoneyAmount.format(netWorth.totalLiabilitiesMicros, currencyCode: cur), isMasked: masked)
 
         return VStack(alignment: .leading, spacing: 14) {
-            HStack {
+            HStack(spacing: 8) {
                 Text("净资产 (\(cur))")
                     .font(.subheadline.weight(.medium))
                     .foregroundColor(.white.opacity(0.88))
-                Spacer()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
+                Spacer(minLength: 8)
                 Menu {
                     ForEach(CurrencyCatalog.all) { info in
                         Button("\(info.flag) \(info.code) · \(info.nameZh)") {
@@ -174,6 +177,8 @@ public struct AssetsView: View {
                         Image(systemName: "chevron.down")
                             .font(.caption2)
                     }
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
                     .foregroundColor(.white)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 5)
@@ -187,14 +192,18 @@ public struct AssetsView: View {
                 .minimumScaleFactor(0.7)
                 .lineLimit(1)
 
-            HStack(spacing: 24) {
+            HStack(spacing: 20) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("总资产")
                         .font(.caption2)
                         .foregroundColor(.white.opacity(0.78))
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
                     Text(assetsStr)
-                        .font(.subheadline.weight(.semibold))
+                        .font(.subheadline.weight(.semibold).monospacedDigit())
                         .foregroundColor(.white)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
                 }
                 Divider()
                     .frame(height: 24)
@@ -203,11 +212,15 @@ public struct AssetsView: View {
                     Text("总负债")
                         .font(.caption2)
                         .foregroundColor(.white.opacity(0.78))
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
                     Text(liabStr)
-                        .font(.subheadline.weight(.semibold))
+                        .font(.subheadline.weight(.semibold).monospacedDigit())
                         .foregroundColor(.white)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
                 }
-                Spacer()
+                Spacer(minLength: 0)
             }
         }
         .padding(18)
@@ -226,8 +239,11 @@ public struct AssetsView: View {
                 Label("新建账户", systemImage: "plus.circle")
                     .font(.caption.weight(.semibold))
                     .foregroundColor(palette.primary)
-                    .frame(maxWidth: .infinity)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                    .padding(.horizontal, 6)
                     .padding(.vertical, 10)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(RoundedRectangle(cornerRadius: 12).fill(palette.surface))
                     .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(palette.outline, lineWidth: 0.8))
             }
@@ -241,8 +257,11 @@ public struct AssetsView: View {
                 )
                 .font(.caption.weight(.semibold))
                 .foregroundColor(palette.textPrimary)
-                .frame(maxWidth: .infinity)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+                .padding(.horizontal, 6)
                 .padding(.vertical, 10)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(RoundedRectangle(cornerRadius: 12).fill(palette.surface))
                 .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(palette.outline, lineWidth: 0.8))
             }
@@ -253,12 +272,16 @@ public struct AssetsView: View {
                 Label("记借贷", systemImage: "arrow.left.arrow.right.circle")
                     .font(.caption.weight(.semibold))
                     .foregroundColor(palette.textPrimary)
-                    .frame(maxWidth: .infinity)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                    .padding(.horizontal, 6)
                     .padding(.vertical, 10)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(RoundedRectangle(cornerRadius: 12).fill(palette.surface))
                     .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(palette.outline, lineWidth: 0.8))
             }
         }
+        .fixedSize(horizontal: false, vertical: true)
     }
 
     // MARK: - Modules (Reimbursements & Debts)
@@ -270,24 +293,33 @@ public struct AssetsView: View {
         }
         let masked = store.settings.privacyMaskEnabled
         return YubraeCard(palette: palette, padding: 14) {
-            HStack {
+            HStack(spacing: 8) {
                 VStack(alignment: .leading, spacing: 3) {
                     Label("待报销款项（\(pendingReimburseTxs.count) 笔）", systemImage: "doc.text.magnifyingglass")
                         .font(.subheadline.weight(.semibold))
                         .foregroundColor(palette.textPrimary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
                     Text("合计约 \(YubraeTheme.masked(MoneyAmount.format(totalPending, currencyCode: activeDisplayCurrency), isMasked: masked))")
                         .font(.caption)
                         .foregroundColor(palette.transferColor)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
                 }
-                Spacer()
-                Button("去核销") {
+                Spacer(minLength: 8)
+                Button {
                     showSettleReimburseSheet = true
+                } label: {
+                    Text("去核销")
+                        .font(.caption.weight(.semibold))
+                        .foregroundColor(palette.onPrimary)
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 7)
+                        .background(Capsule().fill(palette.primary))
                 }
-                .font(.caption.weight(.semibold))
-                .foregroundColor(palette.onPrimary)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 7)
-                .background(Capsule().fill(palette.primary))
+                .fixedSize(horizontal: true, vertical: false)
             }
         }
     }
@@ -296,16 +328,20 @@ public struct AssetsView: View {
         let masked = store.settings.privacyMaskEnabled
         return YubraeCard(palette: palette, padding: 14) {
             VStack(alignment: .leading, spacing: 10) {
-                HStack {
+                HStack(spacing: 8) {
                     Label("借贷往来（进行中 \(openDebts.count) 笔）", systemImage: "person.2.fill")
                         .font(.subheadline.weight(.semibold))
                         .foregroundColor(palette.textPrimary)
-                    Spacer()
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
+                    Spacer(minLength: 8)
                     Button("+ 新增") {
                         showAddDebtSheet = true
                     }
                     .font(.caption.weight(.semibold))
                     .foregroundColor(palette.primary)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
                 }
 
                 if openDebts.isEmpty {
@@ -316,36 +352,45 @@ public struct AssetsView: View {
                     ForEach(openDebts) { debt in
                         let remain = max(0, debt.amountMicros - debt.settledAmountMicros)
                         let isLend = debt.direction == DebtDirection.LEND
-                        HStack {
+                        HStack(spacing: 8) {
                             VStack(alignment: .leading, spacing: 2) {
                                 HStack(spacing: 6) {
                                     Text(isLend ? "借出" : "借入")
                                         .font(.caption2.weight(.bold))
                                         .foregroundColor(isLend ? palette.incomeColor : palette.expenseColor)
+                                        .lineLimit(1)
+                                        .fixedSize(horizontal: true, vertical: false)
                                         .padding(.horizontal, 6)
                                         .padding(.vertical, 2)
                                         .background(Capsule().fill((isLend ? palette.incomeColor : palette.expenseColor).opacity(0.14)))
                                     Text(debt.personName)
                                         .font(.subheadline.weight(.semibold))
                                         .foregroundColor(palette.textPrimary)
+                                        .lineLimit(1)
                                 }
                                 if !debt.note.isEmpty {
                                     Text(debt.note)
                                         .font(.caption2)
                                         .foregroundColor(palette.textTertiary)
+                                        .lineLimit(1)
                                 }
                             }
-                            Spacer()
+                            Spacer(minLength: 8)
                             VStack(alignment: .trailing, spacing: 4) {
                                 Text(YubraeTheme.masked(MoneyAmount.format(remain, currencyCode: debt.currencyCode, showCurrencyCode: true), isMasked: masked))
                                     .font(.subheadline.weight(.bold).monospacedDigit())
                                     .foregroundColor(palette.textPrimary)
+                                    .lineLimit(1)
+                                    .fixedSize(horizontal: true, vertical: false)
                                 Button("核销/还款") {
                                     settlingDebt = debt
                                 }
                                 .font(.caption2.weight(.semibold))
                                 .foregroundColor(palette.primary)
+                                .lineLimit(1)
+                                .fixedSize(horizontal: true, vertical: false)
                             }
+                            .layoutPriority(1)
                         }
                         .padding(.vertical, 4)
                     }
@@ -395,14 +440,17 @@ public struct AssetsView: View {
         }
 
         return VStack(alignment: .leading, spacing: 8) {
-            HStack {
+            HStack(spacing: 8) {
                 Label(group.labelZh, systemImage: group.sfSymbol)
                     .font(.caption.weight(.semibold))
                     .foregroundColor(palette.textSecondary)
-                Spacer()
+                    .lineLimit(1)
+                Spacer(minLength: 8)
                 Text(YubraeTheme.masked(MoneyAmount.format(groupSubtotal, currencyCode: activeDisplayCurrency), isMasked: masked))
                     .font(.caption.weight(.semibold).monospacedDigit())
                     .foregroundColor(palette.textSecondary)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
             }
             .padding(.horizontal, 4)
 
@@ -438,6 +486,8 @@ public struct AssetsView: View {
                         Text("已隐藏")
                             .font(.system(size: 10, weight: .semibold))
                             .foregroundColor(palette.textSecondary)
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
                             .background(Capsule().fill(palette.surfaceSecondary))
@@ -446,6 +496,8 @@ public struct AssetsView: View {
                         Text("不计净资产")
                             .font(.system(size: 10, weight: .medium))
                             .foregroundColor(palette.textTertiary)
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
                     }
                 }
 
@@ -461,6 +513,7 @@ public struct AssetsView: View {
                     Text(CurrencyCatalog.find(acc.currencyCode).nameZh + " · " + acc.currencyCode)
                         .font(.caption2)
                         .foregroundColor(palette.textSecondary)
+                        .lineLimit(1)
                 }
             }
 
@@ -470,13 +523,18 @@ public struct AssetsView: View {
                 Text(YubraeTheme.masked(origFmt, isMasked: masked))
                     .font(.subheadline.weight(.bold).monospacedDigit())
                     .foregroundColor(acc.balanceMicros < 0 ? palette.expenseColor : palette.textPrimary)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
                 if acc.currencyCode != activeDisplayCurrency {
                     let convFmt = MoneyAmount.format(convertedMicros, currencyCode: activeDisplayCurrency)
                     Text("≈ \(YubraeTheme.masked(convFmt, isMasked: masked))")
                         .font(.caption2)
                         .foregroundColor(palette.textTertiary)
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
                 }
             }
+            .layoutPriority(1)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
@@ -519,11 +577,12 @@ public struct AssetsView: View {
             DisclosureGroup("已归档账户（\(archivedAccounts.count)）", isExpanded: $showArchivedSection) {
                 VStack(spacing: 10) {
                     ForEach(archivedAccounts) { acc in
-                        HStack {
+                        HStack(spacing: 10) {
                             Text(acc.name)
                                 .font(.subheadline)
                                 .foregroundColor(palette.textSecondary)
-                            Spacer()
+                                .lineLimit(1)
+                            Spacer(minLength: 8)
                             Button("恢复活跃") {
                                 store.archiveAccount(id: acc.id, archived: false)
                                 store.toastMessage = "已恢复账户「\(acc.name)」"
@@ -531,11 +590,15 @@ public struct AssetsView: View {
                             .buttonStyle(.borderless)
                             .font(.caption.weight(.semibold))
                             .foregroundColor(palette.primary)
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
                             Button("删除", role: .destructive) {
                                 deletingAccount = acc
                             }
                             .buttonStyle(.borderless)
                             .font(.caption.weight(.semibold))
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
                         }
                     }
                 }
@@ -735,6 +798,12 @@ private struct AccountEditorSheet: View {
                     .fontWeight(.semibold)
                     .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("完成") {
+                        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                    }
+                }
             }
             .sheet(isPresented: $showCalibration) {
                 if let existing = editingAccount {
@@ -858,9 +927,15 @@ private struct BalanceCalibrationSheet: View {
                     .fontWeight(.semibold)
                     .disabled(deltaMicros == nil)
                 }
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("完成") {
+                        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                    }
+                }
             }
         }
-        .presentationDetents([.medium])
+        .presentationDetents([.medium, .large])
     }
 }
 
@@ -1008,6 +1083,12 @@ private struct AddDebtSheet: View {
                     }
                     .disabled(personName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || (MoneyAmount.parseToMicros(amountText) ?? 0) <= 0)
                 }
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("完成") {
+                        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                    }
+                }
             }
         }
     }
@@ -1071,9 +1152,15 @@ private struct SettleDebtSheet: View {
                     }
                     .fontWeight(.semibold)
                 }
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("完成") {
+                        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                    }
+                }
             }
         }
-        .presentationDetents([.medium])
+        .presentationDetents([.medium, .large])
     }
 }
 
@@ -1114,19 +1201,25 @@ private struct SettleReimburseSheet: View {
                                 selectedIds.insert(tx.id)
                             }
                         } label: {
-                            HStack {
+                            HStack(spacing: 10) {
                                 Image(systemName: checked ? "checkmark.circle.fill" : "circle")
                                     .foregroundColor(checked ? .accentColor : .secondary)
-                                VStack(alignment: .leading) {
+                                VStack(alignment: .leading, spacing: 2) {
                                     Text(tx.merchant.isEmpty ? (store.category(byId: tx.categoryId)?.name ?? "待报销") : tx.merchant)
                                         .foregroundColor(.primary)
+                                        .lineLimit(1)
                                     Text(YubraeTheme.formatDate(tx.timestamp, pattern: "yyyy-MM-dd"))
                                         .font(.caption2)
                                         .foregroundColor(.secondary)
+                                        .lineLimit(1)
                                 }
-                                Spacer()
+                                Spacer(minLength: 8)
                                 Text(MoneyAmount.format(tx.origAmountMicros, currencyCode: tx.origCurrency, showCurrencyCode: true))
+                                    .font(.subheadline.weight(.semibold).monospacedDigit())
                                     .foregroundColor(.primary)
+                                    .lineLimit(1)
+                                    .fixedSize(horizontal: true, vertical: false)
+                                    .layoutPriority(1)
                             }
                         }
                     }
@@ -1247,6 +1340,6 @@ private struct DeleteAccountConfirmSheet: View {
                 }
             }
         }
-        .presentationDetents([.medium])
+        .presentationDetents([.medium, .large])
     }
 }

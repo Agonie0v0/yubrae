@@ -33,6 +33,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -869,6 +870,7 @@ fun SmartInputSheet(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .navigationBarsPadding()
                 .imePadding()
         ) {
             // 顶部标题栏
@@ -877,16 +879,20 @@ fun SmartInputSheet(
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp, vertical = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 Row(
+                    modifier = Modifier.weight(1f),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Text(
                         text = "AI / 语音速记",
                         style = MaterialTheme.typography.titleLarge,
-                        fontWeight = FontWeight.Bold
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false)
                     )
                     if (llmEnabled) {
                         Surface(
@@ -908,7 +914,9 @@ fun SmartInputSheet(
                                     text = "AI",
                                     style = MaterialTheme.typography.labelSmall,
                                     fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                    maxLines = 1,
+                                    softWrap = false
                                 )
                             }
                         }
@@ -929,12 +937,26 @@ fun SmartInputSheet(
                 Tab(
                     selected = selectedTab == 0,
                     onClick = { selectedTab = 0 },
-                    text = { Text("一句话 / 语音速记") }
+                    text = {
+                        Text(
+                            text = "一句话 / 语音速记",
+                            maxLines = 1,
+                            softWrap = false,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
                 )
                 Tab(
                     selected = selectedTab == 1,
                     onClick = { selectedTab = 1 },
-                    text = { Text("小票拍照 / 选图识别") }
+                    text = {
+                        Text(
+                            text = "小票拍照 / 选图识别",
+                            maxLines = 1,
+                            softWrap = false,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
                 )
             }
 
@@ -954,7 +976,9 @@ fun SmartInputSheet(
                         Text(
                             text = "账本",
                             style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            softWrap = false
                         )
                         LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                             items(selectableLedgers, key = { it.id }) { ledger ->
@@ -970,7 +994,13 @@ fun SmartInputSheet(
                                             modifier = Modifier.size(14.dp)
                                         )
                                     },
-                                    label = { Text(ledger.name) }
+                                    label = {
+                                        Text(
+                                            text = ledger.name,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
                                 )
                             }
                         }
@@ -1078,11 +1108,17 @@ fun SmartInputSheet(
                     ) {
                         OutlinedButton(
                             onClick = onVoiceInputClick,
-                            shape = RoundedCornerShape(14.dp)
+                            shape = RoundedCornerShape(14.dp),
+                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp)
                         ) {
                             Icon(Icons.Rounded.Mic, null, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text("语音输入")
+                            Text(
+                                text = "语音输入",
+                                maxLines = 1,
+                                softWrap = false,
+                                overflow = TextOverflow.Ellipsis
+                            )
                         }
 
                         Button(
@@ -1115,6 +1151,7 @@ fun SmartInputSheet(
                             },
                             enabled = !isParsingText,
                             shape = RoundedCornerShape(14.dp),
+                            contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
                             modifier = Modifier.weight(1f)
                         ) {
                             if (isParsingText) {
@@ -1127,7 +1164,12 @@ fun SmartInputSheet(
                                 Icon(Icons.Rounded.AutoAwesome, null, modifier = Modifier.size(18.dp))
                             }
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text(if (isParsingText) "正在解析..." else "智能解析")
+                            Text(
+                                text = if (isParsingText) "正在解析..." else "智能解析",
+                                maxLines = 1,
+                                softWrap = false,
+                                overflow = TextOverflow.Ellipsis
+                            )
                         }
                     }
 
@@ -1230,11 +1272,17 @@ fun SmartInputSheet(
                                 }
                             },
                             shape = RoundedCornerShape(14.dp),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
                             modifier = Modifier.weight(1f)
                         ) {
                             Icon(Icons.Rounded.CameraAlt, null, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text("拍照识图")
+                            Text(
+                                text = "拍照识图",
+                                maxLines = 1,
+                                softWrap = false,
+                                overflow = TextOverflow.Ellipsis
+                            )
                         }
                         Button(
                             onClick = {
@@ -1251,11 +1299,17 @@ fun SmartInputSheet(
                                 }
                             },
                             shape = RoundedCornerShape(14.dp),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
                             modifier = Modifier.weight(1f)
                         ) {
                             Icon(Icons.Rounded.PhotoLibrary, null, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text("相册选图")
+                            Text(
+                                text = "相册选图",
+                                maxLines = 1,
+                                softWrap = false,
+                                overflow = TextOverflow.Ellipsis
+                            )
                         }
                     }
 
@@ -1300,7 +1354,9 @@ fun SmartInputSheet(
                                         Spacer(modifier = Modifier.width(4.dp))
                                         Text(
                                             text = if (isParsingImage) "识别中..." else "识图解析",
-                                            style = MaterialTheme.typography.labelMedium
+                                            style = MaterialTheme.typography.labelMedium,
+                                            maxLines = 1,
+                                            softWrap = false
                                         )
                                     }
                                     TextButton(
@@ -1317,7 +1373,9 @@ fun SmartInputSheet(
                                         Text(
                                             text = "移除",
                                             style = MaterialTheme.typography.labelMedium,
-                                            color = MaterialTheme.colorScheme.error
+                                            color = MaterialTheme.colorScheme.error,
+                                            maxLines = 1,
+                                            softWrap = false
                                         )
                                     }
                                     if (imageDraft == null && !isParsingImage) {
@@ -1342,7 +1400,12 @@ fun SmartInputSheet(
                                             contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
                                             modifier = Modifier.height(34.dp)
                                         ) {
-                                            Text("手动建单", style = MaterialTheme.typography.labelMedium)
+                                            Text(
+                                                text = "手动建单",
+                                                style = MaterialTheme.typography.labelMedium,
+                                                maxLines = 1,
+                                                softWrap = false
+                                            )
                                         }
                                     }
                                 }
@@ -1403,7 +1466,7 @@ fun SmartInputSheet(
                             onDismiss()
                         }
                     ) {
-                        Text("取消")
+                        Text("取消", maxLines = 1, softWrap = false)
                     }
                     Button(
                         onClick = {
@@ -1432,7 +1495,10 @@ fun SmartInputSheet(
                             } else {
                                 "确认保存入账"
                             },
-                            fontWeight = FontWeight.Bold
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            softWrap = false,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
                 }
@@ -1605,15 +1671,16 @@ private fun DraftEditorCard(
             modifier = Modifier.padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            // 头部：编号 + 类型切换 + 删除按钮
+            // 头部：编号 + 类型切换（FlowRow 自适应换行防挤）+ 删除按钮
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                FlowRow(
+                    modifier = Modifier.weight(1f),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     Surface(
                         shape = CircleShape,
@@ -1624,7 +1691,9 @@ private fun DraftEditorCard(
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onPrimaryContainer,
                             fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                            maxLines = 1,
+                            softWrap = false,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
                         )
                     }
                     listOf(
@@ -1648,27 +1717,31 @@ private fun DraftEditorCard(
                         Surface(
                             shape = CircleShape,
                             color = pillColor,
-                            modifier = Modifier.clickable {
-                                val nextCat = if (mode == TransactionType.TRANSFER) {
-                                    null
-                                } else {
-                                    categories.firstOrNull { it.id == draft.categoryId && it.type == mode }
-                                        ?: categories.firstOrNull { it.type == mode && it.parentId == null }
-                                }
-                                onUpdate(
-                                    draft.copy(
-                                        type = mode,
-                                        categoryId = nextCat?.id,
-                                        categoryName = nextCat?.name ?: ""
+                            modifier = Modifier
+                                .clip(CircleShape)
+                                .clickable {
+                                    val nextCat = if (mode == TransactionType.TRANSFER) {
+                                        null
+                                    } else {
+                                        categories.firstOrNull { it.id == draft.categoryId && it.type == mode }
+                                            ?: categories.firstOrNull { it.type == mode && it.parentId == null }
+                                    }
+                                    onUpdate(
+                                        draft.copy(
+                                            type = mode,
+                                            categoryId = nextCat?.id,
+                                            categoryName = nextCat?.name ?: ""
+                                        )
                                     )
-                                )
-                            }
+                                }
                         ) {
                             Text(
                                 text = label,
                                 style = MaterialTheme.typography.labelMedium,
                                 color = txtColor,
                                 fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                                maxLines = 1,
+                                softWrap = false,
                                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
                             )
                         }
@@ -1743,7 +1816,11 @@ private fun DraftEditorCard(
                                 Icon(Icons.Rounded.ArrowDropDown, null, modifier = Modifier.size(16.dp))
                             },
                             label = {
-                                Text(selectedCategory?.name ?: draft.categoryName.ifBlank { "选择分类" })
+                                Text(
+                                    text = selectedCategory?.name ?: draft.categoryName.ifBlank { "选择分类" },
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
                             }
                         )
                         DropdownMenu(

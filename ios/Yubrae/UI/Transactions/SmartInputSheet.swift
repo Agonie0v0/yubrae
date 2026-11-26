@@ -128,6 +128,13 @@ public struct SmartInputSheet: View {
                         .fontWeight(.semibold)
                     }
                 }
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("完成") {
+                        dismissKeyboard()
+                    }
+                    .font(.subheadline.weight(.semibold))
+                }
             }
             .onChange(of: selectedPhotoItem) { newItem in
                 loadPickedPhoto(newItem)
@@ -140,7 +147,7 @@ public struct SmartInputSheet: View {
     private var textInputSection: some View {
         YubraeCard(palette: palette) {
             VStack(alignment: .leading, spacing: 12) {
-                HStack {
+                HStack(spacing: 8) {
                     Label(
                         store.settings.llmEnabled && LlmBillService.hasUsableLlmConfig(store.settings)
                             ? "AI 大模型拆单已就绪"
@@ -149,7 +156,9 @@ public struct SmartInputSheet: View {
                     )
                     .font(.caption.weight(.semibold))
                     .foregroundColor(palette.primary)
-                    Spacer()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
+                    Spacer(minLength: 6)
                     Button {
                         if let paste = UIPasteboard.general.string, !paste.isEmpty {
                             inputText = paste
@@ -158,7 +167,11 @@ public struct SmartInputSheet: View {
                         Label("粘贴", systemImage: "doc.on.clipboard")
                             .font(.caption.weight(.semibold))
                             .foregroundColor(palette.primary)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.85)
+                            .fixedSize(horizontal: true, vertical: false)
                     }
+                    .buttonStyle(.plain)
                 }
 
                 ZStack(alignment: .topLeading) {
@@ -224,15 +237,20 @@ public struct SmartInputSheet: View {
     private var receiptImageSection: some View {
         YubraeCard(palette: palette) {
             VStack(alignment: .leading, spacing: 12) {
-                HStack {
+                HStack(spacing: 8) {
                     Label("小票 / 支付截图视觉识图", systemImage: "doc.text.viewfinder")
                         .font(.subheadline.weight(.semibold))
                         .foregroundColor(palette.textPrimary)
-                    Spacer()
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
+                    Spacer(minLength: 6)
                     if !store.settings.llmEnabled || !LlmBillService.hasUsableLlmConfig(store.settings) {
                         Text("需配置 AI")
                             .font(.caption2.weight(.semibold))
                             .foregroundColor(palette.warningColor)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.85)
+                            .fixedSize(horizontal: true, vertical: false)
                             .padding(.horizontal, 8)
                             .padding(.vertical, 3)
                             .background(Capsule().fill(palette.warningColor.opacity(0.15)))
@@ -260,8 +278,11 @@ public struct SmartInputSheet: View {
                     PhotosPicker(selection: $selectedPhotoItem, matching: .images) {
                         Label("从相册选择图片", systemImage: "photo.on.rectangle")
                             .font(.subheadline.weight(.semibold))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.85)
                             .foregroundColor(palette.primary)
                             .frame(maxWidth: .infinity)
+                            .padding(.horizontal, 10)
                             .padding(.vertical, 11)
                             .background(RoundedRectangle(cornerRadius: 12).fill(palette.accentSoftFill))
                     }
@@ -275,11 +296,15 @@ public struct SmartInputSheet: View {
                     } label: {
                         Label("粘贴截图", systemImage: "doc.on.clipboard")
                             .font(.subheadline.weight(.semibold))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.85)
+                            .fixedSize(horizontal: true, vertical: false)
                             .foregroundColor(palette.textPrimary)
                             .padding(.horizontal, 14)
                             .padding(.vertical, 11)
                             .background(RoundedRectangle(cornerRadius: 12).fill(palette.surfaceSecondary))
                     }
+                    .buttonStyle(.plain)
                 }
 
                 Button {
@@ -309,14 +334,18 @@ public struct SmartInputSheet: View {
 
     private var draftsSection: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack {
+            HStack(spacing: 8) {
                 Text("解析草稿（可微调后批量入账）")
                     .font(.subheadline.weight(.semibold))
                     .foregroundColor(palette.textPrimary)
-                Spacer()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
+                Spacer(minLength: 6)
                 Text("已勾选 \(selectedCount)/\(draftItems.count)")
                     .font(.caption)
                     .foregroundColor(palette.primary)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
             }
 
             ForEach($draftItems) { $item in
@@ -330,6 +359,7 @@ public struct SmartInputSheet: View {
                                     .font(.title3)
                                     .foregroundColor(item.selected ? palette.primary : palette.textTertiary)
                             }
+                            .buttonStyle(.plain)
 
                             Picker("类型", selection: $item.draft.type) {
                                 Text("支出").tag(TransactionType.EXPENSE)
@@ -337,25 +367,32 @@ public struct SmartInputSheet: View {
                                 Text("转账").tag(TransactionType.TRANSFER)
                             }
                             .pickerStyle(.segmented)
-                            .frame(maxWidth: 168)
+                        }
 
-                            Spacer()
-
+                        HStack(spacing: 8) {
                             Text(item.draft.origCurrency)
                                 .font(.caption.weight(.bold))
                                 .foregroundColor(palette.primary)
+                                .lineLimit(1)
+                                .fixedSize(horizontal: true, vertical: false)
+                                .padding(.horizontal, 9)
+                                .padding(.vertical, 6)
+                                .background(Capsule().fill(palette.accentSoftFill))
+
                             TextField("0.00", text: $item.amountText)
                                 .keyboardType(.decimalPad)
                                 .font(.headline.monospacedDigit())
                                 .multilineTextAlignment(.trailing)
-                                .frame(width: 84)
-                                .padding(6)
+                                .frame(maxWidth: .infinity)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 7)
                                 .background(RoundedRectangle(cornerRadius: 8).fill(palette.surfaceSecondary))
                         }
 
                         HStack(spacing: 8) {
                             TextField("商户", text: $item.draft.merchant)
                                 .font(.subheadline)
+                                .frame(minWidth: 80)
                                 .padding(8)
                                 .background(RoundedRectangle(cornerRadius: 8).fill(palette.surfaceSecondary))
 
@@ -371,6 +408,7 @@ public struct SmartInputSheet: View {
                                     Text(accName)
                                         .font(.caption.weight(.medium))
                                         .lineLimit(1)
+                                        .truncationMode(.tail)
                                     Image(systemName: "chevron.down")
                                         .font(.caption2)
                                 }
@@ -382,7 +420,7 @@ public struct SmartInputSheet: View {
                         }
 
                         if item.draft.type != TransactionType.TRANSFER {
-                            HStack {
+                            HStack(spacing: 8) {
                                 Menu {
                                     ForEach(store.categories.filter { $0.type == item.draft.type }) { cat in
                                         Button(cat.name) {
@@ -395,16 +433,19 @@ public struct SmartInputSheet: View {
                                         ?? (item.draft.categoryName.isEmpty ? "选择分类" : item.draft.categoryName)
                                     Label(catName, systemImage: "square.grid.2x2")
                                         .font(.caption.weight(.medium))
+                                        .lineLimit(1)
                                         .foregroundColor(palette.primary)
                                         .padding(.horizontal, 10)
                                         .padding(.vertical, 5)
                                         .background(Capsule().fill(palette.accentSoftFill))
                                 }
 
-                                Spacer()
+                                Spacer(minLength: 6)
                                 Text(YubraeTheme.formatDate(item.draft.timestamp, pattern: "MM-dd HH:mm"))
                                     .font(.caption2)
                                     .foregroundColor(palette.textTertiary)
+                                    .lineLimit(1)
+                                    .fixedSize(horizontal: true, vertical: false)
                             }
                         }
                     }
@@ -426,6 +467,10 @@ public struct SmartInputSheet: View {
     }
 
     // MARK: - Logic
+
+    private func dismissKeyboard() {
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+    }
 
     @MainActor
     private func parseSmartText() async {

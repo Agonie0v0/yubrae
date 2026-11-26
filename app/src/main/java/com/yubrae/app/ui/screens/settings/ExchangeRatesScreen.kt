@@ -41,6 +41,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.yubrae.app.core.model.CurrencyCatalog
@@ -186,7 +187,10 @@ fun ExchangeRatesScreen(
                             ) {
                                 Text(
                                     text = "${row.info.code} · ${row.info.nameZh}",
-                                    style = MaterialTheme.typography.titleSmall
+                                    style = MaterialTheme.typography.titleSmall,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f, fill = false)
                                 )
                                 Surface(
                                     shape = RoundedCornerShape(6.dp),
@@ -203,6 +207,8 @@ fun ExchangeRatesScreen(
                                             else -> row.source
                                         },
                                         style = MaterialTheme.typography.labelSmall,
+                                        maxLines = 1,
+                                        softWrap = false,
                                         modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp)
                                     )
                                 }
@@ -210,7 +216,9 @@ fun ExchangeRatesScreen(
                             Text(
                                 text = "${row.date} · 1 CNY ≈ ${MoneyAmount.formatRate(inverseRate, 4)} ${row.info.code}",
                                 style = MaterialTheme.typography.bodySmall.tabular(),
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                         }
                         Spacer(modifier = Modifier.width(8.dp))
@@ -222,7 +230,9 @@ fun ExchangeRatesScreen(
                                 text = "¥${MoneyAmount.formatRate(row.rateToCnyMicros, 4)}",
                                 style = MaterialTheme.typography.titleMedium.tabular(),
                                 fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.primary
+                                color = MaterialTheme.colorScheme.primary,
+                                maxLines = 1,
+                                softWrap = false
                             )
                             Icon(
                                 Icons.Rounded.Edit,

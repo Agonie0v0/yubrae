@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -79,12 +80,12 @@ import com.yubrae.app.data.db.DebtRecordEntity
 import com.yubrae.app.data.db.DebtStatus
 import com.yubrae.app.ui.components.CompactHairlineDivider
 import com.yubrae.app.ui.components.ConfirmActionDialog
-import com.yubrae.app.ui.components.CurrencyBadge
 import com.yubrae.app.ui.components.CurrencyPickerDialog
 import com.yubrae.app.ui.components.EmptyStateCard
 import com.yubrae.app.ui.components.KairoFormats
 import com.yubrae.app.ui.components.KairoIcons
 import com.yubrae.app.ui.components.LocalPrivacyMasked
+import com.yubrae.app.ui.components.QuickCurrencySelectorRow
 import com.yubrae.app.ui.components.YimuCard
 import com.yubrae.app.ui.components.YubraeDialog
 import com.yubrae.app.ui.components.YubraeDialogShape
@@ -734,7 +735,10 @@ private fun DebtRecordRow(
                             )
                         ),
                         style = MaterialTheme.typography.titleSmall.tabular(),
-                        fontWeight = FontWeight.Bold
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false)
                     )
                     if (!isSettled) {
                         Text(
@@ -746,7 +750,10 @@ private fun DebtRecordRow(
                             }",
                             style = MaterialTheme.typography.labelSmall.tabular(),
                             color = if (isLend) semantic.income else semantic.expense,
-                            fontWeight = FontWeight.SemiBold
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false)
                         )
                     } else {
                         Surface(
@@ -757,6 +764,8 @@ private fun DebtRecordRow(
                                 text = "已结清",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = semantic.income,
+                                maxLines = 1,
+                                softWrap = false,
                                 modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
                             )
                         }
@@ -777,6 +786,7 @@ private fun DebtRecordRow(
                 }
             }
 
+            Spacer(modifier = Modifier.width(6.dp))
             IconButton(
                 onClick = onDeleteClick,
                 modifier = Modifier.size(28.dp)
@@ -814,68 +824,78 @@ private fun DebtRecordRow(
                     )
                 }",
                 style = MaterialTheme.typography.labelSmall.tabular(),
-                color = MaterialTheme.colorScheme.onSurfaceVariant
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                softWrap = false
             )
         }
 
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            if (dueInfo != null) {
-                val (dueText, isOverdue, isSoon) = dueInfo
-                val badgeBg = when {
-                    isOverdue -> semantic.expenseContainer
-                    isSoon -> semantic.warningContainer
-                    else -> MaterialTheme.colorScheme.surfaceContainerHigh
-                }
-                val badgeFg = when {
-                    isOverdue -> semantic.expense
-                    isSoon -> semantic.warning
-                    else -> MaterialTheme.colorScheme.onSurfaceVariant
-                }
-                Surface(
-                    shape = RoundedCornerShape(5.dp),
-                    color = badgeBg
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(3.dp)
-                    ) {
-                        Icon(
-                            imageVector = if (isOverdue) Icons.Rounded.Warning else Icons.Rounded.Schedule,
-                            contentDescription = null,
-                            tint = badgeFg,
-                            modifier = Modifier.size(11.dp)
-                        )
-                        Text(
-                            text = dueText,
-                            style = MaterialTheme.typography.labelSmall,
-                            color = badgeFg
-                        )
+            Box(modifier = Modifier.weight(1f)) {
+                if (dueInfo != null) {
+                    val (dueText, isOverdue, isSoon) = dueInfo
+                    val badgeBg = when {
+                        isOverdue -> semantic.expenseContainer
+                        isSoon -> semantic.warningContainer
+                        else -> MaterialTheme.colorScheme.surfaceContainerHigh
                     }
+                    val badgeFg = when {
+                        isOverdue -> semantic.expense
+                        isSoon -> semantic.warning
+                        else -> MaterialTheme.colorScheme.onSurfaceVariant
+                    }
+                    Surface(
+                        shape = RoundedCornerShape(5.dp),
+                        color = badgeBg
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(3.dp)
+                        ) {
+                            Icon(
+                                imageVector = if (isOverdue) Icons.Rounded.Warning else Icons.Rounded.Schedule,
+                                contentDescription = null,
+                                tint = badgeFg,
+                                modifier = Modifier.size(11.dp)
+                            )
+                            Text(
+                                text = dueText,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = badgeFg,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    }
+                } else {
+                    Text(
+                        text = KairoFormats.formatDate(debt.createdAt),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
                 }
-            } else {
-                Text(
-                    text = KairoFormats.formatDate(debt.createdAt),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
             }
 
             if (!isSettled) {
                 FilledTonalButton(
                     onClick = onSettleClick,
                     shape = CircleShape,
-                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
-                    modifier = Modifier.height(28.dp)
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                    modifier = Modifier.heightIn(min = 30.dp)
                 ) {
                     Text(
                         text = if (isLend) "收款核销" else "还款核销",
                         style = MaterialTheme.typography.labelSmall,
-                        fontWeight = FontWeight.SemiBold
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        softWrap = false
                     )
                 }
             }
@@ -1156,27 +1176,12 @@ private fun AddDebtDialog(
             )
 
             Text("币种", style = MaterialTheme.typography.labelMedium)
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                val quickCodes = if (pinnedCurrencies.contains(currencyCode)) {
-                    pinnedCurrencies
-                } else {
-                    pinnedCurrencies + currencyCode
-                }
-                items(quickCodes, key = { it }) { code ->
-                    CurrencyBadge(
-                        currencyCode = code,
-                        selected = code.equals(currencyCode, true),
-                        onClick = { currencyCode = code }
-                    )
-                }
-                item(key = "more") {
-                    FilterChip(
-                        selected = false,
-                        onClick = { showMoreCurrencies = true },
-                        label = { Text("更多") }
-                    )
-                }
-            }
+            QuickCurrencySelectorRow(
+                selectedCurrency = currencyCode,
+                pinnedCurrencies = pinnedCurrencies,
+                onSelectCurrency = { currencyCode = it },
+                onOpenMore = { showMoreCurrencies = true }
+            )
 
             Text("还款日（可选）", style = MaterialTheme.typography.labelMedium)
             Row(

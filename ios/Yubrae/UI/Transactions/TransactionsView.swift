@@ -242,6 +242,9 @@ public struct TransactionsView: View {
                 Text(showAllLedgers ? "全部账本" : (store.activeLedger?.name ?? "默认账本"))
                     .font(.headline)
                     .foregroundColor(palette.textPrimary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .fixedSize(horizontal: true, vertical: false)
                 Image(systemName: "chevron.down")
                     .font(.caption.weight(.bold))
                     .foregroundColor(palette.textSecondary)
@@ -258,7 +261,7 @@ public struct TransactionsView: View {
         let netText = YubraeTheme.masked(MoneyAmount.format(netMicros, currencyCode: baseCur, showSign: true), isMasked: masked)
 
         return VStack(alignment: .leading, spacing: 14) {
-            HStack {
+            HStack(spacing: 8) {
                 HStack(spacing: 12) {
                     Button { shiftMonth(by: -1) } label: {
                         Image(systemName: "chevron.left")
@@ -270,6 +273,8 @@ public struct TransactionsView: View {
                     Text("\(String(selectedYear))年\(selectedMonth)月")
                         .font(.headline.weight(.bold))
                         .foregroundColor(.white)
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
                     Button { shiftMonth(by: 1) } label: {
                         Image(systemName: "chevron.right")
                             .font(.subheadline.weight(.bold))
@@ -278,10 +283,12 @@ public struct TransactionsView: View {
                             .background(Circle().fill(Color.white.opacity(0.18)))
                     }
                 }
-                Spacer()
+                Spacer(minLength: 6)
                 Text("\(monthTransactions.count) 笔明细")
                     .font(.caption.weight(.medium))
                     .foregroundColor(.white.opacity(0.9))
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
                     .padding(.horizontal, 10)
                     .padding(.vertical, 4)
                     .background(Capsule().fill(Color.white.opacity(0.18)))
@@ -291,6 +298,7 @@ public struct TransactionsView: View {
                 Text("本月支出 (\(baseCur))")
                     .font(.caption)
                     .foregroundColor(.white.opacity(0.84))
+                    .lineLimit(1)
                 Text(expText)
                     .font(.system(size: 30, weight: .bold, design: .rounded))
                     .foregroundColor(.white)
@@ -298,14 +306,18 @@ public struct TransactionsView: View {
                     .lineLimit(1)
             }
 
-            HStack(spacing: 20) {
+            HStack(spacing: 16) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("本月收入")
                         .font(.caption2)
                         .foregroundColor(.white.opacity(0.78))
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
                     Text(incText)
-                        .font(.subheadline.weight(.semibold))
+                        .font(.subheadline.weight(.semibold).monospacedDigit())
                         .foregroundColor(.white)
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
                 }
                 Divider()
                     .frame(height: 24)
@@ -314,11 +326,15 @@ public struct TransactionsView: View {
                     Text("月度结余")
                         .font(.caption2)
                         .foregroundColor(.white.opacity(0.78))
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
                     Text(netText)
-                        .font(.subheadline.weight(.semibold))
+                        .font(.subheadline.weight(.semibold).monospacedDigit())
                         .foregroundColor(.white)
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
                 }
-                Spacer()
+                Spacer(minLength: 0)
             }
         }
         .padding(18)
@@ -337,20 +353,27 @@ public struct TransactionsView: View {
                 Text("有 \(store.pendingCount) 笔待确认账单")
                     .font(.subheadline.weight(.semibold))
                     .foregroundColor(palette.textPrimary)
+                    .lineLimit(1)
                 Text("核对后可一键转为已确认状态并纳入统计")
                     .font(.caption)
                     .foregroundColor(palette.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            Spacer()
-            Button("全部确认") {
+            Spacer(minLength: 6)
+            Button {
                 let count = store.confirmAllPending()
                 store.toastMessage = "已确认 \(count) 笔待处理账单"
+            } label: {
+                Text("全部确认")
+                    .font(.caption.weight(.semibold))
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .foregroundColor(palette.isDark ? Color(argbHex: 0xFF111318) : .white)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(Capsule().fill(palette.warningColor))
             }
-            .font(.caption.weight(.semibold))
-            .foregroundColor(palette.onPrimary)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .background(Capsule().fill(palette.warningColor))
+            .buttonStyle(.plain)
         }
         .padding(14)
         .background(
@@ -367,14 +390,18 @@ public struct TransactionsView: View {
 
         return YubraeCard(palette: palette, padding: 14) {
             VStack(alignment: .leading, spacing: 8) {
-                HStack {
+                HStack(spacing: 8) {
                     Label(progress.categoryName, systemImage: "gauge.medium")
                         .font(.caption.weight(.semibold))
                         .foregroundColor(palette.textPrimary)
-                    Spacer()
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    Spacer(minLength: 6)
                     Text("\(spentStr) / \(limitStr)")
-                        .font(.caption.weight(.semibold))
+                        .font(.caption.weight(.semibold).monospacedDigit())
                         .foregroundColor(progress.overBudget ? palette.dangerColor : palette.textSecondary)
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
                 }
                 GeometryReader { geo in
                     ZStack(alignment: .leading) {
@@ -425,6 +452,8 @@ public struct TransactionsView: View {
                         } label: {
                             Text(filter.rawValue)
                                 .font(.caption.weight(.semibold))
+                                .lineLimit(1)
+                                .fixedSize(horizontal: true, vertical: false)
                                 .foregroundColor(selected ? palette.onPrimary : palette.textSecondary)
                                 .padding(.horizontal, 12)
                                 .padding(.vertical, 6)
@@ -435,6 +464,7 @@ public struct TransactionsView: View {
                                     Capsule().strokeBorder(selected ? Color.clear : palette.outline, lineWidth: 0.8)
                                 )
                         }
+                        .buttonStyle(.plain)
                     }
                 }
             }
@@ -445,21 +475,27 @@ public struct TransactionsView: View {
         let baseCur = store.settings.baseCurrency
         let masked = store.settings.privacyMaskEnabled
         return VStack(alignment: .leading, spacing: 8) {
-            HStack {
+            HStack(spacing: 8) {
                 Text(group.title)
                     .font(.caption.weight(.semibold))
                     .foregroundColor(palette.textSecondary)
-                Spacer()
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+                Spacer(minLength: 6)
                 HStack(spacing: 10) {
                     if group.expenseMicros > 0 {
                         Text("支 \(YubraeTheme.masked(MoneyAmount.format(group.expenseMicros, currencyCode: baseCur), isMasked: masked))")
-                            .font(.caption2)
+                            .font(.caption2.monospacedDigit())
                             .foregroundColor(palette.textTertiary)
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
                     }
                     if group.incomeMicros > 0 {
                         Text("收 \(YubraeTheme.masked(MoneyAmount.format(group.incomeMicros, currencyCode: baseCur), isMasked: masked))")
-                            .font(.caption2)
+                            .font(.caption2.monospacedDigit())
                             .foregroundColor(palette.textTertiary)
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
                     }
                 }
             }
@@ -585,11 +621,17 @@ public struct TransactionsView: View {
 
                 HStack(spacing: 6) {
                     Text(YubraeTheme.formatDate(tx.timestamp, pattern: "HH:mm"))
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
                     if let acc {
                         Text("· \(acc.name)")
+                            .lineLimit(1)
+                            .truncationMode(.tail)
                     }
                     if let cat, !tx.merchant.isEmpty {
                         Text("· \(cat.name)")
+                            .lineLimit(1)
+                            .truncationMode(.tail)
                     }
                 }
                 .font(.caption)
@@ -602,6 +644,7 @@ public struct TransactionsView: View {
                             Text("#\(t)")
                                 .font(.caption2)
                                 .foregroundColor(palette.primary)
+                                .lineLimit(1)
                         }
                         if !tx.note.isEmpty {
                             Text(tx.note)
@@ -619,13 +662,18 @@ public struct TransactionsView: View {
                 Text(YubraeTheme.masked(formattedOrig, isMasked: masked))
                     .font(.subheadline.weight(.bold).monospacedDigit())
                     .foregroundColor(amountColor)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
                 if tx.origCurrency != tx.accountCurrency {
                     let accFmt = MoneyAmount.format(tx.accountAmountMicros, currencyCode: tx.accountCurrency, showCurrencyCode: true)
                     Text("实扣 \(YubraeTheme.masked(accFmt, isMasked: masked))")
                         .font(.caption2)
                         .foregroundColor(palette.textTertiary)
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
                 }
             }
+            .layoutPriority(1)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 12)
@@ -635,6 +683,8 @@ public struct TransactionsView: View {
         Text(text)
             .font(.system(size: 10, weight: .semibold))
             .foregroundColor(color)
+            .lineLimit(1)
+            .fixedSize(horizontal: true, vertical: false)
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
             .background(Capsule().fill(color.opacity(0.14)))

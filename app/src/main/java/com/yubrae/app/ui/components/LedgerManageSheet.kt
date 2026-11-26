@@ -14,11 +14,11 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -108,18 +108,22 @@ fun LedgerManageSheet(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .navigationBarsPadding()
                 .padding(horizontal = 16.dp, vertical = 14.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 Text(
                     text = "账本管理",
                     style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
                 )
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Button(
@@ -129,7 +133,12 @@ fun LedgerManageSheet(
                     ) {
                         Icon(Icons.Rounded.Add, null, modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text("新建账本", style = MaterialTheme.typography.labelLarge)
+                        Text(
+                            text = "新建账本",
+                            style = MaterialTheme.typography.labelLarge,
+                            maxLines = 1,
+                            softWrap = false
+                        )
                     }
                     IconButton(onClick = onDismiss) {
                         Icon(Icons.Rounded.Close, contentDescription = "关闭")
@@ -195,7 +204,10 @@ fun LedgerManageSheet(
                                     Text(
                                         text = "全部账本汇总",
                                         style = MaterialTheme.typography.titleMedium,
-                                        fontWeight = FontWeight.Bold
+                                        fontWeight = FontWeight.Bold,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f, fill = false)
                                     )
                                     if (isSelected) {
                                         LedgerTagChip(
@@ -730,11 +742,6 @@ private fun LedgerEditorDialog(
     var nameError by remember { mutableStateOf(false) }
     var showMoreCurrencies by remember { mutableStateOf(false) }
 
-    val quickCurrencies = remember(pinnedCurrencies, currencyCode) {
-        val base = pinnedCurrencies.ifEmpty { CurrencyCatalog.PINNED_CURRENCIES }
-        if (base.any { it.equals(currencyCode, ignoreCase = true) }) base else base + currencyCode
-    }
-
     YubraeDialog(
         onDismissRequest = onDismiss,
         title = if (isEditing) "编辑账本" else "新建账本",
@@ -801,31 +808,12 @@ private fun LedgerEditorDialog(
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            LazyRow(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                items(quickCurrencies, key = { it }) { code ->
-                    CurrencyBadge(
-                        currencyCode = code,
-                        selected = code.equals(currencyCode, ignoreCase = true),
-                        onClick = { currencyCode = code }
-                    )
-                }
-                item(key = "more_ledger_currencies") {
-                    Surface(
-                        shape = CircleShape,
-                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                        modifier = Modifier.clickable { showMoreCurrencies = true }
-                    ) {
-                        Text(
-                            text = "更多...",
-                            style = MaterialTheme.typography.labelLarge,
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
-                        )
-                    }
-                }
-            }
+            QuickCurrencySelectorRow(
+                selectedCurrency = currencyCode,
+                pinnedCurrencies = pinnedCurrencies,
+                onSelectCurrency = { currencyCode = it },
+                onOpenMore = { showMoreCurrencies = true }
+            )
 
             Text(
                 text = "账本图标",

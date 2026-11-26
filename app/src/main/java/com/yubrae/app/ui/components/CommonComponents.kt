@@ -1,5 +1,7 @@
 package com.yubrae.app.ui.components
 
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -8,22 +10,33 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.windowInsetsTopHeight
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
@@ -279,6 +292,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -286,10 +300,16 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -337,7 +357,7 @@ private fun iconGroup(
 object KairoIcons {
     val accountIconGroups: List<IconGroupSpec> = listOf(
         iconGroup(
-            "现金与钱包",
+            "钱包",
             Triple("account_balance_wallet", "钱包", Icons.Rounded.AccountBalanceWallet),
             Triple("payments", "现金", Icons.Rounded.Payments),
             Triple("local_atm", "零钱", Icons.Rounded.LocalAtm),
@@ -348,7 +368,7 @@ object KairoIcons {
             Triple("currency_yen", "日元", Icons.Rounded.CurrencyYen)
         ),
         iconGroup(
-            "银行卡与借记",
+            "银行卡",
             Triple("account_balance", "银行", Icons.Rounded.AccountBalance),
             Triple("atm", "ATM卡", Icons.Rounded.Atm),
             Triple("assured_workload", "工资卡", Icons.Rounded.AssuredWorkload),
@@ -359,7 +379,7 @@ object KairoIcons {
             Triple("language", "跨境户", Icons.Rounded.Language)
         ),
         iconGroup(
-            "信用卡与分期",
+            "信用卡",
             Triple("credit_card", "信用卡", Icons.Rounded.CreditCard),
             Triple("credit_score", "信用分", Icons.Rounded.CreditScore),
             Triple("add_card", "副卡", Icons.Rounded.AddCard),
@@ -370,7 +390,7 @@ object KairoIcons {
             Triple("receipt_long", "花呗白条", Icons.AutoMirrored.Rounded.ReceiptLong)
         ),
         iconGroup(
-            "第三方支付",
+            "移动支付",
             Triple("chat", "微信", Icons.AutoMirrored.Rounded.Chat),
             Triple("qr_code_2", "支付宝", Icons.Rounded.QrCode2),
             Triple("qr_code_scanner", "扫码付", Icons.Rounded.QrCodeScanner),
@@ -381,7 +401,7 @@ object KairoIcons {
             Triple("point_of_sale", "收款码", Icons.Rounded.PointOfSale)
         ),
         iconGroup(
-            "储蓄理财股票基金",
+            "理财",
             Triple("savings", "储蓄", Icons.Rounded.Savings),
             Triple("trending_up", "理财", Icons.AutoMirrored.Rounded.TrendingUp),
             Triple("candlestick_chart", "股票", Icons.Rounded.CandlestickChart),
@@ -392,7 +412,7 @@ object KairoIcons {
             Triple("currency_bitcoin", "数字币", Icons.Rounded.CurrencyBitcoin)
         ),
         iconGroup(
-            "生活卡券出行会员与借贷",
+            "卡券借贷",
             Triple("directions_bus", "公交卡", Icons.Rounded.DirectionsBus),
             Triple("subway", "地铁卡", Icons.Rounded.Subway),
             Triple("card_membership", "会员卡", Icons.Rounded.CardMembership),
@@ -978,26 +998,148 @@ fun CurrencyBadge(
     }
 
     Surface(
-        modifier = modifier.then(
-            if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier
-        ),
+        modifier = modifier
+            .clip(CircleShape)
+            .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier),
         shape = CircleShape,
         color = containerColor,
         contentColor = contentColor,
         border = border
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            Text(text = info.flag, style = MaterialTheme.typography.labelMedium)
+            Text(
+                text = info.flag,
+                style = MaterialTheme.typography.labelMedium,
+                maxLines = 1,
+                softWrap = false
+            )
             Text(
                 text = info.code,
                 style = MaterialTheme.typography.labelLarge,
-                fontWeight = if (selected) FontWeight.Bold else FontWeight.SemiBold
+                fontWeight = if (selected) FontWeight.Bold else FontWeight.SemiBold,
+                maxLines = 1,
+                softWrap = false
             )
         }
+    }
+}
+
+/**
+ * 常用币种横向快捷选择行：统一 32dp 胶囊高度，消除与「更多」按钮的基线错位。
+ */
+@Composable
+fun QuickCurrencySelectorRow(
+    selectedCurrency: String,
+    pinnedCurrencies: List<String>,
+    onSelectCurrency: (String) -> Unit,
+    onOpenMore: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val quickCodes = remember(pinnedCurrencies, selectedCurrency) {
+        val base = pinnedCurrencies
+            .map { it.trim().uppercase(Locale.ROOT) }
+            .filter { it.isNotEmpty() }
+            .distinct()
+            .ifEmpty { CurrencyCatalog.PINNED_CURRENCIES }
+        val normalizedSelected = selectedCurrency.trim().uppercase(Locale.ROOT)
+        if (normalizedSelected.isNotEmpty() && base.none { it.equals(normalizedSelected, ignoreCase = true) }) {
+            base + normalizedSelected
+        } else {
+            base
+        }
+    }
+
+    LazyRow(
+        modifier = modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        items(quickCodes, key = { it }) { code ->
+            CurrencyBadge(
+                currencyCode = code,
+                selected = code.equals(selectedCurrency, ignoreCase = true),
+                onClick = { onSelectCurrency(code) },
+                modifier = Modifier.height(32.dp)
+            )
+        }
+        item(key = "__more_currencies__") {
+            Surface(
+                modifier = Modifier
+                    .height(32.dp)
+                    .clip(CircleShape)
+                    .clickable(onClick = onOpenMore),
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f))
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(3.dp)
+                ) {
+                    Text(
+                        text = "更多",
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 1,
+                        softWrap = false
+                    )
+                    Icon(
+                        imageVector = Icons.Rounded.MoreHoriz,
+                        contentDescription = "更多币种",
+                        modifier = Modifier.size(14.dp)
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 主 Tab 顶部状态栏渐隐遮罩：页面上滑时覆盖状态栏高度并附带 8dp 羽化过渡，
+ * 避免滚动中的卡片/统计数字穿入系统状态栏与时间电量重叠。
+ */
+@Composable
+fun TopStatusBarScrim(
+    visible: Boolean,
+    modifier: Modifier = Modifier
+) {
+    val bgColor = MaterialTheme.colorScheme.background
+    val scrimAlpha by animateFloatAsState(
+        targetValue = if (visible) 1f else 0f,
+        animationSpec = tween(durationMillis = 180),
+        label = "top_status_bar_scrim_alpha"
+    )
+    if (scrimAlpha <= 0.001f) return
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .graphicsLayer { alpha = scrimAlpha }
+    ) {
+        Spacer(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(bgColor)
+                .windowInsetsTopHeight(WindowInsets.statusBars)
+        )
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(8.dp)
+                .background(
+                    Brush.verticalGradient(
+                        colors = listOf(
+                            bgColor,
+                            bgColor.copy(alpha = 0f)
+                        )
+                    )
+                )
+        )
     }
 }
 
@@ -1199,6 +1341,7 @@ fun yubraeSheetContainerColor(): Color = MaterialTheme.colorScheme.surfaceContai
 /**
  * 余白全局统一弹窗容器：24dp 圆角、柔和边框与头部徽章，正文保持非滚动以兼容内部 LazyColumn。
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun YubraeDialog(
     onDismissRequest: () -> Unit,
@@ -1214,6 +1357,7 @@ fun YubraeDialog(
     dismissButton: (@Composable () -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit
 ) {
+    val maxDialogHeight = (LocalConfiguration.current.screenHeightDp * 0.85f).dp
     Dialog(
         onDismissRequest = onDismissRequest,
         properties = DialogProperties(
@@ -1224,8 +1368,11 @@ fun YubraeDialog(
     ) {
         Surface(
             modifier = Modifier
-                .padding(horizontal = 20.dp, vertical = 24.dp)
+                .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Vertical))
+                .imePadding()
+                .padding(horizontal = 20.dp, vertical = 20.dp)
                 .widthIn(max = 420.dp)
+                .heightIn(max = maxDialogHeight)
                 .fillMaxWidth(),
             shape = YubraeDialogShape,
             color = yubraeDialogContainerColor(),
@@ -1296,10 +1443,10 @@ fun YubraeDialog(
                         thickness = 0.5.dp,
                         color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)
                     )
-                    Row(
+                    FlowRow(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
-                        verticalAlignment = Alignment.CenterVertically
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         dismissButton?.invoke()
                         confirmButton()
@@ -1667,7 +1814,7 @@ fun TagBadgeChip(
 }
 
 /**
- * 共享分组图标选择器：内置紧凑搜索框、横向分组筛选胶囊与 6 列有限高紧凑网格。
+ * 共享分组图标选择器：内置紧凑搜索框、横向分组筛选胶囊与 5 列有限高紧凑网格。
  * 网格高度受限于 [gridMaxHeight]，可安全嵌入 ModalBottomSheet、AlertDialog 或垂直滚动页面。
  */
 @Composable
@@ -1686,6 +1833,8 @@ fun GroupedIconPicker(
 ) {
     var searchQuery by remember(groups) { mutableStateOf("") }
     var selectedGroup by remember(groups) { mutableStateOf<String?>(null) }
+    val groupListState = rememberLazyListState()
+    val showGroupRightFade by remember { derivedStateOf { groupListState.canScrollForward } }
 
     val normalizedQuery = searchQuery.trim().lowercase(Locale.ROOT)
     val filteredItems = remember(groups, selectedGroup, normalizedQuery) {
@@ -1775,7 +1924,25 @@ fun GroupedIconPicker(
         }
 
         LazyRow(
-            modifier = Modifier.fillMaxWidth(),
+            state = groupListState,
+            modifier = Modifier
+                .fillMaxWidth()
+                .graphicsLayer(compositingStrategy = CompositingStrategy.Offscreen)
+                .drawWithContent {
+                    drawContent()
+                    if (showGroupRightFade && size.width > 0f) {
+                        val fadeFraction = (20.dp.toPx() / size.width).coerceIn(0f, 0.25f)
+                        drawRect(
+                            brush = Brush.horizontalGradient(
+                                0f to Color.Black,
+                                (1f - fadeFraction) to Color.Black,
+                                1f to Color.Transparent
+                            ),
+                            blendMode = BlendMode.DstIn
+                        )
+                    }
+                },
+            contentPadding = PaddingValues(end = 16.dp),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -1830,7 +1997,7 @@ fun GroupedIconPicker(
                 }
             } else {
                 LazyVerticalGrid(
-                    columns = GridCells.Fixed(6),
+                    columns = GridCells.Fixed(5),
                     modifier = Modifier
                         .fillMaxWidth()
                         .heightIn(min = 140.dp, max = gridMaxHeight.coerceAtLeast(140.dp)),
@@ -1893,8 +2060,8 @@ fun GroupedIconPicker(
                                 Text(
                                     text = item.label,
                                     style = MaterialTheme.typography.labelSmall.copy(
-                                        fontSize = 9.5.sp,
-                                        lineHeight = 12.sp
+                                        fontSize = 10.sp,
+                                        lineHeight = 13.sp
                                     ),
                                     fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
                                     color = if (isSelected) accentColor else MaterialTheme.colorScheme.onSurfaceVariant,

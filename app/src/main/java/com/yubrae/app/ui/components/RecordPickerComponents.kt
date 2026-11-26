@@ -286,7 +286,9 @@ internal fun CategoryExplorerPanel(
                                 text = "新建",
                                 style = MaterialTheme.typography.labelMedium,
                                 color = MaterialTheme.colorScheme.primary,
-                                fontWeight = FontWeight.SemiBold
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1,
+                                softWrap = false
                             )
                         }
                     }
@@ -566,12 +568,19 @@ internal fun CategoryExplorerPanel(
                                                         text = "${activeParent.name} · 细分",
                                                         style = MaterialTheme.typography.labelSmall,
                                                         color = Color(activeParent.colorHex),
-                                                        fontWeight = FontWeight.SemiBold
+                                                        fontWeight = FontWeight.SemiBold,
+                                                        maxLines = 1,
+                                                        overflow = TextOverflow.Ellipsis,
+                                                        modifier = Modifier
+                                                            .weight(1f, fill = false)
+                                                            .padding(end = 8.dp)
                                                     )
                                                     Text(
                                                         text = if (selectedCategoryId == activeParent.id) "当前：大类默认" else "点击可切回大类",
                                                         style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
-                                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                        maxLines = 1,
+                                                        softWrap = false
                                                     )
                                                 }
                                                 FlowRow(

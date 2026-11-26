@@ -717,59 +717,63 @@ fun QuickRecordSheet(
                 .navigationBarsPadding()
                 .imePadding()
         ) {
-            // 1. 顶栏：左侧(删除/账本) | 中央(支出/收入/转账) | 右侧(关闭)
-            Box(
+            // 1. 顶栏：三槽等重 Row，左(删除/账本) | 中(支出/收入/转账) | 右(关闭)，彻底防止长账本名与分段器重叠
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .heightIn(min = 44.dp)
-                    .padding(horizontal = 12.dp, vertical = 4.dp)
+                    .padding(horizontal = 12.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                if (isEditMode) {
-                    IconButton(
-                        onClick = { showDeleteConfirm = true },
-                        modifier = Modifier
-                            .align(Alignment.CenterStart)
-                            .size(32.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Rounded.Delete,
-                            contentDescription = "删除交易",
-                            tint = MaterialTheme.colorScheme.error,
-                            modifier = Modifier.size(18.dp)
-                        )
-                    }
-                } else if (selectableLedgers.size > 1 && selectedLedger != null) {
-                    val ledgerColor = Color(selectedLedger.colorHex)
-                    Surface(
-                        shape = CircleShape,
-                        color = ledgerColor.copy(alpha = 0.12f),
-                        border = BorderStroke(0.6.dp, ledgerColor.copy(alpha = 0.3f)),
-                        modifier = Modifier
-                            .align(Alignment.CenterStart)
-                            .height(28.dp)
-                            .clip(CircleShape)
-                            .clickable { showLedgerPicker = true }
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 9.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                Box(
+                    modifier = Modifier.weight(1f),
+                    contentAlignment = Alignment.CenterStart
+                ) {
+                    if (isEditMode) {
+                        IconButton(
+                            onClick = { showDeleteConfirm = true },
+                            modifier = Modifier.size(32.dp)
                         ) {
                             Icon(
-                                imageVector = KairoIcons.ledgerIcon(selectedLedger.icon),
-                                contentDescription = null,
-                                tint = ledgerColor,
-                                modifier = Modifier.size(13.dp)
+                                imageVector = Icons.Rounded.Delete,
+                                contentDescription = "删除交易",
+                                tint = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.size(18.dp)
                             )
-                            Text(
-                                text = selectedLedger.name,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = ledgerColor,
-                                fontWeight = FontWeight.SemiBold,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.widthIn(max = 72.dp)
-                            )
+                        }
+                    } else if (selectableLedgers.size > 1 && selectedLedger != null) {
+                        val ledgerColor = Color(selectedLedger.colorHex)
+                        Surface(
+                            shape = CircleShape,
+                            color = ledgerColor.copy(alpha = 0.12f),
+                            border = BorderStroke(0.6.dp, ledgerColor.copy(alpha = 0.3f)),
+                            modifier = Modifier
+                                .height(28.dp)
+                                .clip(CircleShape)
+                                .clickable { showLedgerPicker = true }
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Icon(
+                                    imageVector = KairoIcons.ledgerIcon(selectedLedger.icon),
+                                    contentDescription = null,
+                                    tint = ledgerColor,
+                                    modifier = Modifier.size(13.dp)
+                                )
+                                Text(
+                                    text = selectedLedger.name,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = ledgerColor,
+                                    fontWeight = FontWeight.SemiBold,
+                                    maxLines = 1,
+                                    softWrap = false,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
                         }
                     }
                 }
@@ -777,19 +781,19 @@ fun QuickRecordSheet(
                 if (txType == TransactionType.ADJUST) {
                     Surface(
                         shape = CircleShape,
-                        color = MaterialTheme.colorScheme.secondaryContainer,
-                        modifier = Modifier.align(Alignment.Center)
+                        color = MaterialTheme.colorScheme.secondaryContainer
                     ) {
                         Text(
                             text = "余额校准记录",
                             style = MaterialTheme.typography.labelLarge.copy(fontSize = 12.sp),
+                            maxLines = 1,
+                            softWrap = false,
                             modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
                         )
                     }
                 } else {
                     Row(
                         modifier = Modifier
-                            .align(Alignment.Center)
                             .clip(CircleShape)
                             .background(MaterialTheme.colorScheme.surfaceContainerHigh)
                             .padding(2.dp),
@@ -843,25 +847,30 @@ fun QuickRecordSheet(
                                     color = textColor,
                                     style = MaterialTheme.typography.labelLarge.copy(fontSize = 12.5.sp),
                                     fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-                                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp)
+                                    maxLines = 1,
+                                    softWrap = false,
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
                                 )
                             }
                         }
                     }
                 }
 
-                IconButton(
-                    onClick = onDismiss,
-                    modifier = Modifier
-                        .align(Alignment.CenterEnd)
-                        .size(32.dp)
+                Box(
+                    modifier = Modifier.weight(1f),
+                    contentAlignment = Alignment.CenterEnd
                 ) {
-                    Icon(
-                        imageVector = Icons.Rounded.Close,
-                        contentDescription = "关闭",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(19.dp)
-                    )
+                    IconButton(
+                        onClick = onDismiss,
+                        modifier = Modifier.size(32.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Close,
+                            contentDescription = "关闭",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(19.dp)
+                        )
+                    }
                 }
             }
 
@@ -927,93 +936,101 @@ fun QuickRecordSheet(
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        // 左侧：当前分类或转账流向徽章（点击随时回到分类视图）
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            modifier = Modifier
-                                .weight(1f, fill = false)
-                                .clip(RoundedCornerShape(10.dp))
-                                .clickable { activePanel = RecordWorkspacePanel.CATEGORY }
-                                .padding(vertical = 2.dp, horizontal = 2.dp)
+                        // 左侧：当前分类或转账流向徽章（占满左侧余量，保护分类名不被长金额挤没）
+                        Box(
+                            modifier = Modifier.weight(1f),
+                            contentAlignment = Alignment.CenterStart
                         ) {
-                            when (txType) {
-                                TransactionType.TRANSFER -> {
-                                    CartoonAccountIcon(
-                                        iconKey = selectedAccount?.icon ?: "wallet",
-                                        accountName = selectedAccount?.name.orEmpty(),
-                                        colorHex = selectedAccount?.colorHex ?: 0xFF2AA876L,
-                                        size = 34.dp
-                                    )
-                                    Column {
-                                        Text(
-                                            text = "${selectedAccount?.name ?: "转出"} → ${selectedToAccount?.name ?: "转入"}",
-                                            style = MaterialTheme.typography.titleSmall,
-                                            fontWeight = FontWeight.Bold,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(10.dp))
+                                    .clickable { activePanel = RecordWorkspacePanel.CATEGORY }
+                                    .padding(vertical = 2.dp, horizontal = 2.dp)
+                            ) {
+                                when (txType) {
+                                    TransactionType.TRANSFER -> {
+                                        CartoonAccountIcon(
+                                            iconKey = selectedAccount?.icon ?: "wallet",
+                                            accountName = selectedAccount?.name.orEmpty(),
+                                            colorHex = selectedAccount?.colorHex ?: 0xFF2AA876L,
+                                            size = 34.dp
                                         )
-                                        Text(
-                                            text = "账户互转",
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    }
-                                }
-                                TransactionType.ADJUST -> {
-                                    CartoonAccountIcon(
-                                        iconKey = selectedAccount?.icon ?: "wallet",
-                                        accountName = selectedAccount?.name.orEmpty(),
-                                        colorHex = selectedAccount?.colorHex ?: 0xFF2AA876L,
-                                        size = 34.dp
-                                    )
-                                    Column {
-                                        Text(
-                                            text = selectedAccount?.name ?: "余额校准",
-                                            style = MaterialTheme.typography.titleSmall,
-                                            fontWeight = FontWeight.Bold,
-                                            maxLines = 1
-                                        )
-                                        Text(
-                                            text = "校准差额",
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    }
-                                }
-                                else -> {
-                                    val cat = selectedCategoryObj
-                                    CartoonCategoryIcon(
-                                        iconKey = cat?.icon ?: "category",
-                                        size = 34.dp,
-                                        fallbackColorHex = cat?.colorHex ?: 0xFF2AA876L
-                                    )
-                                    Column {
-                                        Text(
-                                            text = cat?.name ?: "选分类",
-                                            style = MaterialTheme.typography.titleSmall,
-                                            fontWeight = FontWeight.Bold,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                        if (selectedCategoryParent != null) {
+                                        Column {
                                             Text(
-                                                text = selectedCategoryParent.name,
-                                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.5.sp),
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                maxLines = 1
+                                                text = "${selectedAccount?.name ?: "转出"} → ${selectedToAccount?.name ?: "转入"}",
+                                                style = MaterialTheme.typography.titleSmall,
+                                                fontWeight = FontWeight.Bold,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
                                             )
+                                            Text(
+                                                text = "账户互转",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                        }
+                                    }
+                                    TransactionType.ADJUST -> {
+                                        CartoonAccountIcon(
+                                            iconKey = selectedAccount?.icon ?: "wallet",
+                                            accountName = selectedAccount?.name.orEmpty(),
+                                            colorHex = selectedAccount?.colorHex ?: 0xFF2AA876L,
+                                            size = 34.dp
+                                        )
+                                        Column {
+                                            Text(
+                                                text = selectedAccount?.name ?: "余额校准",
+                                                style = MaterialTheme.typography.titleSmall,
+                                                fontWeight = FontWeight.Bold,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                            Text(
+                                                text = "校准差额",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                        }
+                                    }
+                                    else -> {
+                                        val cat = selectedCategoryObj
+                                        CartoonCategoryIcon(
+                                            iconKey = cat?.icon ?: "category",
+                                            size = 34.dp,
+                                            fallbackColorHex = cat?.colorHex ?: 0xFF2AA876L
+                                        )
+                                        Column {
+                                            Text(
+                                                text = cat?.name ?: "选分类",
+                                                style = MaterialTheme.typography.titleSmall,
+                                                fontWeight = FontWeight.Bold,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                            if (selectedCategoryParent != null) {
+                                                Text(
+                                                    text = selectedCategoryParent.name,
+                                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.5.sp),
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                            }
                                         }
                                     }
                                 }
                             }
                         }
 
-                        Spacer(modifier = Modifier.weight(1f))
-
-                        // 右侧：紧凑币种胶囊 + 醒目大号数字金额
+                        // 右侧：紧凑币种胶囊 + 阶梯自适应大号数字金额
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -1032,11 +1049,13 @@ fun QuickRecordSheet(
                                     verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.spacedBy(2.dp)
                                 ) {
-                                    Text(text = currencyInfo.flag, fontSize = 11.sp)
+                                    Text(text = currencyInfo.flag, fontSize = 11.sp, maxLines = 1, softWrap = false)
                                     Text(
                                         text = currencyInfo.code,
                                         style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
-                                        fontWeight = FontWeight.Bold
+                                        fontWeight = FontWeight.Bold,
+                                        maxLines = 1,
+                                        softWrap = false
                                     )
                                     Icon(
                                         imageVector = Icons.Rounded.KeyboardArrowDown,
@@ -1047,6 +1066,19 @@ fun QuickRecordSheet(
                                 }
                             }
 
+                            val amountDisplayText = "${currencyInfo.symbol}${amountExpr.ifEmpty { "0.00" }}"
+                            val amountFontSize = when {
+                                amountDisplayText.length > 12 -> 18.sp
+                                amountDisplayText.length > 10 -> 20.sp
+                                amountDisplayText.length > 8 -> 22.sp
+                                else -> 26.sp
+                            }
+                            val amountLineHeight = when {
+                                amountDisplayText.length > 12 -> 22.sp
+                                amountDisplayText.length > 10 -> 24.sp
+                                amountDisplayText.length > 8 -> 26.sp
+                                else -> 30.sp
+                            }
                             val amountScroll = rememberScrollState()
                             LaunchedEffect(amountExpr) {
                                 amountScroll.scrollTo(amountScroll.maxValue)
@@ -1063,14 +1095,14 @@ fun QuickRecordSheet(
                             ) {
                                 Box(
                                     modifier = Modifier
-                                        .widthIn(max = 178.dp)
+                                        .widthIn(max = 148.dp)
                                         .horizontalScroll(amountScroll)
                                 ) {
                                     Text(
-                                        text = "${currencyInfo.symbol}${amountExpr.ifEmpty { "0.00" }}",
+                                        text = amountDisplayText,
                                         style = MaterialTheme.typography.headlineMedium.copy(
-                                            fontSize = 26.sp,
-                                            lineHeight = 30.sp,
+                                            fontSize = amountFontSize,
+                                            lineHeight = amountLineHeight,
                                             fontWeight = FontWeight.Bold
                                         ).tabular(),
                                         color = if (amountExpr.isEmpty()) accentColor.copy(alpha = 0.42f) else accentColor,
@@ -1083,7 +1115,10 @@ fun QuickRecordSheet(
                                         text = "= ${MoneyAmount.format(parsedOrigMicros, origCurrency, showCurrencyCode = false)}",
                                         style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp).tabular(),
                                         color = accentColor.copy(alpha = 0.85f),
-                                        maxLines = 1
+                                        maxLines = 1,
+                                        softWrap = false,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.widthIn(max = 148.dp)
                                     )
                                 }
                             }
@@ -1353,82 +1388,88 @@ fun QuickRecordSheet(
             // 4. 底部高频工作台（仅保留 4 颗高价值属性胶囊 + 独立宽敞备注行 + 舒适键盘）
             CompactHairlineDivider(startIndent = 0.dp)
 
-            Row(
+            LazyRow(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                    .padding(vertical = 6.dp),
+                contentPadding = PaddingValues(horizontal = 12.dp),
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                WorkbenchAttrChip(
-                    icon = Icons.Rounded.AccountBalanceWallet,
-                    customLeading = selectedAccount?.let { acc ->
-                        {
-                            CartoonAccountIcon(
-                                iconKey = acc.icon,
-                                accountName = acc.name,
-                                colorHex = acc.colorHex,
-                                size = 16.dp
-                            )
-                        }
-                    },
-                    label = selectedAccount?.name ?: "选账户",
-                    selected = activePanel == RecordWorkspacePanel.ACCOUNT || selectedAccount != null,
-                    accentColor = selectedAccount?.let { Color(it.colorHex) } ?: MaterialTheme.colorScheme.error,
-                    onClick = {
-                        activePanel = if (activePanel == RecordWorkspacePanel.ACCOUNT) {
-                            RecordWorkspacePanel.CATEGORY
-                        } else {
-                            RecordWorkspacePanel.ACCOUNT
-                        }
-                    },
-                    modifier = Modifier.weight(1.1f)
-                )
+                item(key = "attr_account") {
+                    WorkbenchAttrChip(
+                        icon = Icons.Rounded.AccountBalanceWallet,
+                        customLeading = selectedAccount?.let { acc ->
+                            {
+                                CartoonAccountIcon(
+                                    iconKey = acc.icon,
+                                    accountName = acc.name,
+                                    colorHex = acc.colorHex,
+                                    size = 16.dp
+                                )
+                            }
+                        },
+                        label = selectedAccount?.name ?: "选账户",
+                        selected = activePanel == RecordWorkspacePanel.ACCOUNT || selectedAccount != null,
+                        accentColor = selectedAccount?.let { Color(it.colorHex) } ?: MaterialTheme.colorScheme.error,
+                        onClick = {
+                            activePanel = if (activePanel == RecordWorkspacePanel.ACCOUNT) {
+                                RecordWorkspacePanel.CATEGORY
+                            } else {
+                                RecordWorkspacePanel.ACCOUNT
+                            }
+                        },
+                        modifier = Modifier.widthIn(max = 136.dp)
+                    )
+                }
 
-                WorkbenchAttrChip(
-                    icon = Icons.Rounded.Schedule,
-                    label = formatSmartDateTimeChip(timestampMillis),
-                    selected = activePanel == RecordWorkspacePanel.DATE_TIME,
-                    accentColor = MaterialTheme.colorScheme.primary,
-                    onClick = {
-                        activePanel = if (activePanel == RecordWorkspacePanel.DATE_TIME) {
-                            RecordWorkspacePanel.CATEGORY
-                        } else {
-                            RecordWorkspacePanel.DATE_TIME
+                item(key = "attr_datetime") {
+                    WorkbenchAttrChip(
+                        icon = Icons.Rounded.Schedule,
+                        label = formatSmartDateTimeChip(timestampMillis),
+                        selected = activePanel == RecordWorkspacePanel.DATE_TIME,
+                        accentColor = MaterialTheme.colorScheme.primary,
+                        onClick = {
+                            activePanel = if (activePanel == RecordWorkspacePanel.DATE_TIME) {
+                                RecordWorkspacePanel.CATEGORY
+                            } else {
+                                RecordWorkspacePanel.DATE_TIME
+                            }
                         }
-                    },
-                    modifier = Modifier.weight(1.15f)
-                )
+                    )
+                }
 
-                WorkbenchAttrChip(
-                    icon = Icons.AutoMirrored.Rounded.Label,
-                    label = if (selectedTagNames.isEmpty()) "标签" else "标签(${selectedTagNames.size})",
-                    selected = activePanel == RecordWorkspacePanel.TAGS || selectedTagNames.isNotEmpty(),
-                    accentColor = MaterialTheme.colorScheme.primary,
-                    onClick = {
-                        activePanel = if (activePanel == RecordWorkspacePanel.TAGS) {
-                            RecordWorkspacePanel.CATEGORY
-                        } else {
-                            RecordWorkspacePanel.TAGS
+                item(key = "attr_tags") {
+                    WorkbenchAttrChip(
+                        icon = Icons.AutoMirrored.Rounded.Label,
+                        label = if (selectedTagNames.isEmpty()) "标签" else "标签(${selectedTagNames.size})",
+                        selected = activePanel == RecordWorkspacePanel.TAGS || selectedTagNames.isNotEmpty(),
+                        accentColor = MaterialTheme.colorScheme.primary,
+                        onClick = {
+                            activePanel = if (activePanel == RecordWorkspacePanel.TAGS) {
+                                RecordWorkspacePanel.CATEGORY
+                            } else {
+                                RecordWorkspacePanel.TAGS
+                            }
                         }
-                    },
-                    modifier = Modifier.weight(0.95f)
-                )
+                    )
+                }
 
-                WorkbenchAttrChip(
-                    icon = Icons.Rounded.Tune,
-                    label = if (moreActiveCount == 0) "更多" else "更多($moreActiveCount)",
-                    selected = activePanel == RecordWorkspacePanel.MORE || moreActiveCount > 0,
-                    accentColor = MaterialTheme.colorScheme.primary,
-                    onClick = {
-                        activePanel = if (activePanel == RecordWorkspacePanel.MORE) {
-                            RecordWorkspacePanel.CATEGORY
-                        } else {
-                            RecordWorkspacePanel.MORE
+                item(key = "attr_more") {
+                    WorkbenchAttrChip(
+                        icon = Icons.Rounded.Tune,
+                        label = if (moreActiveCount == 0) "更多" else "更多($moreActiveCount)",
+                        selected = activePanel == RecordWorkspacePanel.MORE || moreActiveCount > 0,
+                        accentColor = MaterialTheme.colorScheme.primary,
+                        onClick = {
+                            activePanel = if (activePanel == RecordWorkspacePanel.MORE) {
+                                RecordWorkspacePanel.CATEGORY
+                            } else {
+                                RecordWorkspacePanel.MORE
+                            }
                         }
-                    },
-                    modifier = Modifier.weight(0.9f)
-                )
+                    )
+                }
             }
 
             // 已选标签 / 票据轻量摘要带（仅当非标签页且存在内容时展示，点标签直达标签页）
@@ -1665,20 +1706,34 @@ fun QuickRecordSheet(
                     ) {
                         Icon(Icons.Rounded.Calculate, null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text("键盘", style = MaterialTheme.typography.labelLarge)
+                        Text(
+                            text = "键盘",
+                            style = MaterialTheme.typography.labelLarge,
+                            maxLines = 1,
+                            softWrap = false,
+                            overflow = TextOverflow.Ellipsis
+                        )
                     }
                     if (!isEditMode && !isRefundMode) {
                         FilledTonalButton(
                             onClick = { saveWithMode(true) },
                             shape = RoundedCornerShape(11.dp),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
                             modifier = Modifier.height(42.dp)
                         ) {
-                            Text("再记一笔", fontWeight = FontWeight.SemiBold)
+                            Text(
+                                text = "再记一笔",
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1,
+                                softWrap = false,
+                                overflow = TextOverflow.Ellipsis
+                            )
                         }
                     }
                     Button(
                         onClick = { saveWithMode(false) },
                         shape = RoundedCornerShape(11.dp),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
                         modifier = Modifier
                             .weight(1f)
                             .height(42.dp)
@@ -1688,7 +1743,10 @@ fun QuickRecordSheet(
                         Text(
                             text = if (isEditMode) "保存修改" else "完成记账",
                             style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.Bold
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            softWrap = false,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
                 }
@@ -1872,7 +1930,9 @@ fun QuickRecordSheet(
             }
         ) {
             Box(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
                 contentAlignment = Alignment.Center
             ) {
                 TimePicker(state = timePickerState)
@@ -2515,6 +2575,7 @@ private fun WorkbenchAttrChip(
                 color = if (selected) accentColor else MaterialTheme.colorScheme.onSurface,
                 fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
                 maxLines = 1,
+                softWrap = false,
                 overflow = TextOverflow.Ellipsis
             )
         }

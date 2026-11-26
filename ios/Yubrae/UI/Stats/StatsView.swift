@@ -1,5 +1,6 @@
 import Charts
 import SwiftUI
+import UIKit
 
 private struct TrendBarEntry: Identifiable {
     let id: String
@@ -214,6 +215,7 @@ public struct StatsView: View {
                         HStack(spacing: 4) {
                             Text(showAllLedgers ? "全部账本" : (store.activeLedger?.name ?? "账本"))
                                 .font(.caption.weight(.semibold))
+                                .lineLimit(1)
                             Image(systemName: "chevron.down")
                                 .font(.caption2)
                         }
@@ -242,15 +244,20 @@ public struct StatsView: View {
                 .pickerStyle(.segmented)
 
                 if granularity == .custom {
-                    HStack(spacing: 10) {
+                    HStack(spacing: 8) {
                         DatePicker("开始", selection: $customStartDate, displayedComponents: .date)
                             .labelsHidden()
+                            .fixedSize(horizontal: true, vertical: false)
                         Text("至")
                             .font(.caption)
                             .foregroundColor(palette.textSecondary)
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
                         DatePicker("结束", selection: $customEndDate, displayedComponents: .date)
                             .labelsHidden()
+                            .fixedSize(horizontal: true, vertical: false)
                     }
+                    .frame(maxWidth: .infinity)
                 } else {
                     HStack {
                         Button { shiftAnchor(by: -1) } label: {
@@ -258,11 +265,13 @@ public struct StatsView: View {
                                 .font(.title3)
                                 .foregroundColor(palette.primary)
                         }
-                        Spacer()
+                        Spacer(minLength: 8)
                         Text(periodTitle)
                             .font(.subheadline.weight(.bold))
                             .foregroundColor(palette.textPrimary)
-                        Spacer()
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.85)
+                        Spacer(minLength: 8)
                         Button { shiftAnchor(by: 1) } label: {
                             Image(systemName: "chevron.right.circle.fill")
                                 .font(.title3)
@@ -285,6 +294,7 @@ public struct StatsView: View {
             metricBox(title: "总收入", value: incStr, accent: palette.incomeColor)
             metricBox(title: "结余", value: netStr, accent: palette.primary)
         }
+        .fixedSize(horizontal: false, vertical: true)
     }
 
     private func metricBox(title: String, value: String, accent: Color) -> some View {
@@ -293,13 +303,14 @@ public struct StatsView: View {
                 Text(title)
                     .font(.caption)
                     .foregroundColor(palette.textSecondary)
+                    .lineLimit(1)
                 Text(value)
                     .font(.subheadline.weight(.bold).monospacedDigit())
                     .foregroundColor(accent)
                     .lineLimit(1)
                     .minimumScaleFactor(0.65)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
         }
     }
 
@@ -308,18 +319,20 @@ public struct StatsView: View {
     private var trendChartCard: some View {
         YubraeCard(palette: palette) {
             VStack(alignment: .leading, spacing: 12) {
-                HStack {
-                    Text(chartMode == .cashflow ? "收支趋势" : "近 6 月净资产走势")
+                HStack(spacing: 8) {
+                    Text(chartMode == .cashflow ? "收支趋势" : "近6月净资产")
                         .font(.subheadline.weight(.bold))
                         .foregroundColor(palette.textPrimary)
-                    Spacer()
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
+                    Spacer(minLength: 4)
                     Picker("图表模式", selection: $chartMode) {
                         ForEach(StatsChartMode.allCases) { m in
                             Text(m.title).tag(m)
                         }
                     }
                     .pickerStyle(.segmented)
-                    .frame(width: 170)
+                    .frame(width: 152)
                 }
 
                 if chartMode == .cashflow {
@@ -332,7 +345,8 @@ public struct StatsView: View {
     }
 
     private var cashflowBarChart: some View {
-        let entries: [TrendBarEntry] = trendBuckets.flatMap { bucket -> [TrendBarEntry] in
+        let buckets = trendBuckets
+        let entries: [TrendBarEntry] = buckets.flatMap { bucket -> [TrendBarEntry] in
             [
                 TrendBarEntry(
                     id: "\(bucket.id)-exp",
@@ -348,6 +362,22 @@ public struct StatsView: View {
                 )
             ]
         }
+
+        let allLabels = buckets.map(\.label)
+        let visibleXLabels: [String] = {
+            let count = allLabels.count
+            guard count > 7 else { return allLabels }
+            let step = max(1, Int(ceil(Double(count) / 6.0)))
+            var picked: [String] = []
+            for (idx, label) in allLabels.enumerated() {
+                if idx == 0 || idx == count - 1 || (idx % step == 0 && (count - 1 - idx) >= max(2, step / 2)) {
+                    if !picked.contains(label) {
+                        picked.append(label)
+                    }
+                }
+            }
+            return picked
+        }()
 
         let hasAnyData = entries.contains { $0.amount > 0 }
         return Group {
@@ -373,6 +403,17 @@ public struct StatsView: View {
                     "收入": palette.incomeColor
                 ])
                 .chartLegend(position: .top, alignment: .trailing)
+                .chartXAxis {
+                    AxisMarks(values: visibleXLabels) { value in
+                        AxisValueLabel {
+                            if let label = value.as(String.self) {
+                                Text(label)
+                                    .font(.caption2)
+                                    .lineLimit(1)
+                            }
+                        }
+                    }
+                }
                 .chartYAxis {
                     AxisMarks(position: .leading)
                 }
@@ -450,11 +491,12 @@ public struct StatsView: View {
 
         return YubraeCard(palette: palette) {
             VStack(alignment: .leading, spacing: 14) {
-                HStack {
+                HStack(spacing: 8) {
                     Text("分类构成")
                         .font(.subheadline.weight(.bold))
                         .foregroundColor(palette.textPrimary)
-                    Spacer()
+                        .lineLimit(1)
+                    Spacer(minLength: 8)
                     Picker("分类类型", selection: $breakdownType) {
                         Text("支出").tag(TransactionType.EXPENSE)
                         Text("收入").tag(TransactionType.INCOME)
@@ -497,10 +539,12 @@ public struct StatsView: View {
                                             .font(.caption.weight(highlightedCategoryId == stat.id ? .bold : .medium))
                                             .foregroundColor(palette.textPrimary)
                                             .lineLimit(1)
-                                        Spacer()
+                                        Spacer(minLength: 4)
                                         Text("\(Int((stat.percentage * 100).rounded()))%")
                                             .font(.caption.monospacedDigit())
                                             .foregroundColor(palette.textSecondary)
+                                            .lineLimit(1)
+                                            .fixedSize(horizontal: true, vertical: false)
                                     }
                                 }
                             }
@@ -518,14 +562,19 @@ public struct StatsView: View {
                                         Text(stat.categoryName)
                                             .font(.subheadline.weight(.medium))
                                             .foregroundColor(palette.textPrimary)
+                                            .lineLimit(1)
                                         Text("\(stat.count) 笔 · \(String(format: "%.1f%%", stat.percentage * 100))")
                                             .font(.caption2)
                                             .foregroundColor(palette.textSecondary)
+                                            .lineLimit(1)
                                     }
-                                    Spacer()
+                                    Spacer(minLength: 8)
                                     Text(YubraeTheme.masked(MoneyAmount.format(stat.totalBaseMicros, currencyCode: baseCurrency), isMasked: masked))
                                         .font(.subheadline.weight(.semibold).monospacedDigit())
                                         .foregroundColor(palette.textPrimary)
+                                        .lineLimit(1)
+                                        .fixedSize(horizontal: true, vertical: false)
+                                        .layoutPriority(1)
                                 }
                                 GeometryReader { geo in
                                     ZStack(alignment: .leading) {
@@ -567,20 +616,26 @@ public struct StatsView: View {
                 } else {
                     ForEach(stats.prefix(8)) { item in
                         VStack(spacing: 5) {
-                            HStack {
+                            HStack(spacing: 8) {
                                 Text("#\(item.tagName)")
                                     .font(.caption.weight(.semibold))
                                     .foregroundColor(Color(argbHex: item.colorHex))
+                                    .lineLimit(1)
                                     .padding(.horizontal, 8)
                                     .padding(.vertical, 3)
                                     .background(Capsule().fill(Color(argbHex: item.colorHex).opacity(0.14)))
                                 Text("\(item.count) 笔")
                                     .font(.caption2)
                                     .foregroundColor(palette.textSecondary)
-                                Spacer()
+                                    .lineLimit(1)
+                                    .fixedSize(horizontal: true, vertical: false)
+                                Spacer(minLength: 8)
                                 Text(YubraeTheme.masked(MoneyAmount.format(item.totalBaseMicros, currencyCode: baseCurrency), isMasked: masked))
                                     .font(.caption.weight(.bold).monospacedDigit())
                                     .foregroundColor(palette.textPrimary)
+                                    .lineLimit(1)
+                                    .fixedSize(horizontal: true, vertical: false)
+                                    .layoutPriority(1)
                             }
                             GeometryReader { geo in
                                 ZStack(alignment: .leading) {
@@ -606,16 +661,19 @@ public struct StatsView: View {
 
         return YubraeCard(palette: palette) {
             VStack(alignment: .leading, spacing: 12) {
-                HStack {
+                HStack(spacing: 8) {
                     Label("月度预算执行", systemImage: "gauge.medium")
                         .font(.subheadline.weight(.bold))
                         .foregroundColor(palette.textPrimary)
-                    Spacer()
+                        .lineLimit(1)
+                    Spacer(minLength: 8)
                     Button("+ 设预算") {
                         showAddBudgetSheet = true
                     }
                     .font(.caption.weight(.semibold))
                     .foregroundColor(palette.primary)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
                 }
 
                 if list.isEmpty {
@@ -630,19 +688,25 @@ public struct StatsView: View {
                         let dailyText = YubraeTheme.masked(MoneyAmount.format(item.dailyAvailableMicros, currencyCode: item.budget.currencyCode), isMasked: masked)
 
                         VStack(alignment: .leading, spacing: 6) {
-                            HStack {
+                            HStack(spacing: 6) {
                                 Text(item.categoryName)
                                     .font(.subheadline.weight(.semibold))
                                     .foregroundColor(palette.textPrimary)
+                                    .lineLimit(1)
                                 if item.overBudget {
                                     Text("已超支")
                                         .font(.caption2.weight(.bold))
                                         .foregroundColor(palette.dangerColor)
+                                        .lineLimit(1)
+                                        .fixedSize(horizontal: true, vertical: false)
                                 }
-                                Spacer()
+                                Spacer(minLength: 8)
                                 Text("\(spentText) / \(limitText)")
                                     .font(.caption.weight(.semibold).monospacedDigit())
                                     .foregroundColor(item.overBudget ? palette.dangerColor : palette.textSecondary)
+                                    .lineLimit(1)
+                                    .fixedSize(horizontal: true, vertical: false)
+                                    .layoutPriority(1)
                             }
                             GeometryReader { geo in
                                 ZStack(alignment: .leading) {
@@ -653,17 +717,22 @@ public struct StatsView: View {
                                 }
                             }
                             .frame(height: 7)
-                            HStack {
+                            HStack(spacing: 8) {
                                 Text("剩余 \(item.remainingDays) 天 · 日均可用 \(dailyText)")
                                     .font(.caption2)
                                     .foregroundColor(palette.textTertiary)
-                                Spacer()
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.85)
+                                Spacer(minLength: 8)
                                 Button(role: .destructive) {
                                     store.deleteBudget(id: item.budget.id)
                                 } label: {
                                     Text("删除")
                                         .font(.caption2)
+                                        .lineLimit(1)
+                                        .fixedSize(horizontal: true, vertical: false)
                                 }
+                                .buttonStyle(.borderless)
                             }
                         }
                     }
@@ -740,6 +809,7 @@ private struct YubraeDonutChart: View {
                     .font(.caption2)
                     .foregroundColor(palette.textSecondary)
                     .lineLimit(1)
+                    .minimumScaleFactor(0.8)
                 Text(centerValueText)
                     .font(.caption.weight(.bold).monospacedDigit())
                     .foregroundColor(palette.textPrimary)
@@ -748,6 +818,7 @@ private struct YubraeDonutChart: View {
             }
             .padding(.horizontal, 24)
         }
+        .padding(12)
     }
 }
 
@@ -817,8 +888,14 @@ private struct QuickBudgetCreateSheet: View {
                     }
                     .disabled((MoneyAmount.parseToMicros(limitText) ?? 0) <= 0)
                 }
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("完成") {
+                        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                    }
+                }
             }
         }
-        .presentationDetents([.medium])
+        .presentationDetents([.medium, .large])
     }
 }

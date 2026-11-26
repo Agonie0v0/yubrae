@@ -35,17 +35,21 @@ public struct LedgerManagementView: View {
                             HStack(spacing: 6) {
                                 Text(ledger.name)
                                     .font(.subheadline.weight(.semibold))
+                                    .lineLimit(1)
                                 if isActive {
                                     Text("当前使用")
                                         .font(.caption2.weight(.bold))
                                         .foregroundColor(.green)
+                                        .lineLimit(1)
+                                        .fixedSize(horizontal: true, vertical: false)
                                 }
                             }
                             Text("\(ledger.currencyCode) · \(txCount) 笔账单")
                                 .font(.caption)
                                 .foregroundColor(.secondary)
+                                .lineLimit(1)
                         }
-                        Spacer()
+                        Spacer(minLength: 8)
                         if isActive {
                             Image(systemName: "checkmark.circle.fill")
                                 .foregroundColor(.accentColor)
@@ -77,18 +81,24 @@ public struct LedgerManagementView: View {
                 Section("已归档账本") {
                     ForEach(archived) { ledger in
                         HStack {
-                            Text(ledger.name).foregroundColor(.secondary)
-                            Spacer()
+                            Text(ledger.name)
+                                .foregroundColor(.secondary)
+                                .lineLimit(1)
+                            Spacer(minLength: 8)
                             Button("恢复") {
                                 store.archiveLedger(id: ledger.id, archived: false)
                                 store.toastMessage = "已恢复账本「\(ledger.name)」"
                             }
                             .buttonStyle(.borderless)
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
                         }
                     }
                 }
             }
         }
+        .scrollContentBackground(.hidden)
+        .background(palette.background.ignoresSafeArea())
         .navigationTitle("多账本管理")
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
@@ -111,6 +121,8 @@ public struct LedgerManagementView: View {
                         }
                     }
                 }
+                .scrollContentBackground(.hidden)
+                .background(palette.background.ignoresSafeArea())
                 .navigationTitle("新建账本")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
@@ -130,7 +142,7 @@ public struct LedgerManagementView: View {
                     }
                 }
             }
-            .presentationDetents([.medium])
+            .presentationDetents([.medium, .large])
             .yubraeSheetStyle(palette: palette)
         }
         .sheet(item: $deletingLedger) { ledger in
@@ -156,6 +168,8 @@ public struct LedgerManagementView: View {
                         }
                     }
                 }
+                .scrollContentBackground(.hidden)
+                .background(palette.background.ignoresSafeArea())
                 .navigationTitle("删除账本")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
@@ -164,7 +178,7 @@ public struct LedgerManagementView: View {
                     }
                 }
             }
-            .presentationDetents([.medium])
+            .presentationDetents([.medium, .large])
             .yubraeSheetStyle(palette: palette)
         }
     }
@@ -254,6 +268,8 @@ public struct CategoryManagementView: View {
                 }
             }
         }
+        .scrollContentBackground(.hidden)
+        .background(palette.background.ignoresSafeArea())
         .navigationTitle("分类与图标管理")
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
@@ -291,6 +307,8 @@ public struct CategoryManagementView: View {
                         .padding(.vertical, 4)
                     }
                 }
+                .scrollContentBackground(.hidden)
+                .background(palette.background.ignoresSafeArea())
                 .navigationTitle("新增\(selectedType == TransactionType.INCOME ? "收入" : "支出")分类")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
@@ -320,7 +338,7 @@ public struct CategoryManagementView: View {
                     }
                 }
             }
-            .presentationDetents([.medium])
+            .presentationDetents([.medium, .large])
             .yubraeSheetStyle(palette: palette)
         }
     }
@@ -336,8 +354,13 @@ private struct TagGroupSection: Identifiable {
 
 public struct TagManagementView: View {
     @ObservedObject public var store: LedgerStore
+    @Environment(\.colorScheme) private var colorScheme
     @State private var newTagName = ""
     @State private var newTagGroup = "常用"
+
+    private var palette: YubraePalette {
+        YubraeTheme.palette(for: store.settings, colorScheme: colorScheme)
+    }
 
     private var groupedTags: [TagGroupSection] {
         var order: [String] = []
@@ -356,19 +379,27 @@ public struct TagManagementView: View {
     public var body: some View {
         List {
             Section("快速新建标签") {
-                HStack {
-                    TextField("标签名称（如 健身 / 出差）", text: $newTagName)
-                    TextField("分组", text: $newTagGroup)
-                        .frame(width: 72)
-                        .multilineTextAlignment(.trailing)
+                TextField("标签名称（如 健身 / 出差）", text: $newTagName)
+                HStack(spacing: 12) {
+                    Text("分组")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
+                    TextField("默认：常用", text: $newTagGroup)
+                    Spacer(minLength: 8)
                     Button("添加") {
                         let clean = newTagName.trimmingCharacters(in: .whitespacesAndNewlines)
                         guard !clean.isEmpty else { return }
-                        _ = store.saveTag(TagDto(name: clean, groupName: newTagGroup, isSystem: false))
+                        let groupClean = newTagGroup.trimmingCharacters(in: .whitespacesAndNewlines)
+                        _ = store.saveTag(TagDto(name: clean, groupName: groupClean.isEmpty ? "常用" : groupClean, isSystem: false))
                         store.toastMessage = "已添加标签 #\(clean)"
                         newTagName = ""
                     }
                     .buttonStyle(.borderless)
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
                     .disabled(newTagName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }
@@ -382,11 +413,14 @@ public struct TagManagementView: View {
                                 .frame(width: 10, height: 10)
                             Text("#\(tag.name)")
                                 .font(.subheadline)
-                            Spacer()
+                                .lineLimit(1)
+                            Spacer(minLength: 8)
                             if tag.isSystem {
                                 Text("预置")
                                     .font(.caption2)
                                     .foregroundColor(.secondary)
+                                    .lineLimit(1)
+                                    .fixedSize(horizontal: true, vertical: false)
                             }
                         }
                         .swipeActions(edge: .trailing) {
@@ -398,6 +432,8 @@ public struct TagManagementView: View {
                 }
             }
         }
+        .scrollContentBackground(.hidden)
+        .background(palette.background.ignoresSafeArea())
         .navigationTitle("标签库管理")
     }
 }
@@ -423,6 +459,16 @@ public struct BudgetAndRecurringView: View {
         YubraeTheme.palette(for: store.settings, colorScheme: colorScheme)
     }
 
+    private func cycleLabel(_ cycleType: String) -> String {
+        switch cycleType.uppercased() {
+        case "DAILY": return "每天"
+        case "WEEKLY": return "每周"
+        case "MONTHLY": return "每月"
+        case "YEARLY": return "每年"
+        default: return cycleType
+        }
+    }
+
     public var body: some View {
         List {
             Section("预算规则（\(store.budgets.count)）") {
@@ -432,19 +478,24 @@ public struct BudgetAndRecurringView: View {
                         .foregroundColor(.secondary)
                 } else {
                     ForEach(store.budgets) { b in
-                        HStack {
-                            VStack(alignment: .leading) {
-                                Text(b.name).font(.subheadline.weight(.semibold))
+                        HStack(spacing: 8) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(b.name)
+                                    .font(.subheadline.weight(.semibold))
+                                    .lineLimit(1)
                                 Text("\(b.period == "YEARLY" ? "年度" : "月度") · \(MoneyAmount.format(b.limitAmountMicros, currencyCode: b.currencyCode))")
                                     .font(.caption)
                                     .foregroundColor(.secondary)
+                                    .lineLimit(1)
                             }
-                            Spacer()
+                            Spacer(minLength: 8)
                             Button("删除", role: .destructive) {
                                 store.deleteBudget(id: b.id)
                             }
                             .font(.caption)
                             .buttonStyle(.borderless)
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
                         }
                     }
                 }
@@ -457,16 +508,22 @@ public struct BudgetAndRecurringView: View {
                         .foregroundColor(.secondary)
                 } else {
                     ForEach(store.recurringRules) { rule in
-                        HStack {
+                        HStack(spacing: 8) {
                             VStack(alignment: .leading, spacing: 2) {
-                                Text(rule.name).font(.subheadline.weight(.semibold))
-                                Text("\(rule.cycleType) · 下次执行：\(YubraeTheme.formatDate(rule.nextRunEpochMillis, pattern: "yyyy-MM-dd"))")
+                                Text(rule.name)
+                                    .font(.subheadline.weight(.semibold))
+                                    .lineLimit(1)
+                                Text("\(cycleLabel(rule.cycleType)) · 下次执行：\(YubraeTheme.formatDate(rule.nextRunEpochMillis, pattern: "yyyy-MM-dd"))")
                                     .font(.caption)
                                     .foregroundColor(.secondary)
+                                    .lineLimit(1)
                             }
-                            Spacer()
+                            Spacer(minLength: 8)
                             Text(MoneyAmount.format(rule.amountMicros, currencyCode: rule.currencyCode))
                                 .font(.subheadline.monospacedDigit())
+                                .lineLimit(1)
+                                .fixedSize(horizontal: true, vertical: false)
+                                .layoutPriority(1)
                         }
                         .swipeActions {
                             Button("删除", role: .destructive) {
@@ -482,6 +539,8 @@ public struct BudgetAndRecurringView: View {
                 }
             }
         }
+        .scrollContentBackground(.hidden)
+        .background(palette.background.ignoresSafeArea())
         .navigationTitle("预算与周期记账")
         .toolbar {
             ToolbarItem(placement: .navigationBarTrailing) {
@@ -519,6 +578,8 @@ public struct BudgetAndRecurringView: View {
                     }
                     Stepper("扣款日：每月第 \(ruleDay) 日", value: $ruleDay, in: 1...28)
                 }
+                .scrollContentBackground(.hidden)
+                .background(palette.background.ignoresSafeArea())
                 .navigationTitle("新建周期记账")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
@@ -547,9 +608,15 @@ public struct BudgetAndRecurringView: View {
                         }
                         .disabled(ruleName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || (MoneyAmount.parseToMicros(ruleAmount) ?? 0) <= 0)
                     }
+                    ToolbarItemGroup(placement: .keyboard) {
+                        Spacer()
+                        Button("完成") {
+                            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                        }
+                    }
                 }
             }
-            .presentationDetents([.medium])
+            .presentationDetents([.medium, .large])
             .yubraeSheetStyle(palette: palette)
         }
     }
@@ -634,7 +701,9 @@ public struct ShortcutsAutomationGuideView: View {
                             } label: {
                                 Label("新建快捷指令", systemImage: "plus.app.fill")
                                     .font(.subheadline.weight(.semibold))
-                                    .frame(maxWidth: .infinity)
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.8)
+                                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                             }
                             .buttonStyle(.borderedProminent)
 
@@ -643,12 +712,15 @@ public struct ShortcutsAutomationGuideView: View {
                                     store.toastMessage = msg
                                 }
                             } label: {
-                                Label("打开快捷指令 App", systemImage: "arrow.up.forward.app")
+                                Label("打开快捷指令", systemImage: "arrow.up.forward.app")
                                     .font(.subheadline.weight(.semibold))
-                                    .frame(maxWidth: .infinity)
+                                    .lineLimit(1)
+                                    .minimumScaleFactor(0.8)
+                                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                             }
                             .buttonStyle(.bordered)
                         }
+                        .fixedSize(horizontal: false, vertical: true)
                     }
                 }
 
@@ -720,7 +792,9 @@ public struct ShortcutsAutomationGuideView: View {
                                     .font(.subheadline)
                                     .padding(8)
                                     .background(RoundedRectangle(cornerRadius: 8).fill(palette.surfaceSecondary))
-                                Text("账户").font(.caption).foregroundColor(palette.textSecondary)
+                            }
+                            HStack {
+                                Text("账户").font(.caption).foregroundColor(palette.textSecondary).frame(width: 48, alignment: .leading)
                                 TextField("账户名", text: $testAccount)
                                     .font(.subheadline)
                                     .padding(8)
@@ -751,8 +825,11 @@ public struct ShortcutsAutomationGuideView: View {
                                     Label("复制链接", systemImage: "doc.on.doc")
                                         .font(.caption.weight(.semibold))
                                         .foregroundColor(palette.primary)
-                                        .frame(maxWidth: .infinity)
+                                        .lineLimit(1)
+                                        .minimumScaleFactor(0.8)
+                                        .padding(.horizontal, 8)
                                         .padding(.vertical, 10)
+                                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                                         .background(RoundedRectangle(cornerRadius: 10).fill(palette.accentSoftFill))
                                 }
 
@@ -762,11 +839,15 @@ public struct ShortcutsAutomationGuideView: View {
                                     Label("实测 URL 入账", systemImage: "paperplane.fill")
                                         .font(.caption.weight(.semibold))
                                         .foregroundColor(palette.onPrimary)
-                                        .frame(maxWidth: .infinity)
+                                        .lineLimit(1)
+                                        .minimumScaleFactor(0.8)
+                                        .padding(.horizontal, 8)
                                         .padding(.vertical, 10)
+                                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                                         .background(RoundedRectangle(cornerRadius: 10).fill(palette.primary))
                                 }
                             }
+                            .fixedSize(horizontal: false, vertical: true)
                         }
                     }
                 }
@@ -776,6 +857,14 @@ public struct ShortcutsAutomationGuideView: View {
         .background(palette.background.ignoresSafeArea())
         .navigationTitle("快捷指令与自动记账")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItemGroup(placement: .keyboard) {
+                Spacer()
+                Button("完成") {
+                    UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                }
+            }
+        }
     }
 
     private func stepLine(_ num: String, _ text: String) -> some View {
@@ -809,6 +898,11 @@ public struct ShortcutsAutomationGuideView: View {
 
 public struct LlmSettingsView: View {
     @ObservedObject public var store: LedgerStore
+    @Environment(\.colorScheme) private var colorScheme
+
+    private var palette: YubraePalette {
+        YubraeTheme.palette(for: store.settings, colorScheme: colorScheme)
+    }
 
     @State private var enabled: Bool
     @State private var baseUrl: String
@@ -885,6 +979,8 @@ public struct LlmSettingsView: View {
                 }
             }
         }
+        .scrollContentBackground(.hidden)
+        .background(palette.background.ignoresSafeArea())
         .navigationTitle("AI 大模型设置")
         .navigationBarTitleDisplayMode(.inline)
     }
@@ -1007,26 +1103,34 @@ public struct ExchangeRateCenterView: View {
                         customRateInput = MoneyAmount.formatRate(quote.rateMicros, decimals: 4)
                         editingCurrency = info
                     } label: {
-                        HStack {
+                        HStack(spacing: 10) {
                             Text(info.flag)
                                 .font(.title3)
+                                .fixedSize(horizontal: true, vertical: false)
                             VStack(alignment: .leading, spacing: 2) {
                                 Text("1 \(info.code) · \(info.nameZh)")
                                     .font(.subheadline.weight(.semibold))
                                     .foregroundColor(.primary)
+                                    .lineLimit(1)
                                 Text("来源：\(quote.source) · \(quote.date)")
                                     .font(.caption2)
                                     .foregroundColor(.secondary)
+                                    .lineLimit(1)
                             }
-                            Spacer()
+                            Spacer(minLength: 8)
                             Text("\(MoneyAmount.formatRate(quote.rateMicros, decimals: 4)) \(baseCurrency)")
                                 .font(.subheadline.weight(.bold).monospacedDigit())
                                 .foregroundColor(.accentColor)
+                                .lineLimit(1)
+                                .fixedSize(horizontal: true, vertical: false)
+                                .layoutPriority(1)
                         }
                     }
                 }
             }
         }
+        .scrollContentBackground(.hidden)
+        .background(palette.background.ignoresSafeArea())
         .navigationTitle("汇率中心")
         .navigationBarTitleDisplayMode(.inline)
         .sheet(item: $editingCurrency) { info in
@@ -1037,6 +1141,8 @@ public struct ExchangeRateCenterView: View {
                             .keyboardType(.decimalPad)
                     }
                 }
+                .scrollContentBackground(.hidden)
+                .background(palette.background.ignoresSafeArea())
                 .navigationTitle("自定义 \(info.code) 汇率")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
@@ -1055,9 +1161,15 @@ public struct ExchangeRateCenterView: View {
                         }
                         .fontWeight(.semibold)
                     }
+                    ToolbarItemGroup(placement: .keyboard) {
+                        Spacer()
+                        Button("完成") {
+                            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+                        }
+                    }
                 }
             }
-            .presentationDetents([.medium])
+            .presentationDetents([.medium, .large])
             .yubraeSheetStyle(palette: palette)
         }
     }
@@ -1175,11 +1287,15 @@ public struct BackupAndSyncView: View {
                         store.toastMessage = "WebDAV 配置已保存"
                     }
                     .buttonStyle(.borderless)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
                     Spacer()
                     Button("测试连接") {
                         Task { await testWebDav() }
                     }
                     .buttonStyle(.borderless)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
                     .disabled(isWorking)
                 }
 
@@ -1220,26 +1336,33 @@ public struct BackupAndSyncView: View {
                             restoringRemoteFile = file
                             showRestoreConfirmAlert = true
                         } label: {
-                            HStack {
+                            HStack(spacing: 10) {
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(file.name)
                                         .font(.caption.monospaced())
                                         .foregroundColor(.primary)
                                         .lineLimit(1)
+                                        .truncationMode(.middle)
                                     Text("\(YubraeTheme.formatFileSize(file.sizeBytes)) · \(file.modifiedAtMillis > 0 ? YubraeTheme.formatDate(file.modifiedAtMillis, pattern: "yyyy-MM-dd HH:mm") : "未知时间")")
                                         .font(.caption2)
                                         .foregroundColor(.secondary)
+                                        .lineLimit(1)
                                 }
-                                Spacer()
+                                Spacer(minLength: 8)
                                 Text("还原")
                                     .font(.caption.weight(.semibold))
                                     .foregroundColor(.accentColor)
+                                    .lineLimit(1)
+                                    .fixedSize(horizontal: true, vertical: false)
+                                    .layoutPriority(1)
                             }
                         }
                     }
                 }
             }
         }
+        .scrollContentBackground(.hidden)
+        .background(palette.background.ignoresSafeArea())
         .navigationTitle("备份与 WebDAV 同步")
         .navigationBarTitleDisplayMode(.inline)
         .fileExporter(
@@ -1429,20 +1552,20 @@ public struct AppearanceAndPrivacyView: View {
             }
 
             Section("余白 10 套主题皮肤") {
-                let columns = [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)]
-                LazyVGrid(columns: columns, spacing: 10) {
+                let columns = [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)]
+                LazyVGrid(columns: columns, spacing: 8) {
                     ForEach(ThemeStyle.allCases) { style in
                         let selected = ThemeStyle.from(store.settings.themeStyle) == style
                         Button {
                             store.updateSettings { $0.themeStyle = style.rawValue }
                         } label: {
-                            HStack(spacing: 10) {
+                            HStack(spacing: 8) {
                                 Circle()
                                     .fill(Color(argbHex: style.primaryColorHex))
-                                    .frame(width: 24, height: 24)
+                                    .frame(width: 20, height: 20)
                                     .overlay(
                                         Image(systemName: "checkmark")
-                                            .font(.caption2.weight(.bold))
+                                            .font(.system(size: 10, weight: .bold))
                                             .foregroundColor(.white)
                                             .opacity(selected ? 1 : 0)
                                     )
@@ -1450,14 +1573,18 @@ public struct AppearanceAndPrivacyView: View {
                                     Text(style.displayName)
                                         .font(.caption.weight(.bold))
                                         .foregroundColor(palette.textPrimary)
+                                        .lineLimit(1)
+                                        .minimumScaleFactor(0.85)
                                     Text(style.tagline)
                                         .font(.system(size: 10))
                                         .foregroundColor(palette.textSecondary)
                                         .lineLimit(1)
+                                        .minimumScaleFactor(0.85)
                                 }
                                 Spacer(minLength: 0)
                             }
-                            .padding(10)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 10)
                             .background(
                                 RoundedRectangle(cornerRadius: 12, style: .continuous)
                                     .fill(Color(argbHex: style.containerColorHex).opacity(colorScheme == .dark ? 0.16 : 0.72))
@@ -1496,6 +1623,8 @@ public struct AppearanceAndPrivacyView: View {
                 ))
             }
         }
+        .scrollContentBackground(.hidden)
+        .background(palette.background.ignoresSafeArea())
         .navigationTitle("外观与隐私")
         .navigationBarTitleDisplayMode(.inline)
     }
@@ -1530,8 +1659,13 @@ public struct UpdateSettingsView: View {
     public let onPresentUpdateSheet: () -> Void
 
     @Environment(\.openURL) private var openURL
+    @Environment(\.colorScheme) private var colorScheme
     @State private var mirrorInput: String
     @State private var validationError: String?
+
+    private var palette: YubraePalette {
+        YubraeTheme.palette(for: store.settings, colorScheme: colorScheme)
+    }
 
     public init(
         store: LedgerStore,
@@ -1553,20 +1687,25 @@ public struct UpdateSettingsView: View {
             Section("版本信息") {
                 HStack {
                     Text("应用名称")
-                    Spacer()
-                    Text("余白 YUBRAE (iOS)").foregroundColor(.secondary)
+                    Spacer(minLength: 8)
+                    Text("余白 YUBRAE (iOS)")
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
                 }
                 HStack {
                     Text("当前版本")
-                    Spacer()
-                    Text("v\(AppUpdateChecker.currentAppVersion)").fontWeight(.semibold)
+                    Spacer(minLength: 8)
+                    Text("v\(AppUpdateChecker.currentAppVersion)")
+                        .fontWeight(.semibold)
+                        .lineLimit(1)
                 }
                 if store.settings.lastUpdateCheckMillis > 0 {
                     HStack {
                         Text("上次检查时间")
-                        Spacer()
+                        Spacer(minLength: 8)
                         Text(YubraeTheme.formatDate(store.settings.lastUpdateCheckMillis, pattern: "yyyy-MM-dd HH:mm"))
                             .foregroundColor(.secondary)
+                            .lineLimit(1)
                     }
                 }
                 Toggle("启动时自动静默检查新版本", isOn: Binding(
@@ -1636,6 +1775,8 @@ public struct UpdateSettingsView: View {
                 }
             }
         }
+        .scrollContentBackground(.hidden)
+        .background(palette.background.ignoresSafeArea())
         .navigationTitle("检查版本更新")
         .navigationBarTitleDisplayMode(.inline)
     }

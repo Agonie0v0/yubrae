@@ -137,10 +137,8 @@ public struct RootTabView: View {
                     .tag(YubraeTab.mine)
                 }
                 .tabViewStyle(.page(indexDisplayMode: .never))
-                .animation(.spring(response: 0.34, dampingFraction: 0.88), value: selectedTab)
                 .tint(palette.primary)
                 .background(palette.background.ignoresSafeArea())
-                .ignoresSafeArea(.container, edges: .top)
 
                 // 仅在明细页保留精致 AI 速记悬浮圆钮（避开底栏高度，不与中央 + 按钮冲突）
                 if selectedTab == .transactions {
@@ -150,7 +148,6 @@ public struct RootTabView: View {
                         .transition(.scale(scale: 0.85).combined(with: .opacity))
                 }
             }
-            .animation(.spring(response: 0.28, dampingFraction: 0.84), value: selectedTab)
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 yubraeBottomTabBar
             }
@@ -398,6 +395,8 @@ public struct RootTabView: View {
                     Text("通过面容 ID 或设备密码验证以保护账本隐私")
                         .font(.subheadline)
                         .foregroundColor(palette.textSecondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 32)
                 }
                 if let err = biometricErrorText {
                     Text(err)
@@ -539,7 +538,7 @@ public struct RootTabView: View {
                 }
             }
         }
-        .presentationDetents([.medium])
+        .presentationDetents([.medium, .large])
     }
 
     // MARK: - Lifecycle, URL Scheme & Update Logic
@@ -734,9 +733,13 @@ public struct UpdateReleaseSheet: View {
                             Text("发现新版本 \(updateInfo.tagName)")
                                 .font(.title3.weight(.bold))
                                 .foregroundColor(palette.textPrimary)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.85)
                             Text("当前版本 v\(AppUpdateChecker.currentAppVersion)  →  最新版 v\(updateInfo.versionName)")
                                 .font(.subheadline)
                                 .foregroundColor(palette.textSecondary)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.85)
                         }
                         Spacer()
                     }
@@ -753,15 +756,18 @@ public struct UpdateReleaseSheet: View {
                                 .font(.subheadline.weight(.semibold))
                                 .foregroundColor(palette.primary)
                             if let assetName = updateInfo.ipaAssetName {
-                                HStack {
+                                HStack(spacing: 8) {
                                     Text(assetName)
                                         .font(.subheadline.monospaced())
                                         .foregroundColor(palette.textPrimary)
                                         .lineLimit(1)
-                                    Spacer()
+                                        .truncationMode(.middle)
+                                    Spacer(minLength: 6)
                                     Text(YubraeTheme.formatFileSize(updateInfo.ipaAssetSizeBytes))
                                         .font(.footnote.weight(.semibold))
                                         .foregroundColor(palette.textSecondary)
+                                        .lineLimit(1)
+                                        .fixedSize(horizontal: true, vertical: false)
                                 }
                             } else {
                                 Text("该 Release 暂未附带 .ipa 资产，可直接前往 Release 页面查看详情。")
@@ -777,14 +783,27 @@ public struct UpdateReleaseSheet: View {
 
                     // 更新日志
                     YubraeCard(palette: palette) {
+                        let noteLines = YubraeReleaseNotesFormatter.attributedLines(updateInfo.releaseNotes)
                         VStack(alignment: .leading, spacing: 8) {
                             Label(updateInfo.releaseTitle, systemImage: "doc.text.fill")
                                 .font(.subheadline.weight(.semibold))
                                 .foregroundColor(palette.textPrimary)
-                            Text(updateInfo.releaseNotes.isEmpty ? "本次版本包含体验优化与稳定性改进。" : updateInfo.releaseNotes)
-                                .font(.subheadline)
-                                .foregroundColor(palette.textSecondary)
-                                .frame(maxWidth: .infinity, alignment: .leading)
+                            if noteLines.isEmpty {
+                                Text("本次版本包含体验优化与稳定性改进。")
+                                    .font(.subheadline)
+                                    .foregroundColor(palette.textSecondary)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            } else {
+                                VStack(alignment: .leading, spacing: 6) {
+                                    ForEach(Array(noteLines.enumerated()), id: \.offset) { _, line in
+                                        Text(line)
+                                            .font(.subheadline)
+                                            .foregroundColor(palette.textSecondary)
+                                            .fixedSize(horizontal: false, vertical: true)
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                    }
+                                }
+                            }
                         }
                     }
 
@@ -802,14 +821,19 @@ public struct UpdateReleaseSheet: View {
                                     .font(.subheadline)
                                     .padding(10)
                                     .background(RoundedRectangle(cornerRadius: 10).fill(palette.surfaceSecondary))
-                                Button("保存") {
+                                Button {
                                     saveMirrorPrefix()
+                                } label: {
+                                    Text("保存")
+                                        .font(.subheadline.weight(.semibold))
+                                        .lineLimit(1)
+                                        .fixedSize(horizontal: true, vertical: false)
+                                        .foregroundColor(palette.onPrimary)
+                                        .padding(.horizontal, 14)
+                                        .padding(.vertical, 10)
+                                        .background(RoundedRectangle(cornerRadius: 10).fill(palette.primary))
                                 }
-                                .font(.subheadline.weight(.semibold))
-                                .foregroundColor(palette.onPrimary)
-                                .padding(.horizontal, 14)
-                                .padding(.vertical, 10)
-                                .background(RoundedRectangle(cornerRadius: 10).fill(palette.primary))
+                                .buttonStyle(.plain)
                             }
                             if let err = mirrorValidationError {
                                 Text(err)

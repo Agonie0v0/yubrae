@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -273,7 +274,10 @@ fun ReimburseCenterScreen(
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                Row(
+                                    modifier = Modifier.weight(1f),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
                                     Checkbox(
                                         checked = allSelected,
                                         onCheckedChange = { checked ->
@@ -287,16 +291,24 @@ fun ReimburseCenterScreen(
                                     Text(
                                         text = "全选待报销 (${validSelectedIds.size}/${pendingList.size})",
                                         style = MaterialTheme.typography.titleSmall,
-                                        fontWeight = FontWeight.Medium
+                                        fontWeight = FontWeight.Medium,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
                                     )
                                 }
                                 if (validSelectedIds.isNotEmpty()) {
+                                    Spacer(modifier = Modifier.width(6.dp))
                                     TextButton(
                                         onClick = { selectedIds = emptySet() },
                                         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
-                                        modifier = Modifier.height(28.dp)
+                                        modifier = Modifier.heightIn(min = 30.dp)
                                     ) {
-                                        Text("清空选择", style = MaterialTheme.typography.labelMedium)
+                                        Text(
+                                            text = "清空选择",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            maxLines = 1,
+                                            softWrap = false
+                                        )
                                     }
                                 }
                             }
@@ -706,7 +718,9 @@ private fun PendingReimburseRow(
                     Text(
                         text = "取消报销",
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        softWrap = false
                     )
                 }
             }

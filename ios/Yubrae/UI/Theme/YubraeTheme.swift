@@ -485,6 +485,46 @@ public struct YubraeConfirmDialog: View {
     }
 
     private var dialogCard: some View {
+        YubraeConfirmDialogCard(
+            palette: palette,
+            icon: icon,
+            title: title,
+            message: message,
+            confirmTitle: confirmTitle,
+            cancelTitle: cancelTitle,
+            isDestructive: isDestructive,
+            onCancel: {
+                dismissDialog(invokeCancel: true)
+            },
+            onConfirm: {
+                dismissDialog(invokeCancel: false)
+                onConfirm()
+            }
+        )
+    }
+
+    private func dismissDialog(invokeCancel: Bool) {
+        withAnimation(.spring(response: 0.28, dampingFraction: 0.86)) {
+            isPresented = false
+        }
+        if invokeCancel {
+            onCancel?()
+        }
+    }
+}
+
+private struct YubraeConfirmDialogCard: View {
+    let palette: YubraePalette
+    let icon: String
+    let title: String
+    let message: String
+    let confirmTitle: String
+    let cancelTitle: String
+    let isDestructive: Bool
+    let onCancel: () -> Void
+    let onConfirm: () -> Void
+
+    var body: some View {
         let accent = isDestructive ? palette.dangerColor : palette.primary
         let confirmFill = LinearGradient(
             colors: isDestructive
@@ -494,7 +534,7 @@ public struct YubraeConfirmDialog: View {
             endPoint: .bottomTrailing
         )
 
-        return VStack(spacing: 16) {
+        VStack(spacing: 16) {
             ZStack {
                 Circle()
                     .fill(accent.opacity(palette.isDark ? 0.22 : 0.14))
@@ -518,14 +558,15 @@ public struct YubraeConfirmDialog: View {
             }
 
             HStack(spacing: 12) {
-                Button {
-                    dismissDialog(invokeCancel: true)
-                } label: {
+                Button(action: onCancel) {
                     Text(cancelTitle)
                         .font(.subheadline.weight(.semibold))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
                         .foregroundColor(palette.textPrimary)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 12)
+                        .padding(.horizontal, 8)
                         .background(
                             RoundedRectangle(cornerRadius: 12, style: .continuous)
                                 .fill(palette.surfaceSecondary)
@@ -537,15 +578,15 @@ public struct YubraeConfirmDialog: View {
                 }
                 .buttonStyle(.plain)
 
-                Button {
-                    dismissDialog(invokeCancel: false)
-                    onConfirm()
-                } label: {
+                Button(action: onConfirm) {
                     Text(confirmTitle)
                         .font(.subheadline.weight(.semibold))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
                         .foregroundColor(isDestructive ? .white : palette.onPrimary)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 12)
+                        .padding(.horizontal, 8)
                         .background(
                             RoundedRectangle(cornerRadius: 12, style: .continuous)
                                 .fill(confirmFill)
@@ -567,14 +608,132 @@ public struct YubraeConfirmDialog: View {
         )
         .shadow(color: Color.black.opacity(palette.isDark ? 0.45 : 0.18), radius: 22, x: 0, y: 10)
     }
+}
 
-    private func dismissDialog(invokeCancel: Bool) {
-        withAnimation(.spring(response: 0.28, dampingFraction: 0.86)) {
-            isPresented = false
+private struct ClearFullScreenCoverBackground: UIViewRepresentable {
+    func makeUIView(context: Context) -> UIView {
+        let view = ProbeView()
+        view.backgroundColor = .clear
+        return view
+    }
+
+    func updateUIView(_ uiView: UIView, context: Context) {}
+
+    private final class ProbeView: UIView {
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            clearHostingBackground()
         }
-        if invokeCancel {
-            onCancel?()
+
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            clearHostingBackground()
         }
+
+        private func clearHostingBackground() {
+            superview?.superview?.backgroundColor = .clear
+            var responder: UIResponder? = self
+            while let next = responder?.next {
+                if let vc = next as? UIViewController {
+                    vc.view.backgroundColor = .clear
+                    break
+                }
+                responder = next
+            }
+        }
+    }
+}
+
+private extension View {
+    @ViewBuilder
+    func yubraeClearFullScreenBackground() -> some View {
+        if #available(iOS 16.4, *) {
+            self.presentationBackground(Color.clear)
+        } else {
+            self.background(ClearFullScreenCoverBackground())
+        }
+    }
+}
+
+private struct YubraeConfirmDialogModifier: ViewModifier {
+    private enum PendingOutcome {
+        case confirm
+        case cancel
+    }
+
+    @Binding var isPresented: Bool
+    let palette: YubraePalette
+    let icon: String
+    let title: String
+    let message: String
+    let confirmTitle: String
+    let cancelTitle: String
+    let isDestructive: Bool
+    let onCancel: (() -> Void)?
+    let onConfirm: () -> Void
+
+    @State private var pendingOutcome: PendingOutcome?
+    @State private var backdropVisible = false
+
+    func body(content: Content) -> some View {
+        content
+            .fullScreenCover(isPresented: $isPresented, onDismiss: {
+                backdropVisible = false
+                let outcome = pendingOutcome
+                pendingOutcome = nil
+                switch outcome {
+                case .confirm:
+                    onConfirm()
+                case .cancel:
+                    onCancel?()
+                case nil:
+                    break
+                }
+            }) {
+                ZStack {
+                    Color.black.opacity(backdropVisible ? 0.42 : 0.0)
+                        .ignoresSafeArea()
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            dismissCover(outcome: .cancel)
+                        }
+
+                    YubraeConfirmDialogCard(
+                        palette: palette,
+                        icon: icon,
+                        title: title,
+                        message: message,
+                        confirmTitle: confirmTitle,
+                        cancelTitle: cancelTitle,
+                        isDestructive: isDestructive,
+                        onCancel: {
+                            dismissCover(outcome: .cancel)
+                        },
+                        onConfirm: {
+                            dismissCover(outcome: .confirm)
+                        }
+                    )
+                    .padding(.horizontal, 24)
+                    .opacity(backdropVisible ? 1 : 0)
+                    .scaleEffect(backdropVisible ? 1 : 0.94)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color.clear)
+                .onAppear {
+                    withAnimation(.spring(response: 0.24, dampingFraction: 0.88)) {
+                        backdropVisible = true
+                    }
+                }
+                .yubraeClearFullScreenBackground()
+            }
+    }
+
+    private func dismissCover(outcome: PendingOutcome) {
+        pendingOutcome = outcome
+        withAnimation(.easeOut(duration: 0.12)) {
+            backdropVisible = false
+        }
+        isPresented = false
     }
 }
 
@@ -591,8 +750,8 @@ public extension View {
         onCancel: (() -> Void)? = nil,
         onConfirm: @escaping () -> Void
     ) -> some View {
-        overlay {
-            YubraeConfirmDialog(
+        modifier(
+            YubraeConfirmDialogModifier(
                 isPresented: isPresented,
                 palette: palette,
                 icon: icon,
@@ -604,7 +763,7 @@ public extension View {
                 onCancel: onCancel,
                 onConfirm: onConfirm
             )
-        }
+        )
     }
 
     @ViewBuilder
@@ -622,6 +781,191 @@ public extension View {
     }
 }
 
+/// 轻量 GitHub Release Notes Markdown 清洗与富文本解析工具（iOS 16+）。
+public enum YubraeReleaseNotesFormatter {
+    public static func cleanedPlainText(_ raw: String) -> String {
+        attributedLines(raw)
+            .map { String($0.characters) }
+            .joined(separator: "\n")
+    }
+
+    public static func attributedLines(_ raw: String) -> [AttributedString] {
+        let normalized = raw
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+
+        var result: [AttributedString] = []
+        for rawLine in normalized.split(separator: "\n", omittingEmptySubsequences: false) {
+            let lineStr = String(rawLine)
+            let trimmed = lineStr.trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty || isHorizontalRule(trimmed) {
+                continue
+            }
+
+            let leadingSpaces = lineStr.prefix(while: { $0 == " " || $0 == "\t" }).count
+            if let headingContent = stripHeadingPrefix(trimmed) {
+                let parsed = parseInline(headingContent, forceBold: true)
+                if !String(parsed.characters).trimmingCharacters(in: .whitespaces).isEmpty {
+                    result.append(parsed)
+                }
+                continue
+            }
+
+            if let bulletContent = stripBulletPrefix(trimmed) {
+                let bulletPrefix = leadingSpaces >= 2 ? "  • " : "• "
+                let contentAttr = parseInline(bulletContent, forceBold: false)
+                if !String(contentAttr.characters).trimmingCharacters(in: .whitespaces).isEmpty {
+                    var lineAttr = AttributedString(bulletPrefix)
+                    lineAttr.append(contentAttr)
+                    result.append(lineAttr)
+                }
+                continue
+            }
+
+            let parsed = parseInline(trimmed, forceBold: false)
+            if !String(parsed.characters).trimmingCharacters(in: .whitespaces).isEmpty {
+                result.append(parsed)
+            }
+        }
+        return result
+    }
+
+    private static func isHorizontalRule(_ trimmed: String) -> Bool {
+        let stripped = trimmed.replacingOccurrences(of: " ", with: "")
+        guard stripped.count >= 3, let first = stripped.first else { return false }
+        guard first == "-" || first == "*" || first == "_" else { return false }
+        return stripped.allSatisfy { $0 == first }
+    }
+
+    private static func stripHeadingPrefix(_ trimmed: String) -> String? {
+        var hashCount = 0
+        var idx = trimmed.startIndex
+        while idx < trimmed.endIndex && trimmed[idx] == "#" {
+            hashCount += 1
+            idx = trimmed.index(after: idx)
+        }
+        guard hashCount >= 1 && hashCount <= 6 else { return nil }
+        guard idx < trimmed.endIndex && trimmed[idx].isWhitespace else { return nil }
+        let rest = trimmed[idx...].trimmingCharacters(in: .whitespaces)
+        return rest.replacingOccurrences(of: #"\s+#+\s*$"#, with: "", options: .regularExpression)
+    }
+
+    private static func stripBulletPrefix(_ trimmed: String) -> String? {
+        for marker in ["- ", "* ", "+ ", "• "] {
+            if trimmed.hasPrefix(marker) {
+                return String(trimmed.dropFirst(marker.count)).trimmingCharacters(in: .whitespaces)
+            }
+        }
+        return nil
+    }
+
+    private static func replaceMarkdownLinks(_ input: String) -> String {
+        guard input.contains("[") && input.contains("](") else { return input }
+        return input.replacingOccurrences(
+            of: #"\[([^\]]+)\]\((https?://[^\s\)]+)\)"#,
+            with: "$1",
+            options: .regularExpression
+        )
+    }
+
+    private static func parseInline(_ input: String, forceBold: Bool) -> AttributedString {
+        let linkCleaned = replaceMarkdownLinks(input)
+        var output = AttributedString()
+        var cursor = linkCleaned.startIndex
+        let end = linkCleaned.endIndex
+
+        while cursor < end {
+            if linkCleaned[cursor...].hasPrefix("***") {
+                let afterOpen = linkCleaned.index(cursor, offsetBy: 3)
+                if let closeRange = linkCleaned.range(of: "***", range: afterOpen..<end) {
+                    let inner = String(linkCleaned[afterOpen..<closeRange.lowerBound])
+                        .replacingOccurrences(of: "**", with: "")
+                        .replacingOccurrences(of: "`", with: "")
+                    if !inner.isEmpty {
+                        output.append(makeSegment(inner, bold: true, italic: true, code: false))
+                    }
+                    cursor = closeRange.upperBound
+                    continue
+                }
+            }
+
+            if linkCleaned[cursor...].hasPrefix("**") {
+                let afterOpen = linkCleaned.index(cursor, offsetBy: 2)
+                if let closeRange = linkCleaned.range(of: "**", range: afterOpen..<end) {
+                    let inner = String(linkCleaned[afterOpen..<closeRange.lowerBound])
+                        .replacingOccurrences(of: "**", with: "")
+                        .replacingOccurrences(of: "`", with: "")
+                    if !inner.isEmpty {
+                        output.append(makeSegment(inner, bold: true, italic: false, code: false))
+                    }
+                    cursor = closeRange.upperBound
+                    continue
+                } else {
+                    cursor = afterOpen
+                    continue
+                }
+            }
+
+            if linkCleaned[cursor] == "`" {
+                let afterOpen = linkCleaned.index(after: cursor)
+                if let closeIdx = linkCleaned[afterOpen..<end].firstIndex(of: "`") {
+                    let inner = String(linkCleaned[afterOpen..<closeIdx])
+                    if !inner.isEmpty {
+                        output.append(makeSegment(inner, bold: forceBold, italic: false, code: true))
+                    }
+                    cursor = linkCleaned.index(after: closeIdx)
+                    continue
+                } else {
+                    cursor = afterOpen
+                    continue
+                }
+            }
+
+            let nextStart = cursor
+            var scan = linkCleaned.index(after: cursor)
+            while scan < end {
+                if linkCleaned[scan] == "`" || linkCleaned[scan...].hasPrefix("**") {
+                    break
+                }
+                scan = linkCleaned.index(after: scan)
+            }
+            let plain = String(linkCleaned[nextStart..<scan])
+            output.append(makeSegment(plain, bold: forceBold, italic: false, code: false))
+            cursor = scan
+        }
+
+        return normalizeSpaces(output)
+    }
+
+    private static func makeSegment(_ text: String, bold: Bool, italic: Bool, code: Bool) -> AttributedString {
+        var seg = AttributedString(text)
+        var intent: InlinePresentationIntent = []
+        if bold { intent.insert(.stronglyEmphasized) }
+        if italic { intent.insert(.emphasized) }
+        if code { intent.insert(.code) }
+        if !intent.isEmpty {
+            seg.inlinePresentationIntent = intent
+        }
+        return seg
+    }
+
+    private static func normalizeSpaces(_ attr: AttributedString) -> AttributedString {
+        var result = attr
+        while let range = result.range(of: "  ") {
+            result.replaceSubrange(range, with: AttributedString(" "))
+        }
+        while let first = result.characters.first, first.isWhitespace {
+            let nextIdx = result.index(afterCharacter: result.startIndex)
+            result.removeSubrange(result.startIndex..<nextIdx)
+        }
+        while let last = result.characters.last, last.isWhitespace {
+            let prevIdx = result.index(beforeCharacter: result.endIndex)
+            result.removeSubrange(prevIdx..<result.endIndex)
+        }
+        return result
+    }
+}
+
 /// iOS 16+ 原生 `Layout` 协议流式换行布局，用于标签与快捷选项芯片。
 public struct YubraeFlowLayout: Layout {
     public var spacing: CGFloat
@@ -632,45 +976,85 @@ public struct YubraeFlowLayout: Layout {
         self.lineSpacing = lineSpacing
     }
 
-    public func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let maxWidth = proposal.width ?? .infinity
-        var currentX: CGFloat = 0
-        var currentY: CGFloat = 0
-        var rowHeight: CGFloat = 0
-        var totalWidth: CGFloat = 0
+    private struct RowItem {
+        let index: Int
+        let size: CGSize
+        let xOffset: CGFloat
+    }
 
-        for subview in subviews {
-            let size = subview.sizeThatFits(.unspecified)
-            if currentX > 0 && currentX + size.width > maxWidth {
-                currentX = 0
-                currentY += rowHeight + lineSpacing
-                rowHeight = 0
+    private struct Row {
+        var items: [RowItem] = []
+        var width: CGFloat = 0
+        var height: CGFloat = 0
+    }
+
+    private func resolvedMaxWidth(for proposal: ProposedViewSize) -> CGFloat {
+        proposal.width ?? proposal.replacingUnspecifiedDimensions(by: CGSize(width: 320, height: 0)).width
+    }
+
+    private func computeRows(maxWidth: CGFloat, subviews: Subviews) -> [Row] {
+        guard !subviews.isEmpty else { return [] }
+        let clampWidth: CGFloat? = (maxWidth.isFinite && maxWidth > 0) ? maxWidth : nil
+        var rows: [Row] = []
+        var currentRow = Row()
+        var currentX: CGFloat = 0
+
+        for (index, subview) in subviews.enumerated() {
+            let idealSize = subview.sizeThatFits(.unspecified)
+            let itemSize: CGSize
+            if let clampWidth, idealSize.width > clampWidth {
+                let constrained = subview.sizeThatFits(ProposedViewSize(width: clampWidth, height: nil))
+                itemSize = CGSize(width: min(constrained.width, clampWidth), height: constrained.height)
+            } else if let clampWidth {
+                itemSize = CGSize(width: min(idealSize.width, clampWidth), height: idealSize.height)
+            } else {
+                itemSize = idealSize
             }
-            currentX += size.width + spacing
-            totalWidth = max(totalWidth, currentX - spacing)
-            rowHeight = max(rowHeight, size.height)
+
+            if !currentRow.items.isEmpty && currentX + itemSize.width > maxWidth {
+                rows.append(currentRow)
+                currentRow = Row()
+                currentX = 0
+            }
+
+            currentRow.items.append(RowItem(index: index, size: itemSize, xOffset: currentX))
+            currentRow.width = currentX + itemSize.width
+            currentRow.height = max(currentRow.height, itemSize.height)
+            currentX += itemSize.width + spacing
         }
-        return CGSize(width: min(maxWidth, totalWidth), height: currentY + rowHeight)
+
+        if !currentRow.items.isEmpty {
+            rows.append(currentRow)
+        }
+        return rows
+    }
+
+    public func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let maxWidth = resolvedMaxWidth(for: proposal)
+        let rows = computeRows(maxWidth: maxWidth, subviews: subviews)
+        guard !rows.isEmpty else { return .zero }
+
+        let totalWidth = rows.map(\.width).max() ?? 0
+        let totalHeight = rows.reduce(CGFloat(0)) { $0 + $1.height }
+            + CGFloat(max(0, rows.count - 1)) * lineSpacing
+        let finalWidth = maxWidth.isFinite ? min(maxWidth, totalWidth) : totalWidth
+        return CGSize(width: finalWidth, height: totalHeight)
     }
 
     public func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        var currentX = bounds.minX
+        let maxWidth = bounds.width > 0 ? bounds.width : resolvedMaxWidth(for: proposal)
+        let rows = computeRows(maxWidth: maxWidth, subviews: subviews)
         var currentY = bounds.minY
-        var rowHeight: CGFloat = 0
 
-        for subview in subviews {
-            let size = subview.sizeThatFits(.unspecified)
-            if currentX > bounds.minX && currentX + size.width > bounds.maxX {
-                currentX = bounds.minX
-                currentY += rowHeight + lineSpacing
-                rowHeight = 0
+        for row in rows {
+            for item in row.items {
+                let y = currentY + (row.height - item.size.height) / 2
+                subviews[item.index].place(
+                    at: CGPoint(x: bounds.minX + item.xOffset, y: y),
+                    proposal: ProposedViewSize(width: item.size.width, height: item.size.height)
+                )
             }
-            subview.place(
-                at: CGPoint(x: currentX, y: currentY),
-                proposal: ProposedViewSize(width: size.width, height: size.height)
-            )
-            currentX += size.width + spacing
-            rowHeight = max(rowHeight, size.height)
+            currentY += row.height + lineSpacing
         }
     }
 }

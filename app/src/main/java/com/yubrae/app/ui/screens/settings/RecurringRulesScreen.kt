@@ -57,6 +57,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.yubrae.app.core.model.CurrencyCatalog
@@ -66,10 +67,10 @@ import com.yubrae.app.data.db.CategoryEntity
 import com.yubrae.app.data.db.RecurringRuleEntity
 import com.yubrae.app.data.db.TransactionType
 import com.yubrae.app.ui.components.ConfirmActionDialog
-import com.yubrae.app.ui.components.CurrencyBadge
 import com.yubrae.app.ui.components.CurrencyPickerDialog
 import com.yubrae.app.ui.components.EmptyStateCard
 import com.yubrae.app.ui.components.KairoFormats
+import com.yubrae.app.ui.components.QuickCurrencySelectorRow
 import com.yubrae.app.ui.components.YubraeDialog
 import com.yubrae.app.ui.components.YubraeDialogShape
 import com.yubrae.app.ui.components.transactionAmountColor
@@ -204,13 +205,21 @@ fun RecurringRulesScreen(
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
                                 Column(modifier = Modifier.weight(1f)) {
-                                    Text(rule.name, style = MaterialTheme.typography.titleMedium)
+                                    Text(
+                                        text = rule.name,
+                                        style = MaterialTheme.typography.titleMedium,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
                                     Text(
                                         text = "$cycleLabel · ${acct?.name ?: "账户"} · ${cat?.name ?: KairoFormats.transactionTypeLabel(rule.type)}",
                                         style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
                                     )
                                 }
+                                Spacer(modifier = Modifier.width(8.dp))
                                 Text(
                                     text = MoneyAmount.format(
                                         rule.amountMicros,
@@ -219,7 +228,9 @@ fun RecurringRulesScreen(
                                     ),
                                     style = MaterialTheme.typography.titleMedium.tabular(),
                                     color = transactionAmountColor(rule.type),
-                                    fontWeight = FontWeight.Bold
+                                    fontWeight = FontWeight.Bold,
+                                    maxLines = 1,
+                                    softWrap = false
                                 )
                             }
 
@@ -231,8 +242,12 @@ fun RecurringRulesScreen(
                                 Text(
                                     text = "下次执行：${KairoFormats.formatDate(rule.nextRunEpochMillis)}",
                                     style = MaterialTheme.typography.labelMedium,
-                                    color = MaterialTheme.colorScheme.primary
+                                    color = MaterialTheme.colorScheme.primary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f)
                                 )
+                                Spacer(modifier = Modifier.width(8.dp))
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     IconButton(onClick = { editingRule = rule }, modifier = Modifier.size(34.dp)) {
                                         Icon(Icons.Rounded.Edit, "编辑", modifier = Modifier.size(18.dp))
@@ -436,19 +451,12 @@ private fun RecurringRuleEditorDialog(
             }
 
             Text("订阅币种", style = MaterialTheme.typography.labelMedium)
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                val codes = if (pinnedCurrencies.contains(currencyCode)) pinnedCurrencies else pinnedCurrencies + currencyCode
-                items(codes, key = { it }) { code ->
-                    CurrencyBadge(
-                        currencyCode = code,
-                        selected = code.equals(currencyCode, true),
-                        onClick = { currencyCode = code }
-                    )
-                }
-                item(key = "more") {
-                    FilterChip(selected = false, onClick = { showMoreCurrencies = true }, label = { Text("更多") })
-                }
-            }
+            QuickCurrencySelectorRow(
+                selectedCurrency = currencyCode,
+                pinnedCurrencies = pinnedCurrencies,
+                onSelectCurrency = { currencyCode = it },
+                onOpenMore = { showMoreCurrencies = true }
+            )
 
             OutlinedTextField(
                 value = amountInput,
@@ -483,7 +491,11 @@ private fun RecurringRuleEditorDialog(
                 }
             }
 
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
                 OutlinedTextField(
                     value = dayOfCycleInput,
                     onValueChange = { dayOfCycleInput = it },
@@ -496,11 +508,19 @@ private fun RecurringRuleEditorDialog(
                 OutlinedButton(
                     onClick = { showDatePicker = true },
                     shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.weight(1.2f)
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 10.dp),
+                    modifier = Modifier
+                        .weight(1.2f)
+                        .padding(top = 6.dp)
                 ) {
                     Icon(Icons.Rounded.CalendarMonth, null, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(4.dp))
-                    Text(KairoFormats.formatDate(nextRunMillis))
+                    Text(
+                        text = KairoFormats.formatDate(nextRunMillis),
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = TextOverflow.Ellipsis
+                    )
                 }
             }
 

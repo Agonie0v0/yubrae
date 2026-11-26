@@ -262,8 +262,8 @@ public struct QuickRecordSheet: View {
     // MARK: - 1. 顶栏
 
     private var topHeaderBar: some View {
-        ZStack {
-            HStack {
+        HStack(spacing: 6) {
+            HStack(spacing: 0) {
                 if editingTransaction != nil {
                     Button {
                         showDeleteConfirm = true
@@ -273,6 +273,7 @@ public struct QuickRecordSheet: View {
                             .foregroundColor(palette.dangerColor)
                             .frame(width: 32, height: 32)
                     }
+                    .buttonStyle(.plain)
                 } else if store.activeLedgers.count > 1 {
                     Menu {
                         ForEach(store.activeLedgers) { ledger in
@@ -290,23 +291,18 @@ public struct QuickRecordSheet: View {
                             Text(ledger?.name ?? "账本")
                                 .font(.caption.weight(.semibold))
                                 .lineLimit(1)
+                                .truncationMode(.tail)
                         }
                         .foregroundColor(palette.primary)
-                        .padding(.horizontal, 9)
+                        .padding(.horizontal, 8)
                         .padding(.vertical, 5)
                         .background(Capsule().fill(palette.accentSoftFill))
                     }
+                    .frame(maxWidth: 86, alignment: .leading)
                 }
-                Spacer()
-                Button {
-                    dismiss()
-                } label: {
-                    Image(systemName: "xmark")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundColor(palette.textSecondary)
-                        .frame(width: 32, height: 32)
-                }
+                Spacer(minLength: 0)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
 
             HStack(spacing: 2) {
                 ForEach([
@@ -320,8 +316,10 @@ public struct QuickRecordSheet: View {
                     } label: {
                         Text(label)
                             .font(.caption.weight(isSelected ? .bold : .medium))
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
                             .foregroundColor(isSelected ? tint : palette.textSecondary)
-                            .padding(.horizontal, 14)
+                            .padding(.horizontal, 12)
                             .padding(.vertical, 6)
                             .background(
                                 Capsule().fill(isSelected ? tint.opacity(0.15) : Color.clear)
@@ -332,9 +330,25 @@ public struct QuickRecordSheet: View {
             }
             .padding(3)
             .background(Capsule().fill(palette.surfaceSecondary))
+            .fixedSize(horizontal: true, vertical: false)
+            .layoutPriority(1)
+
+            HStack(spacing: 0) {
+                Spacer(minLength: 0)
+                Button {
+                    dismiss()
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundColor(palette.textSecondary)
+                        .frame(width: 32, height: 32)
+                }
+                .buttonStyle(.plain)
+            }
+            .frame(maxWidth: .infinity, alignment: .trailing)
         }
         .padding(.horizontal, 12)
-        .padding(.top, 10)
+        .padding(.top, 14)
         .padding(.bottom, 6)
     }
 
@@ -365,6 +379,7 @@ public struct QuickRecordSheet: View {
                                 Text("账户互转")
                                     .font(.caption2)
                                     .foregroundColor(palette.textSecondary)
+                                    .lineLimit(1)
                             }
                         } else {
                             let cat = selectedCategory
@@ -404,6 +419,8 @@ public struct QuickRecordSheet: View {
                             Image(systemName: "chevron.down")
                                 .font(.system(size: 9, weight: .bold))
                         }
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
                         .foregroundColor(palette.textPrimary)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 5)
@@ -421,15 +438,19 @@ public struct QuickRecordSheet: View {
                                 .foregroundColor(amountExpr.isEmpty ? amountAccentColor.opacity(0.45) : amountAccentColor)
                                 .lineLimit(1)
                                 .minimumScaleFactor(0.65)
+                                .truncationMode(.head)
+                                .layoutPriority(1)
                             if QuickExprEvaluator.containsOperator(amountExpr), parsedAmountMicros > 0 {
                                 Text("= \(MoneyAmount.format(parsedAmountMicros, currencyCode: origCurrency))")
                                     .font(.caption2.weight(.medium))
                                     .monospacedDigit()
                                     .foregroundColor(amountAccentColor.opacity(0.85))
+                                    .lineLimit(1)
                             }
                         }
                     }
                     .buttonStyle(.plain)
+                    .layoutPriority(1)
                 }
             }
 
@@ -448,10 +469,14 @@ public struct QuickRecordSheet: View {
                             .font(.caption2)
                             .monospacedDigit()
                             .foregroundColor(palette.textSecondary)
-                        Spacer()
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.85)
+                        Spacer(minLength: 6)
                         Text("调整")
                             .font(.caption2.weight(.semibold))
                             .foregroundColor(palette.primary)
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
                     }
                     .padding(.horizontal, 9)
                     .padding(.vertical, 5)
@@ -528,11 +553,14 @@ public struct QuickRecordSheet: View {
                     } label: {
                         Label("新建", systemImage: "plus")
                             .font(.caption.weight(.semibold))
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
                             .foregroundColor(palette.primary)
                             .padding(.horizontal, 10)
                             .padding(.vertical, 8)
                             .background(Capsule().fill(palette.accentSoftFill))
                     }
+                    .buttonStyle(.plain)
                 }
                 .padding(.horizontal, 12)
 
@@ -937,33 +965,43 @@ public struct QuickRecordSheet: View {
         let trimmed = tagSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
 
         return VStack(alignment: .leading, spacing: 8) {
-            HStack {
+            HStack(spacing: 8) {
                 Text("选择标签")
                     .font(.subheadline.weight(.bold))
+                    .lineLimit(1)
                 if !selectedTags.isEmpty {
                     Text("已选 \(selectedTags.count)")
                         .font(.caption2.weight(.semibold))
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
                         .foregroundColor(palette.primary)
                         .padding(.horizontal, 7)
                         .padding(.vertical, 2)
                         .background(Capsule().fill(palette.accentSoftFill))
                 }
-                Spacer()
+                Spacer(minLength: 6)
                 if !selectedTags.isEmpty {
                     Button("清空") {
                         selectedTags = []
                     }
                     .font(.caption.weight(.medium))
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
                     .foregroundColor(palette.dangerColor)
                 }
-                Button("完成") {
+                Button {
                     activePanel = .category
+                } label: {
+                    Text("完成")
+                        .font(.caption.weight(.bold))
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
+                        .foregroundColor(palette.onPrimary)
+                        .padding(.horizontal, 11)
+                        .padding(.vertical, 5)
+                        .background(Capsule().fill(palette.primary))
                 }
-                .font(.caption.weight(.bold))
-                .foregroundColor(palette.onPrimary)
-                .padding(.horizontal, 11)
-                .padding(.vertical, 5)
-                .background(Capsule().fill(palette.primary))
+                .buttonStyle(.plain)
             }
             .padding(.horizontal, 12)
 
@@ -1009,24 +1047,31 @@ public struct QuickRecordSheet: View {
                                 VStack(alignment: .leading, spacing: 1) {
                                     Text("新建并选中 #\(trimmed)")
                                         .font(.caption.weight(.bold))
+                                        .lineLimit(1)
                                         .foregroundColor(palette.onPrimaryContainer)
                                     Text("分组：\(newTagGroup)")
                                         .font(.caption2)
+                                        .lineLimit(1)
                                         .foregroundColor(palette.onPrimaryContainer.opacity(0.8))
                                 }
-                                Spacer()
+                                Spacer(minLength: 4)
                             }
                         }
                         .buttonStyle(.plain)
 
-                        Button(showTagCreateStyle ? "收起" : "样式") {
+                        Button {
                             showTagCreateStyle.toggle()
+                        } label: {
+                            Text(showTagCreateStyle ? "收起" : "样式")
+                                .font(.caption2.weight(.semibold))
+                                .lineLimit(1)
+                                .fixedSize(horizontal: true, vertical: false)
+                                .foregroundColor(palette.primary)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(Capsule().fill(palette.surface))
                         }
-                        .font(.caption2.weight(.semibold))
-                        .foregroundColor(palette.primary)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(Capsule().fill(palette.surface))
+                        .buttonStyle(.plain)
                     }
                     .padding(9)
                     .background(RoundedRectangle(cornerRadius: 11).fill(palette.accentSoftFill))
@@ -1475,56 +1520,73 @@ public struct QuickRecordSheet: View {
     // MARK: - 4. 底部高频工作台（精简 4 胶囊 + 独立备注 + 计算器键盘）
 
     private var workbenchAttrBar: some View {
-        HStack(spacing: 6) {
-            attrButton(
-                icon: "wallet.pass.fill",
-                label: selectedAccount?.name ?? "账户",
-                selected: activePanel == .account || selectedAccount != nil
-            ) {
-                activePanel = activePanel == .account ? .category : .account
-            }
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                attrButton(
+                    icon: "wallet.pass.fill",
+                    label: selectedAccount?.name ?? "账户",
+                    selected: activePanel == .account || selectedAccount != nil,
+                    maxLabelWidth: 120
+                ) {
+                    activePanel = activePanel == .account ? .category : .account
+                }
 
-            attrButton(
-                icon: "clock.fill",
-                label: formatCompactDateTime(),
-                selected: activePanel == .dateTime
-            ) {
-                activePanel = activePanel == .dateTime ? .category : .dateTime
-            }
+                attrButton(
+                    icon: "clock.fill",
+                    label: formatCompactDateTime(),
+                    selected: activePanel == .dateTime
+                ) {
+                    activePanel = activePanel == .dateTime ? .category : .dateTime
+                }
 
-            attrButton(
-                icon: "tag.fill",
-                label: selectedTags.isEmpty ? "标签" : "标签(\(selectedTags.count))",
-                selected: activePanel == .tags || !selectedTags.isEmpty
-            ) {
-                activePanel = activePanel == .tags ? .category : .tags
-            }
+                attrButton(
+                    icon: "tag.fill",
+                    label: selectedTags.isEmpty ? "标签" : "标签(\(selectedTags.count))",
+                    selected: activePanel == .tags || !selectedTags.isEmpty
+                ) {
+                    activePanel = activePanel == .tags ? .category : .tags
+                }
 
-            attrButton(
-                icon: "slider.horizontal.3",
-                label: moreActiveCount == 0 ? "更多" : "更多(\(moreActiveCount))",
-                selected: activePanel == .more || moreActiveCount > 0
-            ) {
-                activePanel = activePanel == .more ? .category : .more
+                attrButton(
+                    icon: "slider.horizontal.3",
+                    label: moreActiveCount == 0 ? "更多" : "更多(\(moreActiveCount))",
+                    selected: activePanel == .more || moreActiveCount > 0
+                ) {
+                    activePanel = activePanel == .more ? .category : .more
+                }
             }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
     }
 
-    private func attrButton(icon: String, label: String, selected: Bool, action: @escaping () -> Void) -> some View {
+    private func attrButton(
+        icon: String,
+        label: String,
+        selected: Bool,
+        maxLabelWidth: CGFloat? = nil,
+        action: @escaping () -> Void
+    ) -> some View {
         Button(action: action) {
             HStack(spacing: 4) {
                 Image(systemName: icon)
                     .font(.caption2)
-                Text(label)
-                    .font(.caption2.weight(selected ? .semibold : .medium))
-                    .lineLimit(1)
+                if let maxLabelWidth {
+                    Text(label)
+                        .font(.caption2.weight(selected ? .semibold : .medium))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .frame(maxWidth: maxLabelWidth)
+                } else {
+                    Text(label)
+                        .font(.caption2.weight(selected ? .semibold : .medium))
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
+                }
             }
             .foregroundColor(selected ? palette.primary : palette.textSecondary)
-            .frame(maxWidth: .infinity)
             .padding(.vertical, 7)
-            .padding(.horizontal, 6)
+            .padding(.horizontal, 10)
             .background(Capsule().fill(selected ? palette.accentSoftFill : palette.surfaceSecondary))
         }
         .buttonStyle(.plain)
@@ -1606,82 +1668,98 @@ public struct QuickRecordSheet: View {
                 keypadButton("6") { amountExpr = QuickExprEvaluator.appendDigit(amountExpr, digit: "6") }
                 keypadButton("+", isOp: true) { amountExpr = QuickExprEvaluator.appendOperator(amountExpr, op: "+") }
             }
-            HStack(spacing: 5) {
-                VStack(spacing: 5) {
-                    HStack(spacing: 5) {
-                        keypadButton("1") { amountExpr = QuickExprEvaluator.appendDigit(amountExpr, digit: "1") }
-                        keypadButton("2") { amountExpr = QuickExprEvaluator.appendDigit(amountExpr, digit: "2") }
-                        keypadButton("3") { amountExpr = QuickExprEvaluator.appendDigit(amountExpr, digit: "3") }
-                    }
-                    HStack(spacing: 5) {
-                        keypadButton("00") {
-                            amountExpr = QuickExprEvaluator.appendDigit(amountExpr, digit: "0")
-                            amountExpr = QuickExprEvaluator.appendDigit(amountExpr, digit: "0")
-                        }
-                        keypadButton("0") { amountExpr = QuickExprEvaluator.appendDigit(amountExpr, digit: "0") }
-                        keypadButton(".") { amountExpr = QuickExprEvaluator.appendDot(amountExpr) }
-                    }
-                }
+            GeometryReader { geo in
+                let spacing: CGFloat = 5
+                let colWidth = max(0, (geo.size.width - spacing * 3) / 4)
+                let leftThreeColsWidth = max(0, colWidth * 3 + spacing * 2)
 
-                if hasOp {
-                    Button {
-                        let digits = CurrencyCatalog.find(origCurrency).minorDigits
-                        if let res = QuickExprEvaluator.evaluateAndFormat(amountExpr, maxScale: digits) {
-                            amountExpr = res
-                        } else {
-                            validationMessage = "算式格式有误"
+                HStack(spacing: spacing) {
+                    VStack(spacing: spacing) {
+                        HStack(spacing: spacing) {
+                            keypadButton("1") { amountExpr = QuickExprEvaluator.appendDigit(amountExpr, digit: "1") }
+                            keypadButton("2") { amountExpr = QuickExprEvaluator.appendDigit(amountExpr, digit: "2") }
+                            keypadButton("3") { amountExpr = QuickExprEvaluator.appendDigit(amountExpr, digit: "3") }
                         }
-                    } label: {
-                        Text("=")
-                            .font(.title2.weight(.bold))
-                            .foregroundColor(palette.onPrimary)
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 89)
-                            .background(RoundedRectangle(cornerRadius: 11).fill(palette.primary))
+                        HStack(spacing: spacing) {
+                            keypadButton("00") {
+                                amountExpr = QuickExprEvaluator.appendDigit(amountExpr, digit: "0")
+                                amountExpr = QuickExprEvaluator.appendDigit(amountExpr, digit: "0")
+                            }
+                            keypadButton("0") { amountExpr = QuickExprEvaluator.appendDigit(amountExpr, digit: "0") }
+                            keypadButton(".") { amountExpr = QuickExprEvaluator.appendDot(amountExpr) }
+                        }
                     }
-                    .frame(width: 82)
-                } else if !isEdit {
-                    VStack(spacing: 5) {
+                    .frame(width: leftThreeColsWidth)
+
+                    if hasOp {
                         Button {
-                            saveBill(continueNext: true)
+                            let digits = CurrencyCatalog.find(origCurrency).minorDigits
+                            if let res = QuickExprEvaluator.evaluateAndFormat(amountExpr, maxScale: digits) {
+                                amountExpr = res
+                            } else {
+                                validationMessage = "算式格式有误"
+                            }
                         } label: {
-                            Text("再记")
-                                .font(.subheadline.weight(.bold))
-                                .foregroundColor(palette.primary)
+                            Text("=")
+                                .font(.title2.weight(.bold))
+                                .lineLimit(1)
+                                .foregroundColor(palette.onPrimary)
                                 .frame(maxWidth: .infinity)
-                                .frame(height: 42)
-                                .background(RoundedRectangle(cornerRadius: 11).fill(palette.accentSoftFill))
+                                .frame(height: 89)
+                                .background(RoundedRectangle(cornerRadius: 11).fill(palette.primary))
                         }
+                        .buttonStyle(.plain)
+                        .frame(width: colWidth)
+                    } else if !isEdit {
+                        VStack(spacing: spacing) {
+                            Button {
+                                saveBill(continueNext: true)
+                            } label: {
+                                Text("再记")
+                                    .font(.subheadline.weight(.bold))
+                                    .lineLimit(1)
+                                    .foregroundColor(palette.primary)
+                                    .frame(maxWidth: .infinity)
+                                    .frame(height: 42)
+                                    .background(RoundedRectangle(cornerRadius: 11).fill(palette.accentSoftFill))
+                            }
+                            .buttonStyle(.plain)
+                            Button {
+                                saveBill(continueNext: false)
+                            } label: {
+                                Text("完成")
+                                    .font(.subheadline.weight(.bold))
+                                    .lineLimit(1)
+                                    .foregroundColor(palette.onPrimary)
+                                    .frame(maxWidth: .infinity)
+                                    .frame(height: 42)
+                                    .background(RoundedRectangle(cornerRadius: 11).fill(palette.primary))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                        .frame(width: colWidth)
+                    } else {
                         Button {
                             saveBill(continueNext: false)
                         } label: {
-                            Text("完成")
-                                .font(.subheadline.weight(.bold))
+                            Text("保存")
+                                .font(.headline.weight(.bold))
+                                .lineLimit(1)
                                 .foregroundColor(palette.onPrimary)
                                 .frame(maxWidth: .infinity)
-                                .frame(height: 42)
+                                .frame(height: 89)
                                 .background(RoundedRectangle(cornerRadius: 11).fill(palette.primary))
                         }
+                        .buttonStyle(.plain)
+                        .frame(width: colWidth)
                     }
-                    .frame(width: 82)
-                } else {
-                    Button {
-                        saveBill(continueNext: false)
-                    } label: {
-                        Text("保存")
-                            .font(.headline.weight(.bold))
-                            .foregroundColor(palette.onPrimary)
-                            .frame(maxWidth: .infinity)
-                            .frame(height: 89)
-                            .background(RoundedRectangle(cornerRadius: 11).fill(palette.primary))
-                    }
-                    .frame(width: 82)
                 }
             }
+            .frame(height: 89)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
-        .background(palette.surface)
+        .background(palette.surface.ignoresSafeArea(edges: .bottom))
     }
 
     private func keypadButton(_ title: String, isOp: Bool = false, secondary: Bool = false, action: @escaping () -> Void) -> some View {
@@ -1689,6 +1767,7 @@ public struct QuickRecordSheet: View {
             Text(title)
                 .font(secondary ? .caption.weight(.semibold) : .title3.weight(.semibold))
                 .monospacedDigit()
+                .lineLimit(1)
                 .foregroundColor(isOp ? palette.primary : (secondary ? palette.textSecondary : palette.textPrimary))
                 .frame(maxWidth: .infinity)
                 .frame(height: 42)
@@ -1724,36 +1803,45 @@ public struct QuickRecordSheet: View {
             } label: {
                 Label("键盘", systemImage: "keyboard")
                     .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
                     .foregroundColor(palette.primary)
                     .padding(.horizontal, 12)
                     .padding(.vertical, 10)
             }
+            .buttonStyle(.plain)
             if editingTransaction == nil {
                 Button {
                     saveBill(continueNext: true)
                 } label: {
                     Text("再记一笔")
                         .font(.subheadline.weight(.bold))
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
                         .foregroundColor(palette.primary)
                         .padding(.horizontal, 14)
                         .padding(.vertical, 11)
                         .background(RoundedRectangle(cornerRadius: 11).fill(palette.accentSoftFill))
                 }
+                .buttonStyle(.plain)
             }
             Button {
                 saveBill(continueNext: false)
             } label: {
                 Text(editingTransaction == nil ? "完成记账" : "保存修改")
                     .font(.subheadline.weight(.bold))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
                     .foregroundColor(palette.onPrimary)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 11)
                     .background(RoundedRectangle(cornerRadius: 11).fill(palette.primary))
             }
+            .buttonStyle(.plain)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        .background(palette.surface)
+        .background(palette.surface.ignoresSafeArea(edges: .bottom))
     }
 
     // MARK: - Helpers & Actions

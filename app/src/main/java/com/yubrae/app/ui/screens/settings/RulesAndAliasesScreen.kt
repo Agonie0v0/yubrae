@@ -1222,12 +1222,17 @@ private fun AliasesListTab(
                                     Text(
                                         text = alias.matchType,
                                         style = MaterialTheme.typography.labelSmall,
+                                        maxLines = 1,
+                                        softWrap = false,
                                         modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                                     )
                                 }
                                 Text(
                                     text = accName,
-                                    style = MaterialTheme.typography.titleSmall
+                                    style = MaterialTheme.typography.titleSmall,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f, fill = false)
                                 )
                             }
                             Text(
@@ -1240,6 +1245,7 @@ private fun AliasesListTab(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
+                        Spacer(modifier = Modifier.width(6.dp))
                         Switch(
                             checked = alias.enabled,
                             onCheckedChange = { onToggleEnabled(alias, it) }
@@ -1300,7 +1306,13 @@ private fun RulesListTab(
                                     verticalAlignment = Alignment.CenterVertically,
                                     horizontalArrangement = Arrangement.spacedBy(6.dp)
                                 ) {
-                                    Text(rule.name, style = MaterialTheme.typography.titleSmall)
+                                    Text(
+                                        text = rule.name,
+                                        style = MaterialTheme.typography.titleSmall,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f, fill = false)
+                                    )
                                     if (rule.isBuiltIn) {
                                         Surface(
                                             shape = RoundedCornerShape(6.dp),
@@ -1309,6 +1321,8 @@ private fun RulesListTab(
                                             Text(
                                                 text = "内置",
                                                 style = MaterialTheme.typography.labelSmall,
+                                                maxLines = 1,
+                                                softWrap = false,
                                                 modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
                                             )
                                         }
@@ -1320,6 +1334,7 @@ private fun RulesListTab(
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
+                            Spacer(modifier = Modifier.width(8.dp))
                             Switch(
                                 checked = rule.enabled,
                                 onCheckedChange = { onToggleEnabled(rule, it) }
@@ -1459,6 +1474,7 @@ private fun AliasEditorDialog(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun RuleEditorDialog(
     existing: ParseRuleEntity?,
@@ -1548,9 +1564,17 @@ private fun RuleEditorDialog(
                     FilterChip(selected = txType == type, onClick = { txType = type }, label = { Text(label) })
                 }
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            FlowRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
                 listOf("ANY", "NOTIFICATION", "SMS").forEach { ch ->
-                    FilterChip(selected = channelType == ch, onClick = { channelType = ch }, label = { Text(ch) })
+                    FilterChip(
+                        selected = channelType == ch,
+                        onClick = { channelType = ch },
+                        label = { Text(ch, maxLines = 1) }
+                    )
                 }
             }
             OutlinedTextField(

@@ -399,8 +399,32 @@ private fun resolveAccountBrandVisual(
     val lowerName = accountName.trim().lowercase(Locale.ROOT)
     val lowerKey = iconKey.trim().lowercase(Locale.ROOT)
     return when {
+        // 明确图标键优先区分，避免账户图标选择器内同组图标大面积撞车
+        lowerKey == "receipt_long" -> AccountBrandVisual("credit_bill", 0xFF0EA5E9L)
+        lowerKey == "attach_money" -> AccountBrandVisual(null, 0xFF16A34AL)
+        lowerKey == "euro" -> AccountBrandVisual(null, 0xFF2563EBL)
+        lowerKey == "currency_pound" -> AccountBrandVisual(null, 0xFF7C3AEDL)
+        lowerKey == "currency_yen" -> AccountBrandVisual(null, 0xFFE11D48L)
+        lowerKey == "currency_exchange" -> AccountBrandVisual("fx_coins", 0xFF0284C7L)
+        lowerKey == "payments" -> AccountBrandVisual("cash_notes", 0xFF16A34AL)
+        lowerKey == "local_atm" -> AccountBrandVisual(null, 0xFFF59E0BL)
+        lowerKey == "atm" -> AccountBrandVisual(null, 0xFF0284C7L)
+        lowerKey == "assured_workload" -> AccountBrandVisual(null, 0xFF0D9488L)
+        lowerKey == "credit_score" -> AccountBrandVisual(null, 0xFF059669L)
+        lowerKey == "add_card" -> AccountBrandVisual(null, 0xFF6366F1L)
+        lowerKey == "calendar_month" -> AccountBrandVisual(null, 0xFFEA580CL)
+        lowerKey == "subway" -> AccountBrandVisual(null, 0xFF0284C7L)
+        lowerKey == "trending_up" -> AccountBrandVisual("trend_up", 0xFF16A34AL)
+        lowerKey == "candlestick_chart" -> AccountBrandVisual(null, 0xFFDC2626L)
+        lowerKey == "show_chart" -> AccountBrandVisual(null, 0xFF2563EBL)
+        lowerKey == "pie_chart" -> AccountBrandVisual(null, 0xFF7C3AEDL)
+        lowerKey == "bar_chart" -> AccountBrandVisual(null, 0xFF0D9488L)
+        lowerKey == "currency_bitcoin" -> AccountBrandVisual(null, 0xFFF59E0BL)
+
+        // 常见品牌账户语义识别
         lowerName.contains("微信") || lowerKey == "chat" -> AccountBrandVisual("wechat", 0xFF07C160L)
-        lowerName.contains("支付宝") || lowerName.contains("花呗") || lowerName.contains("余利宝") ||
+        lowerName.contains("花呗") && !lowerName.contains("白条") -> AccountBrandVisual("credit_bill", 0xFF06B6D4L)
+        lowerName.contains("支付宝") || lowerName.contains("余利宝") ||
             lowerName.contains("余额宝") || lowerKey == "qr_code_2" -> AccountBrandVisual("alipay", 0xFF1677FFL)
         lowerName.contains("qq") -> AccountBrandVisual("qq", 0xFF1E293BL)
         lowerName.contains("京东") || lowerName.contains("白条") -> AccountBrandVisual("jd", 0xFFE11D48L)
@@ -413,19 +437,17 @@ private fun resolveAccountBrandVisual(
         lowerName.contains("农商") || lowerName.contains("渝农") -> AccountBrandVisual("bank_rose", 0xFFDC2626L)
         lowerName.contains("光大") -> AccountBrandVisual("bank_purple", 0xFF7C3AEDL)
         lowerName.contains("公交") || lowerName.contains("畅通") || lowerName.contains("地铁") ||
-            lowerName.contains("一卡通") || lowerKey in setOf("directions_bus", "subway") ->
+            lowerName.contains("一卡通") || lowerKey == "directions_bus" ->
             AccountBrandVisual("transit_card", 0xFF10B981L)
-        lowerKey in setOf("credit_card", "credit_score", "add_card", "calendar_month") ||
+        lowerKey == "credit_card" ||
             lowerName.contains("visa") || lowerName.contains("master") || lowerName.contains("plasma") ||
             lowerName.contains("信用卡") -> AccountBrandVisual("gold_card", 0xFFF59E0BL)
-        lowerKey in setOf("savings", "trending_up", "candlestick_chart", "show_chart", "pie_chart", "bar_chart") ||
+        lowerKey == "savings" ||
             lowerName.contains("基金") || lowerName.contains("股票") || lowerName.contains("理财") ->
             AccountBrandVisual("invest_pouch", 0xFFF59E0BL)
-        lowerKey in setOf("account_balance", "assured_workload", "atm") ->
-            AccountBrandVisual("bank_blue", fallbackColorHex)
-        lowerKey in setOf("currency_exchange", "attach_money", "euro", "currency_pound", "currency_yen") ->
-            AccountBrandVisual("fx_coins", 0xFF0284C7L)
-        lowerKey in setOf("account_balance_wallet", "wallet", "payments", "local_atm") ->
+        lowerKey == "account_balance" ->
+            AccountBrandVisual("bank_building", fallbackColorHex)
+        lowerKey in setOf("account_balance_wallet", "wallet") ->
             AccountBrandVisual("wallet", fallbackColorHex)
         else -> AccountBrandVisual(null, fallbackColorHex)
     }
@@ -557,7 +579,11 @@ private fun drawAccountBrandCanvas(scope: DrawScope, bespokeKey: String, p: Path
             }
             "gold_card" -> drawGoldCard()
             "invest_pouch" -> drawMoneyPouch(p)
+            "trend_up" -> drawTrendUp(p)
             "fx_coins" -> drawExchangeCoins()
+            "cash_notes" -> drawCashNotes()
+            "credit_bill" -> drawReceiptNote(p)
+            "bank_building" -> drawBankBuilding(p)
             else -> drawLeatherWallet()
         }
     }

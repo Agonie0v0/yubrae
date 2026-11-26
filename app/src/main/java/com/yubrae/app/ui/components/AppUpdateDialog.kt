@@ -3,6 +3,8 @@ package com.yubrae.app.ui.components
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -44,9 +46,16 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -57,6 +66,7 @@ import com.yubrae.app.update.AppUpdateManager
 import com.yubrae.app.update.UpdateUiState
 import java.util.Locale
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun AppUpdateDialog(
     state: UpdateUiState,
@@ -164,16 +174,31 @@ fun AppUpdateDialog(
                                 onStartDownload(state.info)
                             }
                         },
-                        shape = RoundedCornerShape(12.dp)
+                        shape = RoundedCornerShape(12.dp),
+                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)
                     ) {
                         Icon(Icons.Rounded.Download, null, modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text("下载并安装", maxLines = 1)
+                        Text(
+                            text = "下载并安装",
+                            maxLines = 1,
+                            softWrap = false,
+                            overflow = TextOverflow.Ellipsis
+                        )
                     }
                 }
                 is UpdateUiState.Downloading -> {
-                    OutlinedButton(onClick = onCancelDownload, shape = RoundedCornerShape(12.dp)) {
-                        Text("取消下载")
+                    OutlinedButton(
+                        onClick = onCancelDownload,
+                        shape = RoundedCornerShape(12.dp),
+                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)
+                    ) {
+                        Text(
+                            text = "取消下载",
+                            maxLines = 1,
+                            softWrap = false,
+                            overflow = TextOverflow.Ellipsis
+                        )
                     }
                 }
                 is UpdateUiState.ReadyToInstall -> {
@@ -185,7 +210,8 @@ fun AppUpdateDialog(
                                 onOpenUnknownSources()
                             }
                         },
-                        shape = RoundedCornerShape(12.dp)
+                        shape = RoundedCornerShape(12.dp),
+                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)
                     ) {
                         Icon(
                             imageVector = if (canInstall) Icons.Rounded.InstallMobile else Icons.Rounded.Security,
@@ -193,7 +219,12 @@ fun AppUpdateDialog(
                             modifier = Modifier.size(16.dp)
                         )
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text(if (canInstall) "立即安装" else "去允许安装未知应用")
+                        Text(
+                            text = if (canInstall) "立即安装" else "去允许安装未知应用",
+                            maxLines = 1,
+                            softWrap = false,
+                            overflow = TextOverflow.Ellipsis
+                        )
                     }
                 }
                 is UpdateUiState.UpToDate -> {
@@ -203,11 +234,17 @@ fun AppUpdateDialog(
                                 onRetryCheck()
                             }
                         },
-                        shape = RoundedCornerShape(12.dp)
+                        shape = RoundedCornerShape(12.dp),
+                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
                     ) {
                         Icon(Icons.Rounded.Refresh, null, modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text("重新检查")
+                        Text(
+                            text = "重新检查",
+                            maxLines = 1,
+                            softWrap = false,
+                            overflow = TextOverflow.Ellipsis
+                        )
                     }
                 }
                 is UpdateUiState.Error -> {
@@ -218,11 +255,17 @@ fun AppUpdateDialog(
                                 if (errInfo != null) onStartDownload(errInfo) else onRetryCheck()
                             }
                         },
-                        shape = RoundedCornerShape(12.dp)
+                        shape = RoundedCornerShape(12.dp),
+                        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)
                     ) {
                         Icon(Icons.Rounded.Refresh, null, modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text("重试")
+                        Text(
+                            text = "重试",
+                            maxLines = 1,
+                            softWrap = false,
+                            overflow = TextOverflow.Ellipsis
+                        )
                     }
                 }
                 UpdateUiState.Idle, UpdateUiState.Checking, is UpdateUiState.Verifying -> Unit
@@ -232,58 +275,37 @@ fun AppUpdateDialog(
             {
                 when (state) {
                     is UpdateUiState.Available -> {
-                        Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                            TextButton(
-                                onClick = { onOpenBrowser(state.info.htmlUrl) },
-                                shape = RoundedCornerShape(12.dp),
-                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp)
-                            ) {
-                                Icon(Icons.Rounded.OpenInBrowser, null, modifier = Modifier.size(15.dp))
-                                Spacer(modifier = Modifier.width(3.dp))
-                                Text("浏览器", maxLines = 1)
-                            }
-                            TextButton(
-                                onClick = { onIgnoreVersion(state.info.tagName) },
-                                shape = RoundedCornerShape(12.dp),
-                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp)
-                            ) {
-                                Text("跳过", maxLines = 1)
-                            }
-                            TextButton(
-                                onClick = onDismiss,
-                                shape = RoundedCornerShape(12.dp),
-                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp)
-                            ) {
-                                Text("稍后", maxLines = 1)
-                            }
+                        TextButton(
+                            onClick = { onIgnoreVersion(state.info.tagName) },
+                            shape = RoundedCornerShape(12.dp),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp)
+                        ) {
+                            Text("跳过", maxLines = 1, softWrap = false)
+                        }
+                        TextButton(
+                            onClick = onDismiss,
+                            shape = RoundedCornerShape(12.dp),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp)
+                        ) {
+                            Text("稍后", maxLines = 1, softWrap = false)
                         }
                     }
                     is UpdateUiState.Error -> {
-                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                            TextButton(
-                                onClick = {
-                                    onOpenBrowser(state.fallbackUrl.ifBlank { AppUpdateManager.DEFAULT_RELEASE_PAGE_URL })
-                                },
-                                shape = RoundedCornerShape(12.dp),
-                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp)
-                            ) {
-                                Icon(Icons.Rounded.OpenInBrowser, null, modifier = Modifier.size(15.dp))
-                                Spacer(modifier = Modifier.width(4.dp))
-                                Text("浏览器下载", maxLines = 1)
-                            }
-                            TextButton(
-                                onClick = onDismiss,
-                                shape = RoundedCornerShape(12.dp),
-                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 6.dp)
-                            ) { Text("关闭", maxLines = 1) }
+                        TextButton(
+                            onClick = onDismiss,
+                            shape = RoundedCornerShape(12.dp),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
+                        ) {
+                            Text("关闭", maxLines = 1, softWrap = false)
                         }
                     }
                     else -> {
                         TextButton(
                             onClick = onDismiss,
-                            shape = RoundedCornerShape(12.dp)
+                            shape = RoundedCornerShape(12.dp),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
                         ) {
-                            Text("关闭")
+                            Text("关闭", maxLines = 1, softWrap = false)
                         }
                     }
                 }
@@ -293,7 +315,9 @@ fun AppUpdateDialog(
         }
     ) {
         Column(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             when (state) {
@@ -422,17 +446,63 @@ fun AppUpdateDialog(
             if (state is UpdateUiState.Available || state is UpdateUiState.UpToDate || state is UpdateUiState.Error) {
                 val hasValidMirror = mirrorPrefix.isNotBlank() &&
                     AppUpdateManager.validateMirrorPrefix(mirrorPrefix) is AppUpdateManager.MirrorPrefixValidation.Valid
-                TextButton(
-                    onClick = { showMirrorConfig = !showMirrorConfig },
-                    shape = RoundedCornerShape(12.dp),
-                    modifier = Modifier.align(Alignment.Start)
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
                 ) {
-                    Icon(Icons.Rounded.Tune, null, modifier = Modifier.size(15.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text(
-                        text = if (hasValidMirror) "下载加速镜像（已配置）" else "下载加速镜像设置",
-                        style = MaterialTheme.typography.labelMedium
-                    )
+                    TextButton(
+                        onClick = { showMirrorConfig = !showMirrorConfig },
+                        shape = RoundedCornerShape(12.dp),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                    ) {
+                        Icon(Icons.Rounded.Tune, null, modifier = Modifier.size(15.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = if (hasValidMirror) "下载加速镜像（已配置）" else "下载加速镜像设置",
+                            style = MaterialTheme.typography.labelMedium,
+                            maxLines = 1,
+                            softWrap = false,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    when (state) {
+                        is UpdateUiState.Available -> {
+                            TextButton(
+                                onClick = { onOpenBrowser(state.info.htmlUrl) },
+                                shape = RoundedCornerShape(12.dp),
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                            ) {
+                                Icon(Icons.Rounded.OpenInBrowser, null, modifier = Modifier.size(15.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "浏览器查看",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    maxLines = 1,
+                                    softWrap = false
+                                )
+                            }
+                        }
+                        is UpdateUiState.Error -> {
+                            TextButton(
+                                onClick = {
+                                    onOpenBrowser(state.fallbackUrl.ifBlank { AppUpdateManager.DEFAULT_RELEASE_PAGE_URL })
+                                },
+                                shape = RoundedCornerShape(12.dp),
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp)
+                            ) {
+                                Icon(Icons.Rounded.OpenInBrowser, null, modifier = Modifier.size(15.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "浏览器下载",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    maxLines = 1,
+                                    softWrap = false
+                                )
+                            }
+                        }
+                        else -> Unit
+                    }
                 }
                 AnimatedVisibility(visible = showMirrorConfig) {
                     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -509,7 +579,15 @@ private fun UpdateMetaHeader(info: AppUpdateInfo) {
 
 @Composable
 private fun ReleaseNotesBox(notes: String) {
-    val content = notes.ifBlank { "本次发布包含功能优化与稳定性修复。" }
+    val headingColor = MaterialTheme.colorScheme.primary
+    val mutedColor = MaterialTheme.colorScheme.onSurfaceVariant
+    val formattedNotes = remember(notes, headingColor, mutedColor) {
+        formatReleaseNotesForDisplay(
+            raw = notes,
+            headingColor = headingColor,
+            mutedColor = mutedColor
+        )
+    }
     Surface(
         shape = RoundedCornerShape(12.dp),
         color = MaterialTheme.colorScheme.surfaceContainerLow,
@@ -531,11 +609,177 @@ private fun ReleaseNotesBox(notes: String) {
             )
             Spacer(modifier = Modifier.height(2.dp))
             Text(
-                text = content,
-                style = MaterialTheme.typography.bodySmall,
+                text = formattedNotes,
+                style = MaterialTheme.typography.bodySmall.copy(lineHeight = 19.sp),
                 color = MaterialTheme.colorScheme.onSurface
             )
         }
+    }
+}
+
+private const val DEFAULT_RELEASE_NOTES_FALLBACK = "本次发布包含功能优化与稳定性修复。"
+private val RELEASE_NOTES_FULL_CHANGELOG_REGEX =
+    Regex("""^\*{0,2}\s*Full Changelog\s*\*{0,2}\s*[:：]\s*(.+)$""", RegexOption.IGNORE_CASE)
+private val RELEASE_NOTES_COMPARE_RANGE_REGEX = Regex("""/compare/([^)\s]+)""")
+private val RELEASE_NOTES_HEADING_REGEX = Regex("""^#{1,6}\s+(.+?)\s*#*$""")
+private val RELEASE_NOTES_BULLET_REGEX = Regex("""^(\s*)[-*+]\s+(.+)$""")
+private val RELEASE_NOTES_ORDERED_REGEX = Regex("""^(\s*)(\d+)\.\s+(.+)$""")
+private val RELEASE_NOTES_HR_REGEX = Regex("""^\s*([-*_])\1{2,}\s*$""")
+private val RELEASE_NOTES_LINK_REGEX = Regex("""\[([^\]]+)]\((https?://[^)\s]+)\)""")
+private val RELEASE_NOTES_INLINE_REGEX = Regex("""\*\*(.+?)\*\*|__(.+?)__|`([^`]+)`""")
+
+/**
+ * 将 GitHub Releases Markdown 更新日志转换为适合移动端阅读的 [AnnotatedString]：
+ * - `##`/`###` 渲染为加粗小标题；
+ * - `-`/`*` 列表项转换为 `• `（子级转换为 `  ◦ `）；
+ * - `**bold**` / `__bold__` 转换为粗体，行内代码去除反引号；
+ * - 清理裸露的 `**Full Changelog**:` 符号并精简比对链接展示。
+ */
+internal fun formatReleaseNotesForDisplay(
+    raw: String,
+    headingColor: Color = Color.Unspecified,
+    mutedColor: Color = Color.Unspecified
+): AnnotatedString {
+    val normalized = raw.replace("\r\n", "\n").replace('\r', '\n').trim()
+    if (normalized.isEmpty()) {
+        return AnnotatedString(DEFAULT_RELEASE_NOTES_FALLBACK)
+    }
+
+    val rawLines = normalized.split('\n')
+    val collapsedLines = mutableListOf<String>()
+    var previousBlank = false
+    for (line in rawLines) {
+        if (RELEASE_NOTES_HR_REGEX.matches(line)) {
+            if (collapsedLines.isNotEmpty() && !previousBlank) {
+                collapsedLines.add("")
+                previousBlank = true
+            }
+            continue
+        }
+        val isBlank = line.isBlank()
+        if (isBlank) {
+            if (collapsedLines.isNotEmpty() && !previousBlank) {
+                collapsedLines.add("")
+                previousBlank = true
+            }
+        } else {
+            collapsedLines.add(line.trimEnd())
+            previousBlank = false
+        }
+    }
+    while (collapsedLines.lastOrNull()?.isEmpty() == true) {
+        collapsedLines.removeAt(collapsedLines.lastIndex)
+    }
+    if (collapsedLines.isEmpty()) {
+        return AnnotatedString(DEFAULT_RELEASE_NOTES_FALLBACK)
+    }
+
+    return buildAnnotatedString {
+        collapsedLines.forEachIndexed { index, line ->
+            if (index > 0) append('\n')
+            if (line.isEmpty()) return@forEachIndexed
+
+            val trimmed = line.trim()
+            val changelogMatch = RELEASE_NOTES_FULL_CHANGELOG_REGEX.matchEntire(trimmed)
+            if (changelogMatch != null) {
+                val target = changelogMatch.groupValues[1].trim()
+                val compareRange = RELEASE_NOTES_COMPARE_RANGE_REGEX.find(target)?.groupValues?.get(1)
+                val cleanTarget = if (!compareRange.isNullOrBlank()) {
+                    compareRange
+                } else {
+                    RELEASE_NOTES_LINK_REGEX.replace(target, "$1")
+                }
+                withStyle(
+                    SpanStyle(
+                        fontSize = 11.5.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = mutedColor
+                    )
+                ) {
+                    append("完整变更记录：$cleanTarget")
+                }
+                return@forEachIndexed
+            }
+
+            val headingMatch = RELEASE_NOTES_HEADING_REGEX.matchEntire(trimmed)
+            if (headingMatch != null) {
+                val headingBody = headingMatch.groupValues[1]
+                    .trim()
+                    .removeSurrounding("**")
+                    .removeSurrounding("__")
+                    .trim()
+                withStyle(
+                    SpanStyle(
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 13.sp,
+                        color = headingColor
+                    )
+                ) {
+                    appendInlineMarkdown(headingBody)
+                }
+                return@forEachIndexed
+            }
+
+            val bulletMatch = RELEASE_NOTES_BULLET_REGEX.matchEntire(line)
+            if (bulletMatch != null) {
+                val indent = bulletMatch.groupValues[1]
+                val body = bulletMatch.groupValues[2].trim()
+                append(if (indent.length >= 2) "  ◦ " else "• ")
+                appendInlineMarkdown(body)
+                return@forEachIndexed
+            }
+
+            val orderedMatch = RELEASE_NOTES_ORDERED_REGEX.matchEntire(line)
+            if (orderedMatch != null) {
+                val indent = if (orderedMatch.groupValues[1].length >= 2) "  " else ""
+                val number = orderedMatch.groupValues[2]
+                val body = orderedMatch.groupValues[3].trim()
+                append("$indent$number. ")
+                appendInlineMarkdown(body)
+                return@forEachIndexed
+            }
+
+            appendInlineMarkdown(trimmed)
+        }
+    }
+}
+
+private fun AnnotatedString.Builder.appendInlineMarkdown(text: String) {
+    val unlinked = RELEASE_NOTES_LINK_REGEX.replace(text, "$1")
+    var cursor = 0
+    for (match in RELEASE_NOTES_INLINE_REGEX.findAll(unlinked)) {
+        if (match.range.first > cursor) {
+            append(unlinked.substring(cursor, match.range.first))
+        }
+        val boldDoubleStar = match.groupValues[1]
+        val boldUnderscore = match.groupValues[2]
+        val inlineCode = match.groupValues[3]
+        when {
+            boldDoubleStar.isNotEmpty() -> {
+                withStyle(SpanStyle(fontWeight = FontWeight.Bold)) {
+                    append(boldDoubleStar)
+                }
+            }
+            boldUnderscore.isNotEmpty() -> {
+                withStyle(SpanStyle(fontWeight = FontWeight.Bold)) {
+                    append(boldUnderscore)
+                }
+            }
+            inlineCode.isNotEmpty() -> {
+                withStyle(
+                    SpanStyle(
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Medium
+                    )
+                ) {
+                    append(inlineCode)
+                }
+            }
+        }
+        cursor = match.range.last + 1
+    }
+    if (cursor < unlinked.length) {
+        append(unlinked.substring(cursor))
     }
 }
 

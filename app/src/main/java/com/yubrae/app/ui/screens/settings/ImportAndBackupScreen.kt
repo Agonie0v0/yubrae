@@ -546,7 +546,12 @@ fun ImportAndBackupScreen(
                     ) {
                         Icon(Icons.Rounded.Check, null, modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text("确认导入 (${state.preview.validRows} 笔)")
+                        Text(
+                            text = "确认导入 (${state.preview.validRows} 笔)",
+                            maxLines = 1,
+                            softWrap = false,
+                            overflow = TextOverflow.Ellipsis
+                        )
                     }
                 }
             },
@@ -556,7 +561,11 @@ fun ImportAndBackupScreen(
                     enabled = !state.isProcessing,
                     shape = RoundedCornerShape(12.dp)
                 ) {
-                    Text("取消")
+                    Text(
+                        text = "取消",
+                        maxLines = 1,
+                        softWrap = false
+                    )
                 }
             }
         ) {

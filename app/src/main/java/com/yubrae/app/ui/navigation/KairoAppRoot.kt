@@ -727,14 +727,26 @@ fun KairoAppRoot(
                     }
                 }
 
-                // 全局 SnackBar 宿主（覆盖主 Tab、设置二级页与全屏业务中心）
+                // 全局 SnackBar 宿主（覆盖主 Tab、设置二级页与全屏业务中心；Tab 0 显示右下角 FAB 时抬高并避让 FAB）
+                val showHomeFab = !hasOverlayScreen &&
+                    !isInsideSettingsSubScreen &&
+                    pagerState.currentPage == 0 &&
+                    !isTxMultiSelect
+                val snackbarBottomPadding = when {
+                    hasOverlayScreen || isInsideSettingsSubScreen -> 16.dp
+                    showHomeFab -> 78.dp
+                    else -> 68.dp
+                }
                 SnackbarHost(
                     hostState = snackbarHostState,
                     modifier = Modifier
                         .align(Alignment.BottomCenter)
                         .navigationBarsPadding()
                         .imePadding()
-                        .padding(bottom = if (hasOverlayScreen || isInsideSettingsSubScreen) 16.dp else 68.dp)
+                        .padding(
+                            end = if (showHomeFab) 66.dp else 0.dp,
+                            bottom = snackbarBottomPadding
+                        )
                 )
                 }
 

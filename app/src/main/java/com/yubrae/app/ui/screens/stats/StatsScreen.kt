@@ -70,6 +70,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
@@ -131,7 +132,9 @@ import com.yubrae.app.ui.components.EmptyStateCard
 import com.yubrae.app.ui.components.KairoFormats
 import com.yubrae.app.ui.components.KairoIcons
 import com.yubrae.app.ui.components.LocalPrivacyMasked
+import com.yubrae.app.ui.components.QuickCurrencySelectorRow
 import com.yubrae.app.ui.components.TagBadgeChip
+import com.yubrae.app.ui.components.TopStatusBarScrim
 import com.yubrae.app.ui.components.YimuCard
 import com.yubrae.app.ui.components.YubraeDialog
 import com.yubrae.app.ui.components.YubraeDialogShape
@@ -283,14 +286,21 @@ fun StatsScreen(
         }
     }
 
-    LazyColumn(
-        state = listState,
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(
-            bottom = contentPadding.calculateBottomPadding() + 28.dp
-        ),
-        verticalArrangement = Arrangement.spacedBy(10.dp)
-    ) {
+    val showStatusBarScrim by remember(listState) {
+        derivedStateOf {
+            listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > 40
+        }
+    }
+
+    Box(modifier = Modifier.fillMaxSize()) {
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(
+                bottom = contentPadding.calculateBottomPadding() + 28.dp
+            ),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
         // 轻巧顶部控制条（左账本微胶囊 + 中支出/收入分段微胶囊 + 右隐私/币种微胶囊）
         item(key = "stats_top_header", contentType = "stats_top_header") {
             StatsTopControlBar(
@@ -565,6 +575,12 @@ fun StatsScreen(
                 modifier = Modifier.padding(horizontal = 12.dp)
             )
         }
+        }
+
+        TopStatusBarScrim(
+            visible = showStatusBarScrim,
+            modifier = Modifier.align(Alignment.TopCenter)
+        )
     }
 
     // 分类明细下钻 ModalBottomSheet（仅在打开时才按需收集交易与账户明细流）
@@ -814,7 +830,7 @@ private fun StatsTopControlBar(
                         .clickable(onClick = onOpenLedgerManager)
                 ) {
                     Row(
-                        modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
+                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(3.dp)
                     ) {
@@ -830,8 +846,9 @@ private fun StatsTopControlBar(
                             color = titleColor,
                             fontWeight = FontWeight.SemiBold,
                             maxLines = 1,
+                            softWrap = false,
                             overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.widthIn(max = 76.dp)
+                            modifier = Modifier.widthIn(max = 64.dp)
                         )
                         Icon(
                             imageVector = Icons.Rounded.ArrowDropDown,
@@ -871,6 +888,8 @@ private fun StatsTopControlBar(
                                 style = MaterialTheme.typography.labelMedium,
                                 fontWeight = if (active) FontWeight.Bold else FontWeight.Medium,
                                 color = if (active) MaterialTheme.colorScheme.onPrimary else titleColor.copy(alpha = 0.8f),
+                                maxLines = 1,
+                                softWrap = false,
                                 modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
                             )
                         }
@@ -912,16 +931,18 @@ private fun StatsTopControlBar(
                                 .clickable { onToggleCurrencyMenu(true) }
                         ) {
                             Row(
-                                modifier = Modifier.padding(horizontal = 7.dp, vertical = 4.dp),
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(2.dp)
                             ) {
-                                Text(info.flag, fontSize = 11.sp)
+                                Text(info.flag, fontSize = 11.sp, maxLines = 1, softWrap = false)
                                 Text(
                                     text = info.code,
                                     style = MaterialTheme.typography.labelMedium,
                                     fontWeight = FontWeight.Bold,
-                                    color = titleColor
+                                    color = titleColor,
+                                    maxLines = 1,
+                                    softWrap = false
                                 )
                                 Icon(
                                     imageVector = Icons.Rounded.ArrowDropDown,
@@ -1080,8 +1101,12 @@ private fun TrendBarChartCard(
                 Text(
                     text = cardTitle,
                     style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false)
                 )
+                Spacer(modifier = Modifier.width(8.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     LegendDot(color = semantic.income, label = "收入")
                     LegendDot(color = semantic.expense, label = "支出")
@@ -1117,8 +1142,12 @@ private fun TrendBarChartCard(
                             Text(
                                 text = activePoint.detailTitle,
                                 style = MaterialTheme.typography.labelMedium,
-                                fontWeight = FontWeight.Bold
+                                fontWeight = FontWeight.Bold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f, fill = false)
                             )
+                            Spacer(modifier = Modifier.width(8.dp))
                             Text(
                                 text = "结余 ${
                                     formatPrivacyAmount(
@@ -1128,7 +1157,9 @@ private fun TrendBarChartCard(
                                 }",
                                 style = MaterialTheme.typography.labelMedium.tabular(),
                                 fontWeight = FontWeight.SemiBold,
-                                color = if (balanceMicros >= 0L) semantic.income else semantic.expense
+                                color = if (balanceMicros >= 0L) semantic.income else semantic.expense,
+                                maxLines = 1,
+                                softWrap = false
                             )
                         }
                         Row(
@@ -1364,6 +1395,19 @@ private fun CategoryBreakdownCard(
                         }
                     }
 
+                    val centerAmountText = formatPrivacyAmount(
+                        privacyMasked,
+                        MoneyAmount.format(
+                            activeStat?.totalBaseMicros ?: totalMicros,
+                            displayCurrency
+                        )
+                    )
+                    val centerAmountFontSize = when {
+                        centerAmountText.length <= 7 -> 18.sp
+                        centerAmountText.length <= 9 -> 15.5.sp
+                        centerAmountText.length <= 11 -> 13.5.sp
+                        else -> 12.sp
+                    }
                     Column(
                         horizontalAlignment = Alignment.CenterHorizontally,
                         modifier = Modifier.widthIn(max = 104.dp)
@@ -1377,16 +1421,14 @@ private fun CategoryBreakdownCard(
                         )
                         Spacer(modifier = Modifier.height(2.dp))
                         Text(
-                            text = formatPrivacyAmount(
-                                privacyMasked,
-                                MoneyAmount.format(
-                                    activeStat?.totalBaseMicros ?: totalMicros,
-                                    displayCurrency
-                                )
-                            ),
-                            style = MaterialTheme.typography.titleLarge.tabular(),
+                            text = centerAmountText,
+                            style = MaterialTheme.typography.titleLarge.copy(
+                                fontSize = centerAmountFontSize,
+                                lineHeight = (centerAmountFontSize.value + 4f).sp
+                            ).tabular(),
                             fontWeight = FontWeight.Bold,
                             maxLines = 1,
+                            softWrap = false,
                             overflow = TextOverflow.Ellipsis
                         )
                         if (activeStat != null) {
@@ -1394,7 +1436,10 @@ private fun CategoryBreakdownCard(
                                 text = String.format(Locale.US, "%.1f%% · %d笔", activeStat.percentage * 100f, activeStat.count),
                                 style = MaterialTheme.typography.labelSmall.tabular(),
                                 fontSize = 10.sp,
-                                color = MaterialTheme.colorScheme.primary
+                                color = MaterialTheme.colorScheme.primary,
+                                maxLines = 1,
+                                softWrap = false,
+                                overflow = TextOverflow.Ellipsis
                             )
                         }
                     }
@@ -1553,7 +1598,10 @@ private fun CategoryDrillDownBottomSheet(
                         Text(
                             text = stat.categoryName,
                             style = MaterialTheme.typography.titleLarge,
-                            fontWeight = FontWeight.Bold
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false)
                         )
                         Surface(
                             shape = CircleShape,
@@ -1563,6 +1611,8 @@ private fun CategoryDrillDownBottomSheet(
                                 text = periodTitle,
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                softWrap = false,
                                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
                             )
                         }
@@ -1577,7 +1627,9 @@ private fun CategoryDrillDownBottomSheet(
                     Text(
                         text = "分类净额",
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        softWrap = false
                     )
                     Text(
                         text = formatPrivacyAmount(
@@ -1586,7 +1638,9 @@ private fun CategoryDrillDownBottomSheet(
                         ),
                         style = MaterialTheme.typography.titleMedium.tabular(),
                         fontWeight = FontWeight.Bold,
-                        color = Color(stat.colorHex)
+                        color = Color(stat.colorHex),
+                        maxLines = 1,
+                        softWrap = false
                     )
                 }
             }
@@ -1785,8 +1839,12 @@ private fun NetWorthHistoryCard(
                 Text(
                     text = "净资产走势 ($displayCurrency)",
                     style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false)
                 )
+                Spacer(modifier = Modifier.width(8.dp))
                 Icon(
                     imageVector = Icons.AutoMirrored.Rounded.TrendingUp,
                     contentDescription = null,
@@ -1819,11 +1877,13 @@ private fun NetWorthHistoryCard(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.Bottom
                 ) {
-                    Column {
+                    Column(modifier = Modifier.weight(1f, fill = false)) {
                         Text(
                             text = "当前净资产",
                             style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            softWrap = false
                         )
                         Text(
                             text = formatPrivacyAmount(
@@ -1832,9 +1892,12 @@ private fun NetWorthHistoryCard(
                             ),
                             style = MaterialTheme.typography.headlineSmall.tabular(),
                             fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurface
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
+                    Spacer(modifier = Modifier.width(8.dp))
                     Surface(
                         shape = CircleShape,
                         color = deltaBg
@@ -1848,6 +1911,8 @@ private fun NetWorthHistoryCard(
                             style = MaterialTheme.typography.labelSmall.tabular(),
                             fontWeight = FontWeight.SemiBold,
                             color = deltaFg,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
                         )
                     }
@@ -1875,8 +1940,12 @@ private fun NetWorthHistoryCard(
                             text = "${activePt.label} (${KairoFormats.formatDate(activePt.epochMillis)})",
                             style = MaterialTheme.typography.labelSmall,
                             fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false)
                         )
+                        Spacer(modifier = Modifier.width(8.dp))
                         Text(
                             text = formatPrivacyAmount(
                                 privacyMasked,
@@ -1884,7 +1953,9 @@ private fun NetWorthHistoryCard(
                             ),
                             style = MaterialTheme.typography.labelMedium.tabular(),
                             fontWeight = FontWeight.Bold,
-                            color = mintColor
+                            color = mintColor,
+                            maxLines = 1,
+                            softWrap = false
                         )
                     }
                 }
@@ -2075,15 +2146,48 @@ private fun NetWorthHistoryCard(
                         }
                     }
 
-                    // X 轴月度标签
-                    coords.forEachIndexed { idx, p ->
-                        val measured = textMeasurer.measure(points[idx].label, axisLabelStyle)
-                        val textX = (p.x - measured.size.width / 2f)
-                            .coerceIn(0f, (size.width - measured.size.width).coerceAtLeast(0f))
-                        drawText(
-                            textLayoutResult = measured,
-                            topLeft = Offset(textX, chartBottom + 5.dp.toPx())
-                        )
+                    // X 轴月度标签：优先保留首尾及选中点，按步长与水平间距做碰撞避让，避免相邻标签重叠
+                    if (coords.isNotEmpty()) {
+                        val labelGapPx = 6.dp.toPx()
+                        val labelY = chartBottom + 5.dp.toPx()
+                        val placedAxisRanges = mutableListOf<Pair<Float, Float>>()
+
+                        fun tryPlaceAxisLabel(idx: Int) {
+                            val measured = textMeasurer.measure(points[idx].label, axisLabelStyle)
+                            val w = measured.size.width.toFloat()
+                            val textX = (coords[idx].x - w / 2f)
+                                .coerceIn(0f, (size.width - w).coerceAtLeast(0f))
+                            val left = textX
+                            val right = textX + w
+                            val overlaps = placedAxisRanges.any { (eLeft, eRight) ->
+                                left < eRight + labelGapPx && right + labelGapPx > eLeft
+                            }
+                            if (!overlaps) {
+                                placedAxisRanges.add(left to right)
+                                drawText(
+                                    textLayoutResult = measured,
+                                    topLeft = Offset(textX, labelY)
+                                )
+                            }
+                        }
+
+                        val priorityIndices = linkedSetOf(safeIdx, 0, coords.lastIndex)
+                        priorityIndices.forEach { idx ->
+                            if (idx in coords.indices) {
+                                tryPlaceAxisLabel(idx)
+                            }
+                        }
+
+                        val axisStep = when {
+                            coords.size <= 6 -> 1
+                            coords.size <= 12 -> 2
+                            else -> (coords.size / 5).coerceAtLeast(2)
+                        }
+                        for (idx in 1 until coords.lastIndex) {
+                            if (idx % axisStep == 0 && idx !in priorityIndices) {
+                                tryPlaceAxisLabel(idx)
+                            }
+                        }
                     }
                 }
             }
@@ -2091,6 +2195,7 @@ private fun NetWorthHistoryCard(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun BudgetManagementCard(
     budgets: List<BudgetProgress>,
@@ -2284,22 +2389,28 @@ private fun BudgetManagementCard(
                                 horizontalArrangement = Arrangement.SpaceBetween
                             ) {
                                 Column(modifier = Modifier.weight(1f)) {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(5.dp)
+                                    FlowRow(
+                                        horizontalArrangement = Arrangement.spacedBy(5.dp),
+                                        verticalArrangement = Arrangement.spacedBy(4.dp)
                                     ) {
                                         Text(
                                             text = bp.budget.name,
                                             style = MaterialTheme.typography.titleSmall,
-                                            fontWeight = FontWeight.SemiBold
+                                            fontWeight = FontWeight.SemiBold,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                            modifier = Modifier.align(Alignment.CenterVertically)
                                         )
                                         Surface(
                                             shape = RoundedCornerShape(5.dp),
-                                            color = MaterialTheme.colorScheme.surfaceContainerHigh
+                                            color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                                            modifier = Modifier.align(Alignment.CenterVertically)
                                         ) {
                                             Text(
                                                 text = bp.categoryName,
                                                 style = MaterialTheme.typography.labelSmall,
+                                                maxLines = 1,
+                                                softWrap = false,
                                                 modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
                                             )
                                         }
@@ -2307,12 +2418,15 @@ private fun BudgetManagementCard(
                                             val ledgerName = ledgerMap[bp.budget.ledgerId]?.name ?: "默认账本"
                                             Surface(
                                                 shape = RoundedCornerShape(5.dp),
-                                                color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.7f)
+                                                color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.7f),
+                                                modifier = Modifier.align(Alignment.CenterVertically)
                                             ) {
                                                 Text(
                                                     text = ledgerName,
                                                     style = MaterialTheme.typography.labelSmall,
                                                     color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                                    maxLines = 1,
+                                                    softWrap = false,
                                                     modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
                                                 )
                                             }
@@ -2320,12 +2434,15 @@ private fun BudgetManagementCard(
                                         if (bp.overBudget) {
                                             Surface(
                                                 shape = RoundedCornerShape(5.dp),
-                                                color = semantic.expenseContainer
+                                                color = semantic.expenseContainer,
+                                                modifier = Modifier.align(Alignment.CenterVertically)
                                             ) {
                                                 Text(
                                                     text = "已超支",
                                                     style = MaterialTheme.typography.labelSmall,
                                                     color = semantic.expense,
+                                                    maxLines = 1,
+                                                    softWrap = false,
                                                     modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
                                                 )
                                             }
@@ -2392,15 +2509,16 @@ private fun BudgetManagementCard(
                             }
 
                             if (bp.rolloverMicros > 0L || (!bp.overBudget && bp.remainingDays > 0)) {
-                                Row(
+                                FlowRow(
                                     modifier = Modifier.fillMaxWidth(),
                                     horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                    verticalAlignment = Alignment.CenterVertically
+                                    verticalArrangement = Arrangement.spacedBy(4.dp)
                                 ) {
                                     if (bp.rolloverMicros > 0L) {
                                         Surface(
                                             shape = RoundedCornerShape(5.dp),
-                                            color = semantic.incomeContainer
+                                            color = semantic.incomeContainer,
+                                            modifier = Modifier.align(Alignment.CenterVertically)
                                         ) {
                                             Text(
                                                 text = "结转 +${
@@ -2412,6 +2530,8 @@ private fun BudgetManagementCard(
                                                 style = MaterialTheme.typography.labelSmall.tabular(),
                                                 color = semantic.income,
                                                 fontWeight = FontWeight.Medium,
+                                                maxLines = 1,
+                                                softWrap = false,
                                                 modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
                                             )
                                         }
@@ -2426,7 +2546,10 @@ private fun BudgetManagementCard(
                                             }",
                                             style = MaterialTheme.typography.labelSmall.tabular(),
                                             color = MaterialTheme.colorScheme.primary,
-                                            fontWeight = FontWeight.Medium
+                                            fontWeight = FontWeight.Medium,
+                                            maxLines = 1,
+                                            softWrap = false,
+                                            modifier = Modifier.align(Alignment.CenterVertically)
                                         )
                                     }
                                 }
@@ -2551,23 +2674,12 @@ private fun BudgetEditorDialog(
             )
 
             Text("币种", style = MaterialTheme.typography.labelMedium)
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                val codes = if (pinnedCurrencies.contains(currencyCode)) pinnedCurrencies else pinnedCurrencies + currencyCode
-                items(codes, key = { it }) { code ->
-                    CurrencyBadge(
-                        currencyCode = code,
-                        selected = code.equals(currencyCode, true),
-                        onClick = { currencyCode = code }
-                    )
-                }
-                item(key = "more") {
-                    FilterChip(
-                        selected = false,
-                        onClick = { showMoreCurrencies = true },
-                        label = { Text("更多") }
-                    )
-                }
-            }
+            QuickCurrencySelectorRow(
+                selectedCurrency = currencyCode,
+                pinnedCurrencies = pinnedCurrencies,
+                onSelectCurrency = { currencyCode = it },
+                onOpenMore = { showMoreCurrencies = true }
+            )
 
             Text("账本", style = MaterialTheme.typography.labelMedium)
             if (availableLedgers.isEmpty()) {
@@ -3096,7 +3208,10 @@ private fun TagDrillDownBottomSheet(
                         Text(
                             text = "#${stat.tagName}",
                             style = MaterialTheme.typography.titleLarge,
-                            fontWeight = FontWeight.Bold
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false)
                         )
                         Surface(
                             shape = CircleShape,
@@ -3106,6 +3221,8 @@ private fun TagDrillDownBottomSheet(
                                 text = periodTitle,
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                softWrap = false,
                                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
                             )
                         }
@@ -3120,7 +3237,9 @@ private fun TagDrillDownBottomSheet(
                     Text(
                         text = "标签总额",
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        softWrap = false
                     )
                     Text(
                         text = formatPrivacyAmount(
@@ -3129,7 +3248,9 @@ private fun TagDrillDownBottomSheet(
                         ),
                         style = MaterialTheme.typography.titleMedium.tabular(),
                         fontWeight = FontWeight.Bold,
-                        color = tagColor
+                        color = tagColor,
+                        maxLines = 1,
+                        softWrap = false
                     )
                 }
             }

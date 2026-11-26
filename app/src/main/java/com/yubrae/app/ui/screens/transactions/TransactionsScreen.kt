@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -84,6 +85,7 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -135,6 +137,7 @@ import com.yubrae.app.ui.components.LocalPrivacyMasked
 import com.yubrae.app.ui.components.ReceiptThumbnailImage
 import com.yubrae.app.ui.components.ReceiptZoomPreviewDialog
 import com.yubrae.app.ui.components.TagBadgeChip
+import com.yubrae.app.ui.components.TopStatusBarScrim
 import com.yubrae.app.ui.components.YimuCard
 import com.yubrae.app.ui.components.YubraeDialog
 import com.yubrae.app.ui.components.YubraeSheetShape
@@ -347,7 +350,14 @@ fun TransactionsScreen(
             .map { (code, pair) -> Triple(code, pair.first, pair.second) }
     }
 
-    Column(modifier = Modifier.fillMaxSize()) {
+    val showStatusBarScrim by remember(listState) {
+        derivedStateOf {
+            listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > 40
+        }
+    }
+
+    Box(modifier = Modifier.fillMaxSize()) {
+        Column(modifier = Modifier.fillMaxSize()) {
         // 长按多选模式顶部悬浮批量工具栏
         AnimatedVisibility(visible = isMultiSelectMode) {
             BatchSelectionToolbar(
@@ -772,6 +782,12 @@ fun TransactionsScreen(
                 }
             }
         }
+        }
+
+        TopStatusBarScrim(
+            visible = showStatusBarScrim,
+            modifier = Modifier.align(Alignment.TopCenter)
+        )
     }
 
     // 交易详情弹窗（含小票附件、退款标识、不计收支标识、原始报文溯源）
@@ -1012,7 +1028,7 @@ private fun TransactionsTopHeaderCard(
                             .clickable(onClick = onOpenLedgerManager)
                     ) {
                         Row(
-                            modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp),
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(3.dp)
                         ) {
@@ -1032,8 +1048,9 @@ private fun TransactionsTopHeaderCard(
                                 fontWeight = FontWeight.SemiBold,
                                 color = titleColor,
                                 maxLines = 1,
+                                softWrap = false,
                                 overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.widthIn(max = 84.dp)
+                                modifier = Modifier.widthIn(max = 68.dp)
                             )
                             Icon(
                                 imageVector = Icons.Rounded.ArrowDropDown,
@@ -1054,7 +1071,7 @@ private fun TransactionsTopHeaderCard(
                         ) {
                             Box(
                                 modifier = Modifier
-                                    .size(28.dp)
+                                    .size(24.dp)
                                     .clip(CircleShape)
                                     .clickable(onClick = onPrevMonth),
                                 contentAlignment = Alignment.Center
@@ -1063,7 +1080,7 @@ private fun TransactionsTopHeaderCard(
                                     imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowLeft,
                                     contentDescription = "上个月",
                                     tint = titleColor,
-                                    modifier = Modifier.size(18.dp)
+                                    modifier = Modifier.size(17.dp)
                                 )
                             }
                             Row(
@@ -1074,13 +1091,13 @@ private fun TransactionsTopHeaderCard(
                                             Modifier
                                                 .background(pillBgColor.copy(alpha = 0.72f))
                                                 .clickable(onClick = onResetCurrentMonth)
-                                                .padding(horizontal = 7.dp, vertical = 2.dp)
+                                                .padding(horizontal = 5.dp, vertical = 2.dp)
                                         } else {
-                                            Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                                            Modifier.padding(horizontal = 3.dp, vertical = 2.dp)
                                         }
                                     ),
                                 verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(3.dp)
+                                horizontalArrangement = Arrangement.spacedBy(2.dp)
                             ) {
                                 Text(
                                     text = shortMonthLabel,
@@ -1090,7 +1107,9 @@ private fun TransactionsTopHeaderCard(
                                     ).tabular(),
                                     fontWeight = FontWeight.Bold,
                                     color = titleColor,
-                                    maxLines = 1
+                                    maxLines = 1,
+                                    softWrap = false,
+                                    overflow = TextOverflow.Ellipsis
                                 )
                                 if (!isCurrentMonth) {
                                     Text(
@@ -1100,13 +1119,15 @@ private fun TransactionsTopHeaderCard(
                                             lineHeight = 12.sp
                                         ),
                                         fontWeight = FontWeight.Bold,
-                                        color = MaterialTheme.colorScheme.primary
+                                        color = MaterialTheme.colorScheme.primary,
+                                        maxLines = 1,
+                                        softWrap = false
                                     )
                                 }
                             }
                             Box(
                                 modifier = Modifier
-                                    .size(28.dp)
+                                    .size(24.dp)
                                     .clip(CircleShape)
                                     .clickable(onClick = onNextMonth),
                                 contentAlignment = Alignment.Center
@@ -1115,7 +1136,7 @@ private fun TransactionsTopHeaderCard(
                                     imageVector = Icons.AutoMirrored.Rounded.KeyboardArrowRight,
                                     contentDescription = "下个月",
                                     tint = titleColor,
-                                    modifier = Modifier.size(18.dp)
+                                    modifier = Modifier.size(17.dp)
                                 )
                             }
                         }
@@ -1245,7 +1266,7 @@ private fun HeaderCompactIconButton(
 ) {
     Box(
         modifier = Modifier
-            .size(34.dp)
+            .size(32.dp)
             .clip(CircleShape)
             .then(if (active) Modifier.background(pillBgColor) else Modifier)
             .clickable(onClick = onClick),
@@ -1255,7 +1276,7 @@ private fun HeaderCompactIconButton(
             imageVector = icon,
             contentDescription = contentDescription,
             tint = tint,
-            modifier = Modifier.size(18.5.dp)
+            modifier = Modifier.size(18.dp)
         )
     }
 }
@@ -1585,11 +1606,44 @@ private fun AdvancedFilterPanel(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 item(key = "tag_all") {
-                    FilterChip(
-                        selected = selectedTag == null,
-                        onClick = { onSelectTag(null) },
-                        label = { Text("全部") }
-                    )
+                    val allSelected = selectedTag == null
+                    val primaryColor = MaterialTheme.colorScheme.primary
+                    Surface(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .clickable { onSelectTag(null) },
+                        shape = RoundedCornerShape(6.dp),
+                        color = if (allSelected) {
+                            primaryColor.copy(alpha = 0.16f)
+                        } else {
+                            MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.85f)
+                        },
+                        contentColor = if (allSelected) primaryColor else MaterialTheme.colorScheme.onSurface,
+                        border = if (allSelected) BorderStroke(1.dp, primaryColor.copy(alpha = 0.85f)) else null
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.5.dp)
+                        ) {
+                            Text(
+                                text = "全部",
+                                style = MaterialTheme.typography.labelMedium.copy(fontSize = 11.sp, lineHeight = 14.sp),
+                                color = if (allSelected) primaryColor else MaterialTheme.colorScheme.onSurface,
+                                fontWeight = if (allSelected) FontWeight.Bold else FontWeight.Medium,
+                                maxLines = 1,
+                                softWrap = false
+                            )
+                            if (allSelected) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Check,
+                                    contentDescription = null,
+                                    tint = primaryColor,
+                                    modifier = Modifier.size(12.dp)
+                                )
+                            }
+                        }
+                    }
                 }
                 items(tagFilterEntries, key = { it.first }) { (tagName, colorHex, iconKey) ->
                     TagBadgeChip(
@@ -1710,7 +1764,9 @@ private fun PendingInboxBanner(
                         text = "待确认 $pendingCount 笔",
                         style = MaterialTheme.typography.titleSmall.tabular(),
                         fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onSurface
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1721,7 +1777,7 @@ private fun PendingInboxBanner(
                     ) {
                         Icon(Icons.Rounded.DoneAll, null, modifier = Modifier.size(15.dp))
                         Spacer(modifier = Modifier.width(3.dp))
-                        Text("全部确认", style = MaterialTheme.typography.labelMedium)
+                        Text("全部确认", style = MaterialTheme.typography.labelMedium, maxLines = 1, softWrap = false)
                     }
                     IconButton(
                         onClick = onToggleExpand,
@@ -1765,9 +1821,12 @@ private fun PendingInboxBanner(
                                         Text(
                                             text = "${acc?.name ?: "未匹配"} · ${KairoFormats.formatDateTime(tx.timestamp)}",
                                             style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
                                         )
                                     }
+                                    Spacer(modifier = Modifier.width(8.dp))
                                     Column(horizontalAlignment = Alignment.End) {
                                         val signedMicros = if (tx.type == TransactionType.EXPENSE) -tx.origAmountMicros else tx.origAmountMicros
                                         Text(
@@ -1782,7 +1841,9 @@ private fun PendingInboxBanner(
                                             ),
                                             style = MaterialTheme.typography.titleMedium.tabular(),
                                             color = transactionAmountColor(tx.type),
-                                            fontWeight = FontWeight.Bold
+                                            fontWeight = FontWeight.Bold,
+                                            maxLines = 1,
+                                            softWrap = false
                                         )
                                         if (!tx.origCurrency.equals(baseCurrency, true)) {
                                             val baseAmt = baseAmountByTxId[tx.id]
@@ -1790,43 +1851,51 @@ private fun PendingInboxBanner(
                                             Text(
                                                 text = formatPrivacyAmount(privacyMasked, "≈ ${MoneyAmount.format(baseAmt, baseCurrency)}"),
                                                 style = MaterialTheme.typography.labelSmall.tabular(),
-                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                maxLines = 1,
+                                                softWrap = false
                                             )
                                         }
                                     }
                                 }
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    if (tx.sourceType.isNotBlank() &&
-                                        tx.sourceType != CaptureChannel.MANUAL &&
-                                        tx.sourceType != CaptureChannel.IMPORT
+                                    Box(
+                                        modifier = Modifier.weight(1f),
+                                        contentAlignment = Alignment.CenterStart
                                     ) {
-                                        ChannelChip(channel = tx.sourceType)
-                                    } else {
-                                        Spacer(modifier = Modifier.width(1.dp))
+                                        if (tx.sourceType.isNotBlank() &&
+                                            tx.sourceType != CaptureChannel.MANUAL &&
+                                            tx.sourceType != CaptureChannel.IMPORT
+                                        ) {
+                                            ChannelChip(channel = tx.sourceType)
+                                        }
                                     }
-                                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    Row(
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
                                         TextButton(
                                             onClick = { onDeleteOne(tx) },
                                             colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
                                             contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
                                         ) {
-                                            Text("删除")
+                                            Text("删除", maxLines = 1, softWrap = false)
                                         }
                                         OutlinedButton(
                                             onClick = { onEditOne(tx) },
                                             contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp)
                                         ) {
-                                            Text("编辑")
+                                            Text("编辑", maxLines = 1, softWrap = false)
                                         }
                                         Button(
                                             onClick = { onConfirmOne(tx) },
-                                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 2.dp)
+                                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp)
                                         ) {
-                                            Text("确认")
+                                            Text("确认", maxLines = 1, softWrap = false)
                                         }
                                     }
                                 }
@@ -2372,10 +2441,12 @@ private fun TransactionDetailSheet(
         shape = YubraeSheetShape,
         containerColor = yubraeSheetContainerColor()
     ) {
+        val isPendingStatus = transaction.status == TransactionStatus.PENDING
         Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .verticalScroll(rememberScrollState())
+                .navigationBarsPadding()
                 .padding(horizontal = 20.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
@@ -2386,9 +2457,30 @@ private fun TransactionDetailSheet(
             ) {
                 Text(
                     text = "流水详情",
-                    style = MaterialTheme.typography.titleLarge
+                    style = MaterialTheme.typography.titleLarge,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false)
                 )
-                ChannelChip(channel = transaction.sourceType)
+                Spacer(modifier = Modifier.width(8.dp))
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    ChannelChip(channel = transaction.sourceType)
+                    if (isPendingStatus) {
+                        TextButton(
+                            onClick = onDelete,
+                            colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                            modifier = Modifier.height(30.dp)
+                        ) {
+                            Icon(Icons.Rounded.Delete, null, modifier = Modifier.size(15.dp))
+                            Spacer(modifier = Modifier.width(3.dp))
+                            Text("删除", style = MaterialTheme.typography.labelMedium, maxLines = 1, softWrap = false)
+                        }
+                    }
+                }
             }
 
             Surface(
@@ -2508,7 +2600,9 @@ private fun TransactionDetailSheet(
                     Text(
                         text = "标签",
                         style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        softWrap = false
                     )
                     Spacer(modifier = Modifier.width(12.dp))
                     FlowRow(
@@ -2650,45 +2744,47 @@ private fun TransactionDetailSheet(
                     .padding(bottom = 16.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                OutlinedButton(
-                    onClick = onDelete,
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
-                    contentPadding = PaddingValues(horizontal = 8.dp),
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Icon(Icons.Rounded.Delete, null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("删除", maxLines = 1)
+                if (!isPendingStatus) {
+                    OutlinedButton(
+                        onClick = onDelete,
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error),
+                        contentPadding = PaddingValues(horizontal = 10.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(Icons.Rounded.Delete, null, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text("删除", maxLines = 1, softWrap = false)
+                    }
                 }
                 if (transaction.type == TransactionType.EXPENSE) {
                     OutlinedButton(
                         onClick = onRefund,
-                        contentPadding = PaddingValues(horizontal = 8.dp),
+                        contentPadding = PaddingValues(horizontal = 10.dp),
                         modifier = Modifier.weight(1f)
                     ) {
                         Icon(Icons.Rounded.Replay, null, modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text("退款", maxLines = 1)
+                        Text("退款", maxLines = 1, softWrap = false)
                     }
                 }
                 OutlinedButton(
                     onClick = onEdit,
-                    contentPadding = PaddingValues(horizontal = 8.dp),
+                    contentPadding = PaddingValues(horizontal = 10.dp),
                     modifier = Modifier.weight(1f)
                 ) {
                     Icon(Icons.Rounded.Edit, null, modifier = Modifier.size(16.dp))
                     Spacer(modifier = Modifier.width(4.dp))
-                    Text("编辑", maxLines = 1)
+                    Text("编辑", maxLines = 1, softWrap = false)
                 }
-                if (transaction.status == TransactionStatus.PENDING) {
+                if (isPendingStatus) {
                     Button(
                         onClick = onConfirm,
-                        contentPadding = PaddingValues(horizontal = 8.dp),
+                        contentPadding = PaddingValues(horizontal = 10.dp),
                         modifier = Modifier.weight(1f)
                     ) {
                         Icon(Icons.Rounded.Check, null, modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(4.dp))
-                        Text("确认", maxLines = 1)
+                        Text("确认", maxLines = 1, softWrap = false)
                     }
                 }
             }
@@ -2859,18 +2955,23 @@ private fun BatchCategoryPickerDialog(
 private fun DetailRow(label: String, value: String) {
     Row(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.Top
     ) {
         Text(
             text = label,
             style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            softWrap = false
         )
         Spacer(modifier = Modifier.width(12.dp))
         Text(
             text = value,
             style = MaterialTheme.typography.bodyMedium,
-            fontWeight = FontWeight.Medium
+            fontWeight = FontWeight.Medium,
+            textAlign = TextAlign.End,
+            modifier = Modifier.weight(1f)
         )
     }
 }

@@ -31,8 +31,6 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -79,6 +77,7 @@ import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -105,8 +104,9 @@ import com.yubrae.app.core.contract.DevicePermissionReport
 import com.yubrae.app.data.prefs.ThemeMode
 import com.yubrae.app.ui.components.CompactHairlineDivider
 import com.yubrae.app.ui.components.CompactSwitchRow
-import com.yubrae.app.ui.components.CurrencyBadge
 import com.yubrae.app.ui.components.CurrencyPickerDialog
+import com.yubrae.app.ui.components.QuickCurrencySelectorRow
+import com.yubrae.app.ui.components.TopStatusBarScrim
 import com.yubrae.app.ui.components.YimuCard
 import com.yubrae.app.ui.components.YubraeBrandMark
 import com.yubrae.app.ui.components.YubraeDialog
@@ -231,198 +231,211 @@ fun MineHubScreen(
         KairoThemePresets.find(settings.themeStyle).nameZh
     }
 
-    LazyColumn(
-        state = listState,
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(
-            bottom = contentPadding.calculateBottomPadding() + 28.dp
-        ),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        // 品牌抬头 + 真实记账统计条
-        item(key = "mine_brand_hero") {
-            MineBrandHeaderCard(
-                privacyMasked = settings.privacyMaskEnabled,
-                autoCaptureEnabled = autoCaptureEnabled,
-                readyCount = readyCount,
-                requiredCount = requiredCount,
-                recordingDays = recordingDays,
-                totalTransactions = totalTransactionCount,
-                ledgerCount = activeLedgerCount,
-                topInsetPadding = contentPadding.calculateTopPadding(),
-                onTogglePrivacy = onTogglePrivacy,
-                onOpenAutoCapture = { onNavigate(SettingsRoutes.AUTO_CAPTURE) }
-            )
+    val showStatusBarScrim by remember(listState) {
+        derivedStateOf {
+            listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > 40
         }
+    }
 
-        // 3 栏快捷工具宫格：账本 · 分类 · 标签
-        item(key = "mine_finance_card") {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 12.dp),
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                QuickToolCard(
-                    icon = Icons.AutoMirrored.Rounded.MenuBook,
-                    label = "账本",
-                    countText = "$activeLedgerCount 个",
-                    accentColor = Color(0xFF2AA876),
-                    onClick = onOpenLedgerManager,
-                    modifier = Modifier.weight(1f)
-                )
-                QuickToolCard(
-                    icon = Icons.Rounded.Category,
-                    label = "分类",
-                    countText = "${categories.size} 项",
-                    accentColor = Color(0xFF0284C7),
-                    onClick = { onNavigate(SettingsRoutes.CATEGORIES) },
-                    modifier = Modifier.weight(1f)
-                )
-                QuickToolCard(
-                    icon = Icons.Rounded.LocalOffer,
-                    label = "标签",
-                    countText = "${tags.size} 个",
-                    accentColor = Color(0xFF0D9488),
-                    onClick = { onNavigate(SettingsRoutes.TAGS) },
-                    modifier = Modifier.weight(1f)
+    Box(modifier = Modifier.fillMaxSize()) {
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(
+                bottom = contentPadding.calculateBottomPadding() + 28.dp
+            ),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            // 品牌抬头 + 真实记账统计条
+            item(key = "mine_brand_hero") {
+                MineBrandHeaderCard(
+                    privacyMasked = settings.privacyMaskEnabled,
+                    autoCaptureEnabled = autoCaptureEnabled,
+                    readyCount = readyCount,
+                    requiredCount = requiredCount,
+                    recordingDays = recordingDays,
+                    totalTransactions = totalTransactionCount,
+                    ledgerCount = activeLedgerCount,
+                    topInsetPadding = contentPadding.calculateTopPadding(),
+                    onTogglePrivacy = onTogglePrivacy,
+                    onOpenAutoCapture = { onNavigate(SettingsRoutes.AUTO_CAPTURE) }
                 )
             }
-        }
 
-        // 第一组（4 项）：自动记账与引擎
-        item(key = "mine_automation_card") {
-            Box(modifier = Modifier.padding(horizontal = 12.dp)) {
-                YimuCard(containerColor = MaterialTheme.colorScheme.surfaceContainerLowest) {
-                    Column(modifier = Modifier.padding(vertical = 6.dp)) {
-                        Text(
-                            text = "自动记账与引擎",
-                            style = MaterialTheme.typography.labelMedium,
-                            fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(start = 14.dp, end = 14.dp, top = 8.dp, bottom = 4.dp)
-                        )
-                        HubNavRow(
-                            icon = Icons.Rounded.Security,
-                            title = "自动记账与权限",
-                            subtitle = "通知监听、无障碍、短信、悬浮窗与外部协议",
-                            statusText = when {
-                                !autoCaptureEnabled -> "已关闭"
-                                readyCount != null && requiredCount > 0 -> "$readyCount/$requiredCount"
-                                else -> null
-                            },
-                            onClick = { onNavigate(SettingsRoutes.AUTO_CAPTURE) }
-                        )
-                        CompactHairlineDivider(startIndent = 58.dp)
-                        HubNavRow(
-                            icon = Icons.AutoMirrored.Rounded.ReceiptLong,
-                            title = "捕获日志",
-                            subtitle = "自动捕获报文回溯与指纹沉淀",
-                            statusText = "${logs.size} 条",
-                            onClick = { onNavigate(SettingsRoutes.LOGS) }
-                        )
-                        CompactHairlineDivider(startIndent = 58.dp)
-                        val enabledRuleTotal = remember(
-                            rules,
-                            settings.jsRulesEnabled,
-                            cloudRuleStatus.totalCount
-                        ) {
-                            rules.count { it.enabled } +
-                                if (settings.jsRulesEnabled) cloudRuleStatus.totalCount else 0
+            // 3 栏快捷工具宫格：账本 · 分类 · 标签
+            item(key = "mine_finance_card") {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    QuickToolCard(
+                        icon = Icons.AutoMirrored.Rounded.MenuBook,
+                        label = "账本",
+                        countText = "$activeLedgerCount 个",
+                        accentColor = Color(0xFF2AA876),
+                        onClick = onOpenLedgerManager,
+                        modifier = Modifier.weight(1f)
+                    )
+                    QuickToolCard(
+                        icon = Icons.Rounded.Category,
+                        label = "分类",
+                        countText = "${categories.size} 项",
+                        accentColor = Color(0xFF0284C7),
+                        onClick = { onNavigate(SettingsRoutes.CATEGORIES) },
+                        modifier = Modifier.weight(1f)
+                    )
+                    QuickToolCard(
+                        icon = Icons.Rounded.LocalOffer,
+                        label = "标签",
+                        countText = "${tags.size} 个",
+                        accentColor = Color(0xFF0D9488),
+                        onClick = { onNavigate(SettingsRoutes.TAGS) },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            }
+
+            // 第一组（4 项）：自动记账与引擎
+            item(key = "mine_automation_card") {
+                Box(modifier = Modifier.padding(horizontal = 12.dp)) {
+                    YimuCard(containerColor = MaterialTheme.colorScheme.surfaceContainerLowest) {
+                        Column(modifier = Modifier.padding(vertical = 6.dp)) {
+                            Text(
+                                text = "自动记账与引擎",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(start = 14.dp, end = 14.dp, top = 8.dp, bottom = 4.dp)
+                            )
+                            HubNavRow(
+                                icon = Icons.Rounded.Security,
+                                title = "自动记账与权限",
+                                subtitle = "通知监听、无障碍、短信、悬浮窗与外部协议",
+                                statusText = when {
+                                    !autoCaptureEnabled -> "已关闭"
+                                    readyCount != null && requiredCount > 0 -> "$readyCount/$requiredCount"
+                                    else -> null
+                                },
+                                onClick = { onNavigate(SettingsRoutes.AUTO_CAPTURE) }
+                            )
+                            CompactHairlineDivider(startIndent = 58.dp)
+                            HubNavRow(
+                                icon = Icons.AutoMirrored.Rounded.ReceiptLong,
+                                title = "捕获日志",
+                                subtitle = "自动捕获报文回溯与指纹沉淀",
+                                statusText = "${logs.size} 条",
+                                onClick = { onNavigate(SettingsRoutes.LOGS) }
+                            )
+                            CompactHairlineDivider(startIndent = 58.dp)
+                            val enabledRuleTotal = remember(
+                                rules,
+                                settings.jsRulesEnabled,
+                                cloudRuleStatus.totalCount
+                            ) {
+                                rules.count { it.enabled } +
+                                    if (settings.jsRulesEnabled) cloudRuleStatus.totalCount else 0
+                            }
+                            HubNavRow(
+                                icon = Icons.AutoMirrored.Rounded.Rule,
+                                title = "指纹与规则",
+                                subtitle = "云端规则库、文本沙盒、账户指纹与正则",
+                                statusText = "$enabledRuleTotal 条",
+                                onClick = { onNavigate(SettingsRoutes.RULES) }
+                            )
+                            CompactHairlineDivider(startIndent = 58.dp)
+                            HubNavRow(
+                                icon = Icons.Rounded.SmartToy,
+                                title = "AI 大模型",
+                                subtitle = "智能兜底解析与小票图像识别",
+                                statusText = if (settings.llmEnabled) settings.llmModel.ifBlank { "已启用" } else "未启用",
+                                onClick = { onNavigate(SettingsRoutes.LLM) }
+                            )
                         }
-                        HubNavRow(
-                            icon = Icons.AutoMirrored.Rounded.Rule,
-                            title = "指纹与规则",
-                            subtitle = "云端规则库、文本沙盒、账户指纹与正则",
-                            statusText = "$enabledRuleTotal 条",
-                            onClick = { onNavigate(SettingsRoutes.RULES) }
-                        )
-                        CompactHairlineDivider(startIndent = 58.dp)
-                        HubNavRow(
-                            icon = Icons.Rounded.SmartToy,
-                            title = "AI 大模型",
-                            subtitle = "智能兜底解析与小票图像识别",
-                            statusText = if (settings.llmEnabled) settings.llmModel.ifBlank { "已启用" } else "未启用",
-                            onClick = { onNavigate(SettingsRoutes.LLM) }
-                        )
+                    }
+                }
+            }
+
+            // 第二组（4 项）：数据与偏好
+            item(key = "mine_preferences_card") {
+                Box(modifier = Modifier.padding(horizontal = 12.dp)) {
+                    YimuCard(containerColor = MaterialTheme.colorScheme.surfaceContainerLowest) {
+                        Column(modifier = Modifier.padding(vertical = 6.dp)) {
+                            Text(
+                                text = "数据与偏好",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(start = 14.dp, end = 14.dp, top = 8.dp, bottom = 4.dp)
+                            )
+                            HubNavRow(
+                                icon = Icons.Rounded.EventRepeat,
+                                title = "周期账单",
+                                subtitle = "定期自动入账与订阅扣费管理",
+                                statusText = "${recurringRules.count { it.enabled }} 条",
+                                onClick = { onNavigate(SettingsRoutes.RECURRING) }
+                            )
+                            CompactHairlineDivider(startIndent = 58.dp)
+                            HubNavRow(
+                                icon = Icons.Rounded.CurrencyExchange,
+                                title = "汇率中心",
+                                subtitle = "实时多币种换算与参考汇率",
+                                statusText = settings.baseCurrency,
+                                onClick = { onNavigate(SettingsRoutes.RATES) }
+                            )
+                            CompactHairlineDivider(startIndent = 58.dp)
+                            HubNavRow(
+                                icon = Icons.Rounded.Backup,
+                                title = "导入与备份",
+                                subtitle = "多格式账单导入、WebDAV 云同步与本地 .klbk",
+                                statusText = if (settings.autoBackupEnabled) "自动备份" else "本地/云端",
+                                onClick = { onNavigate(SettingsRoutes.IMPORT_BACKUP) }
+                            )
+                            CompactHairlineDivider(startIndent = 58.dp)
+                            HubNavRow(
+                                icon = Icons.Rounded.Palette,
+                                title = "外观与隐私",
+                                subtitle = "主题配色、隐私隐藏、生物锁与应用信息",
+                                statusText = styleLabel,
+                                onClick = { onNavigate(SettingsRoutes.APPEARANCE) }
+                            )
+                            CompactHairlineDivider(startIndent = 58.dp)
+                            val updateStatusBadge = when {
+                                hasAvailableUpdate -> {
+                                    val ver = when (val st = updateState) {
+                                        is UpdateUiState.Available -> "v${st.info.versionName}"
+                                        is UpdateUiState.ReadyToInstall -> "待安装"
+                                        else -> "有新版"
+                                    }
+                                    "发现新版 $ver"
+                                }
+                                else -> "v${BuildConfig.VERSION_NAME}"
+                            }
+                            HubNavRow(
+                                icon = Icons.Rounded.SystemUpdateAlt,
+                                title = "检查版本更新",
+                                subtitle = "从 GitHub Releases 检查并下载安装新版本",
+                                statusText = updateStatusBadge,
+                                highlightStatus = hasAvailableUpdate,
+                                onClick = {
+                                    if (hasAvailableUpdate) {
+                                        viewModel.openUpdateDialog(triggerCheckIfIdle = false)
+                                    } else {
+                                        viewModel.checkForUpdates(manual = true)
+                                    }
+                                }
+                            )
+                        }
                     }
                 }
             }
         }
 
-        // 第二组（4 项）：数据与偏好
-        item(key = "mine_preferences_card") {
-            Box(modifier = Modifier.padding(horizontal = 12.dp)) {
-                YimuCard(containerColor = MaterialTheme.colorScheme.surfaceContainerLowest) {
-                    Column(modifier = Modifier.padding(vertical = 6.dp)) {
-                        Text(
-                            text = "数据与偏好",
-                            style = MaterialTheme.typography.labelMedium,
-                            fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(start = 14.dp, end = 14.dp, top = 8.dp, bottom = 4.dp)
-                        )
-                        HubNavRow(
-                            icon = Icons.Rounded.EventRepeat,
-                            title = "周期账单",
-                            subtitle = "定期自动入账与订阅扣费管理",
-                            statusText = "${recurringRules.count { it.enabled }} 条",
-                            onClick = { onNavigate(SettingsRoutes.RECURRING) }
-                        )
-                        CompactHairlineDivider(startIndent = 58.dp)
-                        HubNavRow(
-                            icon = Icons.Rounded.CurrencyExchange,
-                            title = "汇率中心",
-                            subtitle = "实时多币种换算与参考汇率",
-                            statusText = settings.baseCurrency,
-                            onClick = { onNavigate(SettingsRoutes.RATES) }
-                        )
-                        CompactHairlineDivider(startIndent = 58.dp)
-                        HubNavRow(
-                            icon = Icons.Rounded.Backup,
-                            title = "导入与备份",
-                            subtitle = "多格式账单导入、WebDAV 云同步与本地 .klbk",
-                            statusText = if (settings.autoBackupEnabled) "自动备份" else "本地/云端",
-                            onClick = { onNavigate(SettingsRoutes.IMPORT_BACKUP) }
-                        )
-                        CompactHairlineDivider(startIndent = 58.dp)
-                        HubNavRow(
-                            icon = Icons.Rounded.Palette,
-                            title = "外观与隐私",
-                            subtitle = "主题配色、隐私隐藏、生物锁与应用信息",
-                            statusText = styleLabel,
-                            onClick = { onNavigate(SettingsRoutes.APPEARANCE) }
-                        )
-                        CompactHairlineDivider(startIndent = 58.dp)
-                        val updateStatusBadge = when {
-                            hasAvailableUpdate -> {
-                                val ver = when (val st = updateState) {
-                                    is UpdateUiState.Available -> "v${st.info.versionName}"
-                                    is UpdateUiState.ReadyToInstall -> "待安装"
-                                    else -> "有新版"
-                                }
-                                "发现新版 $ver"
-                            }
-                            else -> "v${BuildConfig.VERSION_NAME}"
-                        }
-                        HubNavRow(
-                            icon = Icons.Rounded.SystemUpdateAlt,
-                            title = "检查版本更新",
-                            subtitle = "从 GitHub Releases 检查并下载安装新版本",
-                            statusText = updateStatusBadge,
-                            highlightStatus = hasAvailableUpdate,
-                            onClick = {
-                                if (hasAvailableUpdate) {
-                                    viewModel.openUpdateDialog(triggerCheckIfIdle = false)
-                                } else {
-                                    viewModel.checkForUpdates(manual = true)
-                                }
-                            }
-                        )
-                    }
-                }
-            }
-        }
+        TopStatusBarScrim(
+            visible = showStatusBarScrim,
+            modifier = Modifier.align(Alignment.TopCenter)
+        )
     }
 }
 
@@ -1204,29 +1217,14 @@ fun AppearanceSecurityScreen(
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
-                        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            val quick = if (settings.pinnedCurrencies.contains(settings.baseCurrency)) {
-                                settings.pinnedCurrencies
-                            } else {
-                                settings.pinnedCurrencies + settings.baseCurrency
-                            }
-                            items(quick, key = { it }) { code ->
-                                CurrencyBadge(
-                                    currencyCode = code,
-                                    selected = code.equals(settings.baseCurrency, true),
-                                    onClick = {
-                                        viewModel.updateSettings { it.copy(baseCurrency = code) }
-                                    }
-                                )
-                            }
-                            item(key = "more_base_currency") {
-                                FilterChip(
-                                    selected = false,
-                                    onClick = { showBaseCurrencyPicker = true },
-                                    label = { Text("更多") }
-                                )
-                            }
-                        }
+                        QuickCurrencySelectorRow(
+                            selectedCurrency = settings.baseCurrency,
+                            pinnedCurrencies = settings.pinnedCurrencies,
+                            onSelectCurrency = { code ->
+                                viewModel.updateSettings { it.copy(baseCurrency = code) }
+                            },
+                            onOpenMore = { showBaseCurrencyPicker = true }
+                        )
                     }
                 }
             }
@@ -1533,15 +1531,19 @@ private fun PermissionHealthCard(
                         contentDescription = null,
                         tint = MaterialTheme.colorScheme.primary
                     )
-                    Column {
+                    Column(modifier = Modifier.weight(1f)) {
                         Text(
                             text = "设备与权限体检",
-                            style = MaterialTheme.typography.titleMedium
+                            style = MaterialTheme.typography.titleMedium,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
                         )
                         Text(
                             text = if (report != null) "${report.manufacturer} · ${report.osDisplay}" else "检测中...",
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
                 }
@@ -1651,11 +1653,13 @@ private fun PermissionHealthCard(
                                 Spacer(modifier = Modifier.width(6.dp))
                             }
                             Text(
-                                if (report.isXiaomiRom) {
+                                text = if (report.isXiaomiRom) {
                                     "Root 一键授权与 ${romFamily.displayName} 防冻结"
                                 } else {
                                     "Root 一键授予权限（通用 Android）"
-                                }
+                                },
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                         }
 
@@ -1666,7 +1670,11 @@ private fun PermissionHealthCard(
                         ) {
                             Icon(Icons.Rounded.Info, null, modifier = Modifier.size(16.dp))
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text(guideTitle)
+                            Text(
+                                text = guideTitle,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
                         }
                     } else {
                         Button(
@@ -1676,7 +1684,11 @@ private fun PermissionHealthCard(
                         ) {
                             Icon(Icons.Rounded.Security, null, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text("前往 ${romFamily.displayName} 后台保活设置")
+                            Text(
+                                text = "前往 ${romFamily.displayName} 后台保活设置",
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
                         }
 
                         OutlinedButton(
@@ -1686,7 +1698,11 @@ private fun PermissionHealthCard(
                         ) {
                             Icon(Icons.Rounded.Info, null, modifier = Modifier.size(16.dp))
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text(guideTitle)
+                            Text(
+                                text = guideTitle,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
                         }
 
                         TextButton(
@@ -1696,7 +1712,9 @@ private fun PermissionHealthCard(
                         ) {
                             Text(
                                 text = if (isBusy) "正在请求 Root 授权..." else "已 Root（含隐藏环境）？尝试 Root 一键授权",
-                                style = MaterialTheme.typography.labelMedium
+                                style = MaterialTheme.typography.labelMedium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                         }
                     }

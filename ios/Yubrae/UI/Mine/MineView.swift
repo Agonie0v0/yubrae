@@ -1,4 +1,3 @@
-import AppIntents
 import SwiftUI
 
 public struct MineView: View {
@@ -39,7 +38,7 @@ public struct MineView: View {
                 // 品牌头卡
                 Section {
                     brandHeaderCard
-                        .listRowInsets(EdgeInsets(top: 12, leading: 14, bottom: 12, trailing: 14))
+                        .listRowInsets(EdgeInsets(top: 6, leading: 0, bottom: 6, trailing: 0))
                         .listRowBackground(Color.clear)
                 }
 
@@ -57,11 +56,13 @@ public struct MineView: View {
                                     Text("发现新版本 \(update.tagName)")
                                         .font(.subheadline.weight(.bold))
                                         .foregroundColor(palette.textPrimary)
+                                        .lineLimit(1)
                                     Text("点击查看更新日志与 .ipa 下载安装方式")
                                         .font(.caption)
                                         .foregroundColor(palette.textSecondary)
+                                        .lineLimit(1)
                                 }
-                                Spacer()
+                                Spacer(minLength: 8)
                                 Circle()
                                     .fill(Color.red)
                                     .frame(width: 8, height: 8)
@@ -104,9 +105,6 @@ public struct MineView: View {
                         }
                     } label: {
                         settingRow(icon: "arrow.up.forward.app.fill", color: 0xFF2563EB, title: "直达「快捷指令」添加动作", subtitle: "直接打开 Apple 快捷指令创建或关联余白记账")
-                    }
-                    if #available(iOS 17.0, *) {
-                        ShortcutsLink()
                     }
                     NavigationLink {
                         ShortcutsAutomationGuideView(store: store)
@@ -163,6 +161,7 @@ public struct MineView: View {
                                 title: "检查版本更新",
                                 subtitle: "当前版本 v\(AppUpdateChecker.currentAppVersion)"
                             )
+                            Spacer(minLength: 8)
                             if hasUpdateDot {
                                 Circle()
                                     .fill(Color.red)
@@ -173,6 +172,8 @@ public struct MineView: View {
                 }
             }
             .listStyle(.insetGrouped)
+            .scrollContentBackground(.hidden)
+            .background(palette.background.ignoresSafeArea())
             .navigationTitle("我的")
             .navigationBarTitleDisplayMode(.inline)
         }
@@ -187,9 +188,12 @@ public struct MineView: View {
                         Text("余白")
                             .font(.title2.weight(.bold))
                             .foregroundColor(palette.textPrimary)
+                            .lineLimit(1)
                         Text("YUBRAE")
                             .font(.caption.weight(.semibold))
                             .foregroundColor(palette.primary)
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
                             .padding(.horizontal, 7)
                             .padding(.vertical, 2)
                             .background(Capsule().fill(palette.accentSoftFill))
@@ -198,7 +202,7 @@ public struct MineView: View {
                         .font(.caption)
                         .foregroundColor(palette.textSecondary)
                 }
-                Spacer()
+                Spacer(minLength: 0)
             }
 
             HStack(spacing: 0) {
@@ -227,9 +231,11 @@ public struct MineView: View {
             Text(value)
                 .font(.headline.monospacedDigit())
                 .foregroundColor(palette.textPrimary)
+                .lineLimit(1)
             Text(label)
                 .font(.caption2)
                 .foregroundColor(palette.textSecondary)
+                .lineLimit(1)
         }
         .frame(maxWidth: .infinity)
     }

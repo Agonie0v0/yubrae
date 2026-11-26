@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -654,7 +655,7 @@ private fun AccountDetailHeroCard(
 
                 Row(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
                     Button(
                         onClick = onQuickRecord,
@@ -663,34 +664,46 @@ private fun AccountDetailHeroCard(
                             containerColor = accentColor,
                             contentColor = Color.White
                         ),
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
                         modifier = Modifier.weight(1f)
                     ) {
-                        Icon(Icons.Rounded.Add, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("记一笔", maxLines = 1)
+                        Icon(Icons.Rounded.Add, contentDescription = null, modifier = Modifier.size(15.dp))
+                        Spacer(modifier = Modifier.width(3.dp))
+                        Text(
+                            text = "记一笔",
+                            maxLines = 1,
+                            softWrap = false,
+                            overflow = TextOverflow.Ellipsis
+                        )
                     }
                     FilledTonalButton(
                         onClick = onQuickTransfer,
                         shape = CircleShape,
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
-                        modifier = Modifier.weight(1f)
+                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
+                        modifier = Modifier.weight(if (account.groupType == AccountGroup.CREDIT) 1.18f else 1f)
                     ) {
-                        Icon(Icons.Rounded.SwapHoriz, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
+                        Icon(Icons.Rounded.SwapHoriz, contentDescription = null, modifier = Modifier.size(15.dp))
+                        Spacer(modifier = Modifier.width(3.dp))
                         Text(
                             text = if (account.groupType == AccountGroup.CREDIT) "还信用卡" else "转账",
-                            maxLines = 1
+                            maxLines = 1,
+                            softWrap = false,
+                            overflow = TextOverflow.Ellipsis
                         )
                     }
                     OutlinedButton(
                         onClick = onCalibrate,
                         shape = CircleShape,
-                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp)
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 8.dp)
                     ) {
-                        Icon(Icons.Rounded.Tune, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text("校准", maxLines = 1)
+                        Icon(Icons.Rounded.Tune, contentDescription = null, modifier = Modifier.size(15.dp))
+                        Spacer(modifier = Modifier.width(3.dp))
+                        Text(
+                            text = "校准",
+                            maxLines = 1,
+                            softWrap = false,
+                            overflow = TextOverflow.Ellipsis
+                        )
                     }
                 }
             }
@@ -1213,18 +1226,24 @@ private fun InstallmentsManagementCard(
                                                 text = if (isCompleted) "已还清" else "剩余 ${totalPeriods - plan.completedPeriods} 期",
                                                 style = MaterialTheme.typography.labelSmall,
                                                 color = if (isCompleted) semantic.income else MaterialTheme.colorScheme.onPrimaryContainer,
+                                                maxLines = 1,
+                                                softWrap = false,
                                                 modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                                             )
                                         }
                                         if (category != null) {
                                             Surface(
                                                 shape = RoundedCornerShape(6.dp),
-                                                color = MaterialTheme.colorScheme.surfaceContainerHigh
+                                                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                                                modifier = Modifier.widthIn(max = 96.dp)
                                             ) {
                                                 Text(
                                                     text = category.name,
                                                     style = MaterialTheme.typography.labelSmall,
                                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    maxLines = 1,
+                                                    softWrap = false,
+                                                    overflow = TextOverflow.Ellipsis,
                                                     modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                                                 )
                                             }
@@ -1588,30 +1607,37 @@ private fun AccountDayTransactionGroupCard(
                                         text = "待确认",
                                         style = MaterialTheme.typography.labelSmall,
                                         color = semantic.warning,
+                                        maxLines = 1,
+                                        softWrap = false,
                                         modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
                                     )
                                 }
                             }
                         }
+                        val cleanedNote = remember(tx.note) { KairoFormats.cleanListRowNote(tx.note) }
                         Row(
+                            modifier = Modifier.fillMaxWidth(),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
                             Text(
                                 text = KairoFormats.formatTime(tx.timestamp),
                                 style = MaterialTheme.typography.labelSmall.tabular(),
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                softWrap = false
                             )
                             if (tx.sourceType.isNotBlank() && tx.sourceType != CaptureChannel.MANUAL) {
                                 ChannelChip(channel = tx.sourceType)
                             }
-                            if (tx.note.isNotBlank()) {
+                            if (cleanedNote.isNotBlank()) {
                                 Text(
-                                    text = tx.note,
+                                    text = cleanedNote,
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f, fill = false)
                                 )
                             }
                         }
@@ -1632,7 +1658,9 @@ private fun AccountDayTransactionGroupCard(
                             ),
                             style = MaterialTheme.typography.titleSmall.tabular(),
                             color = amountColor,
-                            fontWeight = FontWeight.Bold
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            softWrap = false
                         )
                         if (!tx.origCurrency.equals(account.currencyCode, ignoreCase = true)) {
                             Text(
@@ -1641,7 +1669,9 @@ private fun AccountDayTransactionGroupCard(
                                     "原币 ${MoneyAmount.format(tx.origAmountMicros, tx.origCurrency, showCurrencyCode = true)}"
                                 ),
                                 style = MaterialTheme.typography.labelSmall.tabular(),
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                softWrap = false
                             )
                         }
                     }

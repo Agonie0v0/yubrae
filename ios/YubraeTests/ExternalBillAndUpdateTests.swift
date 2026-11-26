@@ -401,4 +401,69 @@ final class ExternalBillAndUpdateTests: XCTestCase {
         )
         XCTAssertTrue(nonMoney.isEmpty)
     }
+
+    // MARK: - Release Notes Markdown Formatter Tests
+
+    func testReleaseNotesFormatterCleansMarkdownAndParsesAttributedLines() {
+        let raw = """
+        ## What's Changed\r
+        ### **核心体验优化**\r
+        - **双端互通**：支持 `.klbk` 加密备份与 [WebDAV 指南](https://example.com/webdav)\r
+          * 嵌套要点说明\r
+        * 修复残留 **未闭合加粗\r
+        - 说明 ** 孤立星号\r
+        ---\r
+        ****\r
+        **Full Changelog**: https://github.com/Agonie0v0/yubrae/compare/v1.2.1...v1.2.2
+        """
+
+        let lines = YubraeReleaseNotesFormatter.attributedLines(raw)
+        let plain = YubraeReleaseNotesFormatter.cleanedPlainText(raw)
+
+        XCTAssertEqual(lines.count, 7)
+        XCTAssertFalse(plain.contains("**"))
+        XCTAssertFalse(plain.contains("##"))
+        XCTAssertEqual(plain, lines.map { String($0.characters) }.joined(separator: "\n"))
+
+        // 1. 标题行解析为加粗且剥离 ## / ###
+        XCTAssertEqual(String(lines[0].characters), "What's Changed")
+        XCTAssertTrue(lines[0].runs.contains { $0.inlinePresentationIntent?.contains(.stronglyEmphasized) == true })
+
+        XCTAssertEqual(String(lines[1].characters), "核心体验优化")
+        XCTAssertTrue(lines[1].runs.contains { $0.inlinePresentationIntent?.contains(.stronglyEmphasized) == true })
+
+        // 2. 列表行转换圆点、加粗、行内代码与链接文本
+        XCTAssertEqual(String(lines[2].characters), "• 双端互通：支持 .klbk 加密备份与 WebDAV 指南")
+        XCTAssertTrue(lines[2].runs.contains {
+            String(lines[2][$0.range].characters) == "双端互通"
+                && $0.inlinePresentationIntent?.contains(.stronglyEmphasized) == true
+        })
+        XCTAssertTrue(lines[2].runs.contains {
+            String(lines[2][$0.range].characters) == ".klbk"
+                && $0.inlinePresentationIntent?.contains(.code) == true
+        })
+
+        // 3. 缩进子列表保留两格缩进
+        XCTAssertEqual(String(lines[3].characters), "  • 嵌套要点说明")
+
+        // 4. 残留未闭合 ** 与孤立 ** 均被剥离且折叠多余空格
+        XCTAssertEqual(String(lines[4].characters), "• 修复残留 未闭合加粗")
+        XCTAssertFalse(String(lines[4].characters).contains("**"))
+        XCTAssertEqual(String(lines[5].characters), "• 说明 孤立星号")
+        XCTAssertFalse(String(lines[5].characters).contains("**"))
+
+        // 5. GitHub 自动生成的 Full Changelog 行无裸露 ** 且保留完整链接
+        XCTAssertEqual(
+            String(lines[6].characters),
+            "Full Changelog: https://github.com/Agonie0v0/yubrae/compare/v1.2.1...v1.2.2"
+        )
+        XCTAssertTrue(lines[6].runs.contains {
+            String(lines[6][$0.range].characters) == "Full Changelog"
+                && $0.inlinePresentationIntent?.contains(.stronglyEmphasized) == true
+        })
+
+        // 空输入与纯空白返回空
+        XCTAssertEqual(YubraeReleaseNotesFormatter.cleanedPlainText("  \n\r\n  "), "")
+        XCTAssertTrue(YubraeReleaseNotesFormatter.attributedLines("   \n  ").isEmpty)
+    }
 }

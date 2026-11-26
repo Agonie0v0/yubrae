@@ -26,8 +26,6 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -66,6 +64,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
@@ -77,7 +76,9 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
@@ -93,6 +94,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
@@ -106,12 +108,13 @@ import com.yubrae.app.data.prefs.AssetHiddenModule
 import com.yubrae.app.ui.components.CartoonAccountIcon
 import com.yubrae.app.ui.components.CategoryIconBadge
 import com.yubrae.app.ui.components.CompactHairlineDivider
-import com.yubrae.app.ui.components.CurrencyBadge
 import com.yubrae.app.ui.components.CurrencyPickerDialog
 import com.yubrae.app.ui.components.EmptyStateCard
 import com.yubrae.app.ui.components.GroupedIconPicker
 import com.yubrae.app.ui.components.KairoIcons
 import com.yubrae.app.ui.components.LocalPrivacyMasked
+import com.yubrae.app.ui.components.QuickCurrencySelectorRow
+import com.yubrae.app.ui.components.TopStatusBarScrim
 import com.yubrae.app.ui.components.YimuCard
 import com.yubrae.app.ui.components.YubraeDialog
 import com.yubrae.app.ui.components.formatPrivacyAmount
@@ -247,6 +250,11 @@ fun AssetsScreen(
     val showDebtCard = AssetHiddenModule.DEBT !in uiState.hiddenModules
     val showInvestCard = AssetHiddenModule.INVEST !in uiState.hiddenModules
     val hasAnySummaryCard = showReimburseCard || showDebtCard || showInvestCard
+    val showStatusBarScrim by remember(listState) {
+        derivedStateOf {
+            listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > 40
+        }
+    }
 
     Box(
         modifier = Modifier
@@ -271,57 +279,64 @@ fun AssetsScreen(
             ),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            if (pullOffsetPx > 4f) {
-                item(key = "pull_hidden_indicator") {
-                    val ready = pullOffsetPx >= triggerThresholdPx
-                    val bannerHeightDp = with(density) { pullOffsetPx.toDp() }.coerceAtLeast(24.dp)
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .statusBarsPadding()
-                            .height(bannerHeightDp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Surface(
-                            shape = CircleShape,
-                            color = if (ready) {
-                                MaterialTheme.colorScheme.primaryContainer
-                            } else {
-                                MaterialTheme.colorScheme.surfaceContainerHigh
-                            }
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(5.dp)
-                            ) {
-                                Icon(
-                                    imageVector = if (ready) Icons.Rounded.VisibilityOff else Icons.Rounded.ArrowDownward,
-                                    contentDescription = null,
-                                    tint = if (ready) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.size(14.dp)
-                                )
-                                Text(
-                                    text = if (ready) "松手进入资产隐藏" else "下拉进入资产隐藏",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    fontWeight = FontWeight.Medium,
-                                    color = if (ready) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-
             // 1. 顶部一木风净资产圆角大卡（左：净资产 + 小眼睛；右：总资产 / 负资产 + ⋮ 菜单）
+            // 内嵌平滑下拉隐藏入口，从 0.dp 线性增长避免初始跳动与重复状态栏间距
             item(key = "net_worth_card", contentType = "net_worth_hero") {
-                Box(
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
                         .statusBarsPadding()
-                        .padding(start = 12.dp, end = 12.dp, top = 8.dp)
                 ) {
-                    YimuNetWorthCard(
+                    if (pullOffsetPx > 0.5f) {
+                        val ready = pullOffsetPx >= triggerThresholdPx
+                        val bannerHeightDp = with(density) { pullOffsetPx.toDp() }
+                        val indicatorAlpha = ((pullOffsetPx / triggerThresholdPx) * 1.35f).coerceIn(0f, 1f)
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(bannerHeightDp)
+                                .clipToBounds(),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Surface(
+                                shape = CircleShape,
+                                color = if (ready) {
+                                    MaterialTheme.colorScheme.primaryContainer
+                                } else {
+                                    MaterialTheme.colorScheme.surfaceContainerHigh
+                                },
+                                modifier = Modifier.alpha(indicatorAlpha)
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(5.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = if (ready) Icons.Rounded.VisibilityOff else Icons.Rounded.ArrowDownward,
+                                        contentDescription = null,
+                                        tint = if (ready) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                    Text(
+                                        text = if (ready) "松手进入资产隐藏" else "下拉进入资产隐藏",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        fontWeight = FontWeight.Medium,
+                                        color = if (ready) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        softWrap = false
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = 12.dp, end = 12.dp, top = 8.dp)
+                    ) {
+                        YimuNetWorthCard(
                         displayCurrency = uiState.displayCurrency,
                         displayDigits = displayDigits,
                         totalAssetsMicros = uiState.netWorth.totalAssetsMicros,
@@ -359,11 +374,12 @@ fun AssetsScreen(
                             showNetWorthMoreMenu = false
                             viewModel.setShowArchivedAccounts(!uiState.showArchived)
                         },
-                        onCreateAccount = {
-                            showNetWorthMoreMenu = false
-                            createInitialGroup = AccountGroup.WALLET
-                        }
-                    )
+                            onCreateAccount = {
+                                showNetWorthMoreMenu = false
+                                createInitialGroup = AccountGroup.WALLET
+                            }
+                        )
+                    }
                 }
             }
 
@@ -533,6 +549,11 @@ fun AssetsScreen(
                 modifier = Modifier.size(24.dp)
             )
         }
+
+        TopStatusBarScrim(
+            visible = showStatusBarScrim,
+            modifier = Modifier.align(Alignment.TopCenter)
+        )
     }
 
     // 账户长按快捷菜单弹窗（含隐藏此账户）
@@ -850,14 +871,20 @@ private fun YimuNetWorthCard(
                             Text(
                                 text = "总资产",
                                 style = MaterialTheme.typography.labelMedium.copy(fontSize = 12.sp),
-                                color = subtitleColor
+                                color = subtitleColor,
+                                maxLines = 1,
+                                softWrap = false
                             )
+                            Spacer(modifier = Modifier.width(4.dp))
                             Text(
                                 text = formatPrivacyAmount(privacyMasked, assetsText),
                                 style = MaterialTheme.typography.labelLarge.copy(fontSize = 13.5.sp).tabular(),
                                 fontWeight = FontWeight.SemiBold,
                                 color = titleColor,
-                                maxLines = 1
+                                textAlign = TextAlign.End,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f)
                             )
                         }
                         Row(
@@ -868,14 +895,20 @@ private fun YimuNetWorthCard(
                             Text(
                                 text = "负资产",
                                 style = MaterialTheme.typography.labelMedium.copy(fontSize = 12.sp),
-                                color = subtitleColor
+                                color = subtitleColor,
+                                maxLines = 1,
+                                softWrap = false
                             )
+                            Spacer(modifier = Modifier.width(4.dp))
                             Text(
                                 text = formatPrivacyAmount(privacyMasked, liabilitiesText),
                                 style = MaterialTheme.typography.labelLarge.copy(fontSize = 13.5.sp).tabular(),
                                 fontWeight = FontWeight.SemiBold,
                                 color = titleColor,
-                                maxLines = 1
+                                textAlign = TextAlign.End,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f)
                             )
                         }
                     }
@@ -958,7 +991,9 @@ private fun YimuSummaryModuleCard(
                     text = title,
                     style = MaterialTheme.typography.titleSmall.copy(fontSize = 14.sp),
                     fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onSurface
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    softWrap = false
                 )
                 if (badgeCount > 0) {
                     Spacer(modifier = Modifier.width(4.dp))
@@ -971,6 +1006,8 @@ private fun YimuSummaryModuleCard(
                             style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp, lineHeight = 11.sp),
                             color = MaterialTheme.colorScheme.error,
                             fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            softWrap = false,
                             modifier = Modifier.padding(horizontal = 4.5.dp, vertical = 1.dp)
                         )
                     }
@@ -986,15 +1023,20 @@ private fun YimuSummaryModuleCard(
                     Text(
                         text = firstLabel,
                         style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.5.sp),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        softWrap = false
                     )
+                    Spacer(modifier = Modifier.width(4.dp))
                     Text(
                         text = firstValue,
                         style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.5.sp).tabular(),
                         fontWeight = FontWeight.Medium,
                         color = firstValueColor,
+                        textAlign = TextAlign.End,
                         maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
                     )
                 }
                 Row(
@@ -1005,15 +1047,20 @@ private fun YimuSummaryModuleCard(
                     Text(
                         text = secondLabel,
                         style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.5.sp),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        softWrap = false
                     )
+                    Spacer(modifier = Modifier.width(4.dp))
                     Text(
                         text = secondValue,
                         style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.5.sp).tabular(),
                         fontWeight = FontWeight.Medium,
                         color = secondValueColor,
+                        textAlign = TextAlign.End,
                         maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
                     )
                 }
             }
@@ -1052,8 +1099,12 @@ private fun YimuAccountSectionCard(
                     text = sectionTitle,
                     style = MaterialTheme.typography.titleSmall.copy(fontSize = 15.sp),
                     fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onSurface
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false)
                 )
+                Spacer(modifier = Modifier.width(8.dp))
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(4.dp)
@@ -1065,7 +1116,9 @@ private fun YimuAccountSectionCard(
                         ),
                         style = MaterialTheme.typography.titleSmall.copy(fontSize = 14.sp).tabular(),
                         fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onSurface
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        softWrap = false
                     )
                     Icon(
                         imageVector = if (collapsed) Icons.Rounded.ExpandMore else Icons.Rounded.ExpandLess,
@@ -1359,23 +1412,12 @@ internal fun AccountEditorDialog(
             }
 
             Text("币种", style = MaterialTheme.typography.labelMedium)
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                val quickCodes = if (pinnedCurrencies.contains(currencyCode)) pinnedCurrencies else pinnedCurrencies + currencyCode
-                items(quickCodes, key = { it }) { code ->
-                    CurrencyBadge(
-                        currencyCode = code,
-                        selected = code.equals(currencyCode, true),
-                        onClick = { currencyCode = code }
-                    )
-                }
-                item(key = "more") {
-                    FilterChip(
-                        selected = false,
-                        onClick = { showMoreCurrencies = true },
-                        label = { Text("更多") }
-                    )
-                }
-            }
+            QuickCurrencySelectorRow(
+                selectedCurrency = currencyCode,
+                pinnedCurrencies = pinnedCurrencies,
+                onSelectCurrency = { currencyCode = it },
+                onOpenMore = { showMoreCurrencies = true }
+            )
 
             if (existing == null) {
                 OutlinedTextField(
