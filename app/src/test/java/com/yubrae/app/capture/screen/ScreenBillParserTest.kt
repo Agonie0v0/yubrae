@@ -1177,7 +1177,7 @@ class ScreenBillParserTest {
         assertEquals(TransactionType.INCOME, draft!!.type)
         assertEquals(MoneyAmount.parseToMicros("15.00"), draft.origAmountMicros)
         assertEquals("CNY", draft.origCurrency)
-        assertEquals("阿麦", draft.merchant)
+        assertEquals("", draft.merchant)
         assertTrue("Expected note to contain 收到口令红包, got: ${draft.note}", draft.note.contains("收到口令红包"))
         assertTrue("Expected note to contain 账户余额, got: ${draft.note}", draft.note.contains("账户余额"))
         assertFalse("Expected note not to contain 添加, got: ${draft.note}", draft.note.contains("添加"))
@@ -2058,7 +2058,7 @@ class ScreenBillParserTest {
         val loadingOutcome = parser.parse(loadingPaySuccess, fullAliases, fullAccounts, fullCategories)
         assertEquals(ScreenPageKind.PAY_SUCCESS, loadingOutcome.pageKind)
         val loadingDraft = loadingOutcome.draft!!
-        assertEquals("逍遥优质胡辣汤（**华）", loadingDraft.merchant)
+        assertEquals("逍遥优质胡辣汤", loadingDraft.merchant)
         assertEquals(MoneyAmount.parseToMicros("5.50"), loadingDraft.origAmountMicros)
         assertEquals("三餐外食", loadingDraft.categoryName)
         assertFalse(TagTextCodec.parse(loadingDraft.tags).contains("淘宝"))
@@ -2089,7 +2089,7 @@ class ScreenBillParserTest {
         val cleanOutcome = parser.parse(promoHijackAttempt, fullAliases, fullAccounts, fullCategories)
         assertEquals(ScreenPageKind.PAY_SUCCESS, cleanOutcome.pageKind)
         val cleanDraft = cleanOutcome.draft!!
-        assertEquals("逍遥优质胡辣汤（**华）", cleanDraft.merchant)
+        assertEquals("逍遥优质胡辣汤", cleanDraft.merchant)
         assertEquals("三餐外食", cleanDraft.categoryName)
         assertFalse(TagTextCodec.parse(cleanDraft.tags).contains("淘宝"))
         assertFalse(TagTextCodec.parse(cleanDraft.tags).contains("网购"))
@@ -2111,7 +2111,7 @@ class ScreenBillParserTest {
         val neutralOutcome = parser.parse(neutralShopWithPromo, fullAliases, fullAccounts, fullCategories)
         assertEquals(ScreenPageKind.PAY_SUCCESS, neutralOutcome.pageKind)
         val neutralDraft = neutralOutcome.draft!!
-        assertEquals("张记小铺（**张）", neutralDraft.merchant)
+        assertEquals("张记小铺", neutralDraft.merchant)
         assertEquals("其他支出", neutralDraft.categoryName)
         assertEquals("", neutralDraft.tags)
     }
@@ -2189,5 +2189,288 @@ class ScreenBillParserTest {
         val incomeOutcome = parser.parse(qrIncomeDetail, fullAliases, fullAccounts, fullCategories)
         assertEquals(TransactionType.INCOME, incomeOutcome.draft!!.type)
         assertEquals("张三", incomeOutcome.draft!!.merchant)
+    }
+
+    @Test
+    fun parsesWeChat8066LegacyBillDetailMultilineNodesPayScoreAndSingleJumpLink() {
+        // 1. 微信 8.0.66 旧版账单详情：MallOrderTransactionInfoUI / WalletOrderInfoOldUI + 多行合并节点 + 空格分隔字段 + 微信支付分
+        val nodes = listOf(
+            ScreenTextNode("账单详情", topPx = 80, heightPx = 44),
+            ScreenTextNode("星巴克", topPx = 180, heightPx = 48),
+            ScreenTextNode("-38.00", topPx = 260, heightPx = 110),
+            ScreenTextNode("当前状态\n支付成功", topPx = 420, heightPx = 42),
+            ScreenTextNode("支付时间\n2026-11-26 08:15:20", topPx = 500, heightPx = 42),
+            ScreenTextNode("商品 星巴克拿铁", topPx = 580, heightPx = 42),
+            ScreenTextNode("收款方全称 上海星巴克咖啡经营有限公司", topPx = 660, heightPx = 42),
+            ScreenTextNode("支付方式\n招商银行信用卡(6688)", topPx = 740, heightPx = 42),
+            ScreenTextNode("交易单号\n4200008066202611260001", topPx = 820, heightPx = 42),
+            ScreenTextNode("微信支付分先享后付已免押", topPx = 900, heightPx = 40),
+            ScreenTextNode("申请转账电子凭证", topPx = 980, heightPx = 40),
+            ScreenTextNode("查看往来转账", topPx = 1040, heightPx = 40),
+            ScreenTextNode("对订单有疑问", topPx = 1100, heightPx = 40),
+            ScreenTextNode("查看账单详情", topPx = 1160, heightPx = 40)
+        )
+        val oldUiSnapshot = ScreenSnapshot(
+            packageName = "com.tencent.mm",
+            className = "com.tencent.mm.plugin.wallet_core.ui.WalletOrderInfoOldUI",
+            texts = nodes.map { it.text },
+            nodes = nodes,
+            screenHeightPx = 2400
+        )
+        val oldOutcome = parser.parse(oldUiSnapshot, aliases, accounts, categories)
+        assertEquals(ScreenPageKind.BILL_DETAIL, oldOutcome.pageKind)
+        assertEquals("4200008066202611260001", oldOutcome.orderNo)
+        val oldDraft = oldOutcome.draft!!
+        assertEquals(TransactionType.EXPENSE, oldDraft.type)
+        assertEquals(MoneyAmount.parseToMicros("38.00"), oldDraft.origAmountMicros)
+        assertEquals("星巴克", oldDraft.merchant)
+        assertEquals("6688", oldDraft.accountHint)
+        assertTrue(oldDraft.note.contains("星巴克拿铁"))
+        val expectedMillis = LocalDateTime.of(2026, 11, 26, 8, 15, 20)
+            .atZone(testZone)
+            .toInstant()
+            .toEpochMilli()
+        assertEquals(expectedMillis, oldDraft.timestamp)
+
+        // 2. MallOrderTransactionInfoUI + 申请转账电子凭证 锚点（无头部“账单详情”仍可识别）
+        val mallOrderSnapshot = ScreenSnapshot(
+            packageName = "com.tencent.mm",
+            className = "com.tencent.mm.plugin.order.ui.MallOrderTransactionInfoUI",
+            texts = listOf(
+                "瑞幸咖啡",
+                "-19.90",
+                "当前状态 支付完成",
+                "支付时间\r\n2026-11-26 09:05:10",
+                "商户全称 瑞幸咖啡(北京)有限公司",
+                "支付方式 零钱",
+                "交易单号 4200008066202611260002",
+                "申请转账电子凭证"
+            )
+        )
+        val mallOutcome = parser.parse(mallOrderSnapshot, aliases, accounts, categories)
+        assertEquals(ScreenPageKind.BILL_DETAIL, mallOutcome.pageKind)
+        assertEquals("4200008066202611260002", mallOutcome.orderNo)
+        assertEquals(MoneyAmount.parseToMicros("19.90"), mallOutcome.draft!!.origAmountMicros)
+        assertEquals("瑞幸咖啡", mallOutcome.draft!!.merchant)
+
+        // 3. 强账单锚点诊断识别（如关闭状态/无金额详情页触发，服务号卡片不触发）
+        val closedBillDetail = ScreenSnapshot(
+            packageName = "com.tencent.mm",
+            className = "com.tencent.mm.plugin.wallet_core.ui.WalletOrderInfoOldUI",
+            texts = listOf("账单详情", "星巴克", "当前状态", "交易关闭", "交易单号", "4200008066202611260003")
+        )
+        assertTrue(parser.hasStrongBillDetailAnchors(closedBillDetail))
+        val serviceVoucherCard = ScreenSnapshot(
+            packageName = "com.tencent.mm",
+            className = "android.widget.FrameLayout",
+            texts = listOf("微信支付凭证", "付款金额", "¥38.50", "收款商户", "星巴克", "查看账单详情", "我的账单", "支付服务")
+        )
+        assertFalse(parser.hasStrongBillDetailAnchors(serviceVoucherCard))
+    }
+
+    @Test
+    fun cleansBackHomeUiNoisePendingWrapperMaskedRealNameAndP2pCounterpartyNames() = runTest {
+        val fullAccDao = FakeAccountDao()
+        val fullAliasDao = FakeAccountAliasDao()
+        val fullCatDao = FakeCategoryDao()
+        DefaultSeedData.ensureAccountsAndTransitCard(fullAccDao, fullAliasDao)
+        DefaultSeedData.ensurePresetCategories(fullCatDao)
+        val fullAccounts = fullAccDao.getAll()
+        val fullAliases = fullAliasDao.getEnabled()
+        val fullCategories = fullCatDao.getAll()
+
+        // 1. 支付宝支付成功页含「回首页」：仅回首页作完成按钮时仍可识别为 PAY_SUCCESS，且绝不把「回首页」当成商户
+        val alipayBackHomeOnly = ScreenSnapshot(
+            packageName = "com.eg.android.AlipayGphone",
+            className = "com.alipay.android.msp.ui.views.MspContainerActivity",
+            texts = listOf("支付成功", "¥12.50", "回首页", "继续逛逛", "加载中...")
+        )
+        val backHomeOnlyOutcome = parser.parse(alipayBackHomeOnly, fullAliases, fullAccounts, fullCategories)
+        assertEquals(ScreenPageKind.PAY_SUCCESS, backHomeOnlyOutcome.pageKind)
+        assertEquals("", backHomeOnlyOutcome.draft!!.merchant)
+        assertEquals(MoneyAmount.parseToMicros("12.50"), backHomeOnlyOutcome.draft!!.origAmountMicros)
+
+        val alipayBackHomeWithMerchant = ScreenSnapshot(
+            packageName = "com.eg.android.AlipayGphone",
+            className = "com.alipay.android.msp.ui.views.MspContainerActivity",
+            texts = listOf("支付成功", "回首页", "沙县小吃", "¥15.00", "再来一单")
+        )
+        val backHomeMerchantOutcome = parser.parse(alipayBackHomeWithMerchant, fullAliases, fullAccounts, fullCategories)
+        assertEquals(ScreenPageKind.PAY_SUCCESS, backHomeMerchantOutcome.pageKind)
+        assertEquals("沙县小吃", backHomeMerchantOutcome.draft!!.merchant)
+        assertEquals("三餐外食", backHomeMerchantOutcome.draft!!.categoryName)
+
+        // 2. 「待...确认」/「待...确认收款」解包并保留店名括号
+        val pendingConfirm1 = ScreenSnapshot(
+            packageName = "com.tencent.mm",
+            className = "WalletOrderInfoOldUI",
+            texts = listOf("账单详情", "待逸民超市(两江名居桶装水)确认", "-18.00", "当前状态", "支付成功", "交易单号", "4200001234560001")
+        )
+        assertEquals(
+            "逸民超市(两江名居桶装水)",
+            parser.parse(pendingConfirm1, fullAliases, fullAccounts, fullCategories).draft!!.merchant
+        )
+        val pendingConfirm2 = pendingConfirm1.copy(
+            texts = listOf("账单详情", "待逸民超市(两江名居桶装水)确认收款", "-18.00", "当前状态", "支付成功", "交易单号", "4200001234560002")
+        )
+        assertEquals(
+            "逸民超市(两江名居桶装水)",
+            parser.parse(pendingConfirm2, fullAliases, fullAccounts, fullCategories).draft!!.merchant
+        )
+        val pendingConfirm3 = pendingConfirm1.copy(
+            texts = listOf("账单详情", "等待逸民超市(两江名居桶装水)确认", "-18.00", "当前状态", "支付成功", "交易单号", "4200001234560003")
+        )
+        assertEquals(
+            "逸民超市(两江名居桶装水)",
+            parser.parse(pendingConfirm3, fullAliases, fullAccounts, fullCategories).draft!!.merchant
+        )
+
+        // 3. 商户末尾脱敏实名括号清洗
+        val maskedSuffixDetail = ScreenSnapshot(
+            packageName = "com.tencent.mm",
+            className = "WalletPaidSuccessUI",
+            texts = listOf("支付成功", "逍遥优质胡辣汤(**华)", "¥5.50", "完成")
+        )
+        assertEquals(
+            "逍遥优质胡辣汤",
+            parser.parse(maskedSuffixDetail, fullAliases, fullAccounts, fullCategories).draft!!.merchant
+        )
+
+        // 4. 支付宝收到口令红包（对方 Cc）-> merchant=""，categoryName="人情礼金"，note 含收到口令红包
+        val alipayReceiveRedPacket = ScreenSnapshot(
+            packageName = "com.eg.android.AlipayGphone",
+            className = "com.alipay.mobile.bill.detail.ui.BillDetailActivity",
+            texts = listOf(
+                "账单详情",
+                "Cc",
+                "18.88元",
+                "交易成功",
+                "创建时间", "2026-11-26 10:00:00",
+                "收款方式", "账户余额",
+                "红包说明", "收到口令红包",
+                "账单分类", "红包",
+                "订单号", "20261126220014000088"
+            )
+        )
+        val receiveRedOutcome = parser.parse(alipayReceiveRedPacket, fullAliases, fullAccounts, fullCategories)
+        assertEquals(ScreenPageKind.BILL_DETAIL, receiveRedOutcome.pageKind)
+        val receiveRedDraft = receiveRedOutcome.draft!!
+        assertEquals(TransactionType.INCOME, receiveRedDraft.type)
+        assertEquals("", receiveRedDraft.merchant)
+        assertEquals("人情礼金", receiveRedDraft.categoryName)
+        assertTrue(receiveRedDraft.note.contains("收到口令红包"))
+
+        // 5. 支付宝发口令红包 -> categoryName="红包礼金"，且保留「支付宝红包」标签商户
+        val alipaySendRedPacket = ScreenSnapshot(
+            packageName = "com.eg.android.AlipayGphone",
+            className = "com.alipay.mobile.bill.detail.ui.BillDetailActivity",
+            texts = listOf(
+                "支付宝红包",
+                "支出55元",
+                "交易成功",
+                "创建时间", "2026-11-26 11:00:00",
+                "付款方式", "账户余额",
+                "红包说明", "发口令红包",
+                "订单号", "20261126220014000099"
+            )
+        )
+        val sendRedDraft = parser.parse(alipaySendRedPacket, fullAliases, fullAccounts, fullCategories).draft!!
+        assertEquals(TransactionType.EXPENSE, sendRedDraft.type)
+        assertEquals("支付宝红包", sendRedDraft.merchant)
+        assertEquals("红包礼金", sendRedDraft.categoryName)
+
+        // 6. 微信 P2P 转账对象「张三」与红包对象「Cc」清洗为 ""，而商用扫码「扫二维码付款-给逍遥优质胡辣汤」保留店名
+        val wechatP2pTransfer = ScreenSnapshot(
+            packageName = "com.tencent.mm",
+            className = "com.tencent.mm.plugin.remittance.ui.RemittanceDetailUI",
+            texts = listOf(
+                "向张三转账",
+                "-200.00",
+                "当前状态", "对方已收钱",
+                "转账说明", "聚餐AA",
+                "转账单号", "100005000120261126001"
+            )
+        )
+        assertEquals("", parser.parse(wechatP2pTransfer, fullAliases, fullAccounts, fullCategories).draft!!.merchant)
+
+        val wechatRedPacketPerson = ScreenSnapshot(
+            packageName = "com.tencent.mm",
+            className = "com.tencent.mm.plugin.webview.ui.tools.MMWebViewUI",
+            texts = listOf(
+                "Cc",
+                "-20.00",
+                "微信红包",
+                "当前状态", "已被领完",
+                "交易单号", "100003990120261126002"
+            )
+        )
+        val wechatRedDraft = parser.parse(wechatRedPacketPerson, fullAliases, fullAccounts, fullCategories).draft!!
+        assertEquals("", wechatRedDraft.merchant)
+        assertEquals("红包礼金", wechatRedDraft.categoryName)
+
+        val commercialQr = ScreenSnapshot(
+            packageName = "com.tencent.mm",
+            className = "com.tencent.mm.plugin.webview.ui.tools.MMWebViewUI",
+            texts = listOf(
+                "账单详情",
+                "静涵18238949916",
+                "-5.50",
+                "当前状态", "支付成功",
+                "商品", "扫二维码付款-给逍遥优质胡辣汤",
+                "支付方式", "零钱",
+                "交易单号", "420000215620261126999"
+            )
+        )
+        assertEquals("逍遥优质胡辣汤", parser.parse(commercialQr, fullAliases, fullAccounts, fullCategories).draft!!.merchant)
+
+        // 购物使用支付宝红包抵扣（带金额）不应误归「红包礼金」
+        val meituanWithRedPacketDiscount = ScreenSnapshot(
+            packageName = "com.eg.android.AlipayGphone",
+            className = "BillDetailActivity",
+            texts = listOf(
+                "账单详情",
+                "美团",
+                "-18.00",
+                "交易成功",
+                "组合支付",
+                "支付宝红包 3.00元",
+                "付款方式", "花呗",
+                "订单号", "20261126220014000123"
+            )
+        )
+        val meituanDraft = parser.parse(meituanWithRedPacketDiscount, fullAliases, fullAccounts, fullCategories).draft!!
+        assertEquals("三餐外食", meituanDraft.categoryName)
+    }
+
+    @Test
+    fun validatesWeChat8066SafeWindowClassesAndAccessibilityWindowCandidates() {
+        val safeWeChatClasses = listOf(
+            "com.tencent.mm.plugin.wallet_core.ui.WalletOrderInfoOldUI",
+            "com.tencent.mm.plugin.order.ui.MallOrderTransactionInfoUI",
+            "com.tencent.mm.plugin.lite.ui.WxaLiteAppTransparentUI",
+            "com.tencent.mm.plugin.appbrand.ui.AppBrandUI",
+            "com.tencent.mm.flutter.ui.FlutterActivity",
+            "com.tencent.kinda.framework.widget.base.KindaActivity",
+            "com.tencent.mm.plugin.wallet.pay.ui.WalletPayUI",
+            "com.tencent.mm.plugin.luckymoney.ui.LuckyMoneyDetailUI",
+            "com.tencent.mm.plugin.collect.ui.CollectMainUI"
+        )
+        for (cls in safeWeChatClasses) {
+            assertFalse("Expected safe window class not blocked: $cls", ScreenBillParser.isBlockedChatOrFeedWindow("com.tencent.mm", cls))
+        }
+        assertTrue(ScreenBillParser.isBlockedChatOrFeedWindow("com.tencent.mm", "com.tencent.mm.ui.LauncherUI"))
+        assertTrue(ScreenBillParser.isBlockedChatOrFeedWindow("com.tencent.mm", "com.tencent.mm.ui.chatting.ChattingUI"))
+
+        assertTrue(KairoAccessibilityService.isWindowClassCandidate("androidx.appcompat.app.AppCompatActivity"))
+        assertTrue(KairoAccessibilityService.isWindowClassCandidate("androidx.fragment.app.FragmentActivity"))
+        assertTrue(KairoAccessibilityService.isWindowClassCandidate("com.tencent.mm.plugin.wallet_core.ui.WalletOrderInfoOldUI"))
+        assertFalse(KairoAccessibilityService.isWindowClassCandidate("android.widget.FrameLayout"))
+        assertFalse(KairoAccessibilityService.isWindowClassCandidate("android.view.View"))
+        assertFalse(KairoAccessibilityService.isWindowClassCandidate("androidx.recyclerview.widget.RecyclerView"))
+        assertFalse(KairoAccessibilityService.isWindowClassCandidate("androidx.viewpager2.widget.ViewPager2"))
+        assertFalse(KairoAccessibilityService.isWindowClassCandidate("androidx.core.widget.NestedScrollView"))
+        assertFalse(KairoAccessibilityService.isWindowClassCandidate("android.app.Dialog"))
+        assertFalse(KairoAccessibilityService.isWindowClassCandidate("android.widget.Toast"))
+        assertFalse(KairoAccessibilityService.isWindowClassCandidate("android.widget.PopupWindow"))
     }
 }

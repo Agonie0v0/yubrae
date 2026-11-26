@@ -100,6 +100,69 @@ class ScreenBillParser(
         return classifyPageInternal(snapshot.packageName, snapshot.className, lines, fieldResult.fields).first
     }
 
+    /**
+     * 判断非聊天/非列表窗口是否呈现强账单详情特征，供无障碍服务末轮诊断抓取日志兜底使用。
+     */
+    internal fun hasStrongBillDetailAnchors(snapshot: ScreenSnapshot): Boolean {
+        if (!isWatchedPackage(snapshot.packageName)) return false
+        if (isBlockedChatOrFeedWindow(snapshot.packageName, snapshot.className)) return false
+        val normalizedLines = normalizeLinesWithNodes(snapshot)
+        if (normalizedLines.isEmpty()) return false
+        val lines = normalizedLines.map { it.text }
+        val lowerLines = lines.map { it.lowercase(Locale.ROOT) }
+        val lowerJoined = lowerLines.joinToString("\n")
+
+        if (CHAT_STRONG_MARKERS.any { lowerJoined.contains(it) }) return false
+        if (lowerLines.contains("表情") && lowerLines.contains("发送")) return false
+        if ((lowerLines.contains("通讯录") && lowerLines.contains("发现")) ||
+            (lowerLines.contains("首页") && lowerLines.contains("理财") && lowerLines.contains("我的"))
+        ) {
+            return false
+        }
+        val hasServiceBottomMenu = (lowerLines.contains("我的账单") && lowerLines.contains("支付服务")) ||
+            (lowerLines.contains("我的账单") && lowerLines.contains("更多服务")) ||
+            (lowerLines.contains("账单") && lowerLines.contains("支付服务"))
+        if (hasServiceBottomMenu) return false
+
+        val cardJumpDetailCount = lowerLines.count { line ->
+            CARD_JUMP_DETAIL_BUTTONS.any { btn -> line == btn || line.contains(btn) }
+        }
+        if (cardJumpDetailCount >= 2) return false
+
+        val hasDetailHeader = lowerLines.any { line ->
+            DETAIL_HEADER_KEYWORDS.any { line == it || line.startsWith("$it ") || line.startsWith("$it·") }
+        }
+        val hasDetailAnchorMarker = DETAIL_ANCHOR_MARKERS.any { marker ->
+            lowerLines.any { it.contains(marker) }
+        }
+        if (!hasDetailHeader && !hasDetailAnchorMarker &&
+            SERVICE_CARD_TITLES.any { title -> lowerLines.any { it.contains(title) } }
+        ) {
+            return false
+        }
+        if (!hasDetailAnchorMarker &&
+            CHAT_BUBBLE_MARKERS.any { marker -> lowerLines.any { it.contains(marker) } }
+        ) {
+            return false
+        }
+        val fields = extractFields(lines).fields
+        val distinctDetailKeys = fields.map { it.key }.filter { it in DETAIL_SIGNAL_KEYS }.toSet().size
+        val topLines = lowerLines.take(6)
+        val isBillListOverview = (BILL_LIST_MARKERS.any { marker -> topLines.any { it == marker || it.contains(marker) } } ||
+            (topLines.any { it == "账单" || it == "我的账单" } &&
+                lowerLines.any { it == "支出" || it.startsWith("支出 ") || it.startsWith("支出¥") } &&
+                lowerLines.any { it == "收入" || it.startsWith("收入 ") || it.startsWith("收入¥") })) &&
+            !hasDetailHeader &&
+            !hasDetailAnchorMarker &&
+            distinctDetailKeys < 2
+        if (isBillListOverview) return false
+
+        val matchedAnchorCount = STRONG_BILL_ANCHOR_KEYWORDS.count { anchor ->
+            lowerLines.any { it.contains(anchor) }
+        }
+        return (hasDetailHeader && matchedAnchorCount >= 1) || matchedAnchorCount >= 2
+    }
+
     fun parse(
         snapshot: ScreenSnapshot,
         aliases: List<AccountAliasEntity> = emptyList(),
@@ -224,6 +287,15 @@ class ScreenBillParser(
             ) {
                 merchant = localRuleParser.extractTransitCardName(summaryText)
                     ?: merchant.ifBlank { "公交卡" }
+            }
+            if (merchant.isNotBlank() &&
+                isP2pPersonalCounterpartyToClear(
+                    merchant = merchant,
+                    lines = lines,
+                    ignoredLineIndices = fieldResult.ignoredLineIndices
+                )
+            ) {
+                merchant = ""
             }
         }
 
@@ -418,40 +490,48 @@ class ScreenBillParser(
 
     private fun buildRawNormalizedLines(snapshot: ScreenSnapshot): List<NormalizedLine> {
         if (snapshot.texts.isEmpty()) {
-            return snapshot.nodes.mapNotNull { node ->
-                val cleaned = cleanLineText(node.text)
+            return snapshot.nodes.flatMap { node ->
+                node.text.split('\n', '\r').mapNotNull { part ->
+                    val cleaned = cleanLineText(part)
+                    cleaned.takeIf { it.isNotEmpty() }?.let {
+                        NormalizedLine(it, node.topPx, node.heightPx, node.isContentDesc)
+                    }
+                }
+            }
+        }
+        if (snapshot.nodes.isEmpty()) {
+            return snapshot.texts.flatMap { text ->
+                text.split('\n', '\r').mapNotNull { part ->
+                    val cleaned = cleanLineText(part)
+                    cleaned.takeIf { it.isNotEmpty() }?.let { NormalizedLine(it) }
+                }
+            }
+        }
+
+        val cleanedNodes = snapshot.nodes.flatMap { node ->
+            node.text.split('\n', '\r').mapNotNull { part ->
+                val cleaned = cleanLineText(part)
                 cleaned.takeIf { it.isNotEmpty() }?.let {
                     NormalizedLine(it, node.topPx, node.heightPx, node.isContentDesc)
                 }
             }
         }
-        if (snapshot.nodes.isEmpty()) {
-            return snapshot.texts.mapNotNull { text ->
-                val cleaned = cleanLineText(text)
-                cleaned.takeIf { it.isNotEmpty() }?.let { NormalizedLine(it) }
-            }
-        }
-
-        val cleanedNodes = snapshot.nodes.mapNotNull { node ->
-            val cleaned = cleanLineText(node.text)
-            cleaned.takeIf { it.isNotEmpty() }?.let {
-                NormalizedLine(it, node.topPx, node.heightPx, node.isContentDesc)
-            }
-        }
         var nodeCursor = 0
-        return snapshot.texts.mapNotNull { rawText ->
-            val cleaned = cleanLineText(rawText)
-            if (cleaned.isEmpty()) return@mapNotNull null
-            var matched: NormalizedLine? = null
-            val limit = minOf(nodeCursor + 6, cleanedNodes.size)
-            for (k in nodeCursor until limit) {
-                if (cleanedNodes[k].text == cleaned) {
-                    matched = cleanedNodes[k]
-                    nodeCursor = k + 1
-                    break
+        return snapshot.texts.flatMap { rawText ->
+            rawText.split('\n', '\r').mapNotNull { part ->
+                val cleaned = cleanLineText(part)
+                if (cleaned.isEmpty()) return@mapNotNull null
+                var matched: NormalizedLine? = null
+                val limit = minOf(nodeCursor + 6, cleanedNodes.size)
+                for (k in nodeCursor until limit) {
+                    if (cleanedNodes[k].text == cleaned) {
+                        matched = cleanedNodes[k]
+                        nodeCursor = k + 1
+                        break
+                    }
                 }
+                matched ?: NormalizedLine(cleaned)
             }
-            matched ?: NormalizedLine(cleaned)
         }
     }
 
@@ -616,7 +696,10 @@ class ScreenBillParser(
 
     private fun canConsumeNextLineValue(key: FieldKey, nextLine: String?): Boolean {
         if (nextLine == null) return false
-        if (isActionButtonOnly(nextLine) || isPlaceholderFieldValue(nextLine)) return false
+        if (isPlaceholderFieldValue(nextLine)) return false
+        if (isActionButtonOnly(nextLine) && !(key == FieldKey.STATUS && isKnownStatusLine(nextLine))) {
+            return false
+        }
         val nextStrictKey = matchStrictFieldKeyInLine(nextLine)
         return when (key) {
             // 账户余额/余额/可用余额等在独立行时为忽略余额字段，但作为收付款方式的值时必须正常读取
@@ -781,6 +864,13 @@ class ScreenBillParser(
     private fun isActionButtonOnly(line: String): Boolean =
         line.trim().lowercase(Locale.ROOT) in ACTION_ONLY_WORDS
 
+    private fun isKnownStatusLine(line: String): Boolean {
+        val lower = line.trim().lowercase(Locale.ROOT)
+        return PAY_SUCCESS_PHRASES.any { lower == it } ||
+            IGNORED_STATUS_KEYWORDS.any { lower == it } ||
+            STATUS_ANCHOR_PHRASES.any { lower == it }
+    }
+
     private fun matchSpaceSeparatedField(line: String): Triple<FieldKey, String, String>? {
         val lower = line.lowercase(Locale.ROOT)
         for ((prefix, key) in SPACE_SEPARATED_PREFIXES) {
@@ -878,8 +968,30 @@ class ScreenBillParser(
             }
         }
 
-        // 微信支付 / 支付宝服务号通知卡片标题（即使退化为通用类名也立即屏蔽）
-        if (SERVICE_CARD_TITLES.any { title -> lowerLines.any { it.contains(title) } }) {
+        val distinctDetailKeys = fields
+            .map { it.key }
+            .filter { it in DETAIL_SIGNAL_KEYS }
+            .toSet()
+            .size
+
+        val hasDetailHeader = lowerLines.any { line ->
+            DETAIL_HEADER_KEYWORDS.any { line == it || line.startsWith("$it ") || line.startsWith("$it·") }
+        }
+        val hasDetailAnchorMarker = DETAIL_ANCHOR_MARKERS.any { marker ->
+            lowerLines.any { it.contains(marker) }
+        }
+        val strongDetailOnlyCount = fields
+            .map { it.key }
+            .filter { it == FieldKey.TIME || it == FieldKey.ORDER_NO || it == FieldKey.STATUS }
+            .toSet()
+            .size
+
+        // 微信支付 / 支付宝服务号通知卡片标题（若已有账单详情头、详情锚点或 >=2 个强详情字段，避免误杀含「微信支付分」的真实账单）
+        if (!hasDetailHeader &&
+            !hasDetailAnchorMarker &&
+            strongDetailOnlyCount < 2 &&
+            SERVICE_CARD_TITLES.any { title -> lowerLines.any { it.contains(title) } }
+        ) {
             return ScreenPageKind.UNKNOWN to "聊天或服务号对话框不触发"
         }
 
@@ -901,24 +1013,6 @@ class ScreenBillParser(
             }
             voucherKeyCounts[matchedKey] = nextCount
         }
-
-        val distinctDetailKeys = fields
-            .map { it.key }
-            .filter { it in DETAIL_SIGNAL_KEYS }
-            .toSet()
-            .size
-
-        val hasDetailHeader = lowerLines.any { line ->
-            DETAIL_HEADER_KEYWORDS.any { line == it || line.startsWith("$it ") || line.startsWith("$it·") }
-        }
-        val hasDetailAnchorMarker = DETAIL_ANCHOR_MARKERS.any { marker ->
-            lowerLines.any { it.contains(marker) }
-        }
-        val strongDetailOnlyCount = fields
-            .map { it.key }
-            .filter { it == FieldKey.TIME || it == FieldKey.ORDER_NO || it == FieldKey.STATUS }
-            .toSet()
-            .size
 
         // 聊天红包 / 转账消息气泡强特征（排除带完整账单服务锚点的真实详情页）
         if (!hasDetailAnchorMarker &&
@@ -1009,14 +1103,16 @@ class ScreenBillParser(
         }
 
         // 服务号消息卡片常包含“查看账单详情 / 点击查看详情 / 查看消费明细”按钮：
-        // 若不具备真实支付结果页（支付成功+完成）特征，则判定为服务号对话卡片
+        // 仅当卡片跳转按钮是主体（>=2 个跳转按钮，或无详情头/锚点/强详情字段且非真实支付成功页）时才判为服务号卡片
         if (hasCardJumpDetailButton) {
+            val isCardJumpMainBody = cardJumpDetailCount >= 2 ||
+                (!hasDetailHeader && !hasDetailAnchorMarker && strongDetailOnlyCount == 0)
             val isRealPayResultWithJump = hasPaySuccessPhrase &&
                 hasStrictResultDoneButton &&
                 !hasDetailAnchorMarker &&
                 strongDetailOnlyCount == 0 &&
                 chatTimeDividerCount == 0
-            if (!isRealPayResultWithJump) {
+            if (isCardJumpMainBody && !isRealPayResultWithJump) {
                 return ScreenPageKind.UNKNOWN to "聊天或服务号对话框不触发"
             }
         }
@@ -2189,11 +2285,30 @@ class ScreenBillParser(
         // 在剥离“向/给/在/付款/转账”等前后缀之前先检查原始文本，避免“在浏览器打开”等系统 UI 文案绕过停用词表
         if (isNonMerchantUiText(s.lowercase(Locale.ROOT))) return null
 
+        // 解包“待XXX确认/收款”及“来自XXX的转账/红包”包裹文案
+        MERCHANT_PENDING_WRAPPER_REGEX.matchEntire(s)?.let { m ->
+            val inner = m.groupValues[1].trim()
+            if (inner.isNotEmpty()) s = inner
+        }
+        MERCHANT_FROM_WRAPPER_REGEX.matchEntire(s)?.let { m ->
+            val inner = m.groupValues[1].trim()
+            if (inner.isNotEmpty()) s = inner
+        }
+
         s = s.replace(MERCHANT_ACTION_PREFIX_REGEX, "")
-            .replace(MERCHANT_ACTION_SUFFIX_REGEX, "")
-            .replace(Regex("^[：:，,。\\-—>›＞\\s]+|[：:，,。.;；>›＞\\s]+$"), "")
+        repeat(2) {
+            s = s.replace(MERCHANT_ACTION_SUFFIX_REGEX, "")
+        }
+        s = s.replace(Regex("^[：:，,。\\-—>›＞\\s]+|[：:，,。.;；>›＞\\s]+$"), "")
             .trim()
+
+        val withoutMaskedRealName = s.replace(TRAILING_MASKED_REALNAME_PAREN_REGEX, "").trim()
+        if (withoutMaskedRealName.isNotEmpty()) {
+            s = withoutMaskedRealName
+        }
+
         if (s.isEmpty() || s.length > 40) return null
+        if (isStrictFieldLabel(s) || isPlaceholderFieldValue(s)) return null
 
         val lower = s.lowercase(Locale.ROOT)
         if (isNonMerchantUiText(lower)) return null
@@ -2201,6 +2316,56 @@ class ScreenBillParser(
         if (AMOUNT_ONLY_LINE_REGEX.matches(s.replace(" ", ""))) return null
         if (FULL_DATETIME_REGEX.containsMatchIn(s) || MONTH_DAY_TIME_REGEX.containsMatchIn(s)) return null
         return s
+    }
+
+    private fun isP2pPersonalCounterpartyToClear(
+        merchant: String,
+        lines: List<String>,
+        ignoredLineIndices: Set<Int>
+    ): Boolean {
+        val trimmed = merchant.trim()
+        if (trimmed.isEmpty()) return false
+        if (trimmed.lowercase(Locale.ROOT) in P2P_PRESERVED_LABEL_MERCHANTS) return false
+        if (hasCommercialEntityCue(trimmed)) return false
+        if (!isP2pTransferOrRedPacketContext(lines, ignoredLineIndices)) return false
+        return looksLikePersonalNicknameOrPhone(trimmed) ||
+            trimmed.startsWith("wxid_", ignoreCase = true) ||
+            trimmed.length <= 24
+    }
+
+    private fun isP2pTransferOrRedPacketContext(
+        lines: List<String>,
+        ignoredLineIndices: Set<Int>
+    ): Boolean {
+        val lowerNonNoiseLines = lines.withIndex()
+            .filter { (_, line) -> line.trim().lowercase(Locale.ROOT) !in CHROME_NOISE_LINES }
+        if (lowerNonNoiseLines.any { (_, line) ->
+                val lower = line.lowercase(Locale.ROOT)
+                P2P_COMMERCIAL_EXCLUSION_MARKERS.any { lower.contains(it) }
+            }
+        ) {
+            return false
+        }
+
+        return lowerNonNoiseLines.any { (idx, line) ->
+            if (idx in ignoredLineIndices) return@any false
+            if (containsNoiseAmountKeyword(line) &&
+                (AMOUNT_TOKEN_REGEX.containsMatchIn(line) || isStandaloneAmountLine(line))
+            ) {
+                return@any false
+            }
+            val lower = line.lowercase(Locale.ROOT)
+            P2P_CONTEXT_MARKERS.any { lower.contains(it) } ||
+                P2P_TRANSFER_LINE_REGEX.containsMatchIn(line)
+        }
+    }
+
+    private fun hasCommercialEntityCue(name: String): Boolean {
+        val trimmed = name.trim()
+        if (trimmed.isEmpty()) return false
+        val lower = trimmed.lowercase(Locale.ROOT)
+        if (COMMERCIAL_ENTITY_KEYWORDS.any { lower.contains(it) }) return true
+        return COMMERCIAL_STORE_SUFFIX_REGEX.containsMatchIn(trimmed)
     }
 
     private fun isGenericChannelMerchant(merchant: String): Boolean =
@@ -2233,6 +2398,7 @@ class ScreenBillParser(
             val trimmed = line.trim()
             val lower = trimmed.lowercase(Locale.ROOT)
             lower in CHROME_NOISE_LINES ||
+                DISCOUNT_BREAKDOWN_CLASSIFY_NOISE_REGEX.containsMatchIn(trimmed) ||
                 (pageKind == ScreenPageKind.PAY_SUCCESS && PAY_SUCCESS_PROMO_NOISE_REGEX.containsMatchIn(trimmed))
         }
         val joined = filtered.joinToString("\n")
@@ -2379,12 +2545,23 @@ class ScreenBillParser(
         private val WECHAT_SAFE_WINDOW_CLASSES = listOf(
             "mmwebviewui",
             "walletorderinfonewui",
+            "walletorderinfo",
             "walletpaidsuccessui",
             "mallorderdetailinfoui",
+            "mallorder",
             "uipagefragmentactivity",
             "remittancedetailui",
             "remittanceresui",
-            "walletrefundsuccessui"
+            "walletrefundsuccessui",
+            "wxliteapp",
+            "liteapp",
+            "appbrand",
+            "flutter",
+            "kinda",
+            "tenpay",
+            "wallet",
+            "luckymoney",
+            "collect"
         )
 
         private val WECHAT_BLOCKED_WINDOW_TOKENS = listOf(
@@ -2839,6 +3016,13 @@ class ScreenBillParser(
             "退款去向" to FieldKey.PAYMENT_METHOD,
             "退回账户" to FieldKey.PAYMENT_METHOD,
             "提现银行" to FieldKey.PAYMENT_METHOD,
+            "当前状态" to FieldKey.STATUS,
+            "交易状态" to FieldKey.STATUS,
+            "收款方全称" to FieldKey.PAYEE,
+            "收款方" to FieldKey.PAYEE,
+            "付款方" to FieldKey.PAYER,
+            "商户全称" to FieldKey.MERCHANT,
+            "商户名称" to FieldKey.MERCHANT,
             "店铺名称" to FieldKey.MERCHANT,
             "商家名称" to FieldKey.MERCHANT,
             "门店名称" to FieldKey.MERCHANT,
@@ -2863,6 +3047,7 @@ class ScreenBillParser(
             "商品说明" to FieldKey.GOODS,
             "商品名称" to FieldKey.GOODS,
             "转账说明" to FieldKey.GOODS,
+            "商品" to FieldKey.GOODS,
             "账单分类" to FieldKey.META,
             "收单机构" to FieldKey.META,
             "清算机构" to FieldKey.META
@@ -2918,8 +3103,14 @@ class ScreenBillParser(
 
         private val ACTION_ONLY_WORDS = setOf(
             "复制", "copy", "查看", "更多", "完成", "done", "返回", "关闭",
-            "联系商家", "aa收款", "查看往来记录", "往来流水证明", "申请电子回单",
-            "账单管理", "我的消费图鉴", "为您推荐", "服务详情", "进入小程序", "转账红包"
+            "联系商家", "联系商户", "aa收款", "查看往来记录", "查看往来转账", "往来流水证明",
+            "申请电子回单", "申请转账电子凭证", "对订单有疑问",
+            "账单管理", "我的消费图鉴", "为您推荐", "服务详情", "进入小程序", "转账红包",
+            "回首页", "返回首页", "回到首页", "去首页", "首页", "返回上一页", "返回应用", "返回app",
+            "返回微信", "返回支付宝", "回到商家", "继续逛逛", "我知道了", "知道了", "好的", "跳过",
+            "下一步", "立即体验", "去看看", "查看订单", "查看账单详情", "支付完成", "付款完成",
+            "已完成", "关闭页面", "收起", "展开", "分享给好友", "保存图片", "再来一单",
+            "去评价", "立即评价", "开发中", "加载中", "加载中..."
         )
 
         private val STATUS_ANCHOR_PHRASES = listOf(
@@ -2976,10 +3167,17 @@ class ScreenBillParser(
         )
 
         private val DETAIL_ANCHOR_MARKERS = listOf(
-            "账单服务", "发起群收款", "申请电子凭证", "本服务由财付通提供",
+            "账单服务", "发起群收款", "申请电子凭证", "申请转账电子凭证", "本服务由财付通提供",
             "收单机构", "清算机构", "在此商户的交易", "在此商户的交易记录",
-            "定位到聊天位置", "查看往来记录", "联系收款方", "对订单有疑惑", "对此订单有疑问",
-            "查看红包详情", "标签和备注", "申请开票"
+            "定位到聊天位置", "查看往来记录", "查看往来转账", "联系收款方", "联系商户",
+            "对订单有疑惑", "对此订单有疑问", "对订单有疑问",
+            "查看红包详情", "标签和备注", "申请开票", "电子凭证", "收款方备注"
+        )
+
+        private val STRONG_BILL_ANCHOR_KEYWORDS = listOf(
+            "交易单号", "转账单号", "商户单号", "商户订单号", "订单号", "订单编号",
+            "本服务由财付通提供", "账单服务", "发起群收款", "申请电子凭证", "申请转账电子凭证",
+            "在此商户的交易", "查看往来记录", "查看往来转账", "对订单有疑惑", "对此订单有疑问", "对订单有疑问"
         )
 
         private val PAY_SUCCESS_PHRASES = listOf(
@@ -2994,11 +3192,13 @@ class ScreenBillParser(
 
         private val DONE_ANCHOR_KEYWORDS = listOf(
             "完成", "返回商家", "查看账单", "查看零钱", "账单详情", "查看详情",
+            "回首页", "返回首页", "回到首页",
             "done", "ok", "close", "返回", "电子回单"
         )
 
         private val WALLET_STRICT_DONE_ANCHOR_KEYWORDS = listOf(
             "完成", "返回商家", "查看账单", "查看零钱", "账单详情",
+            "回首页", "返回首页", "回到首页",
             "done", "ok", "close", "电子回单"
         )
 
@@ -3145,7 +3345,18 @@ class ScreenBillParser(
             "^(?:消费金额|外币金额|原币金额|原始金额|实付|实付款|合计实付|商品实付|实付总额|商品总价|商品金额|订单总额|商品总额|付款金额|支付金额|折算人民币|折合人民币|支付优惠|优惠信息|优惠说明|优惠明细|商家优惠|平台优惠|店铺优惠|店铺立减|跨店满减|百亿补贴|碰一下立减|碰一下|官方立减|微信立减金|立减金|已优惠|优惠了|优惠|立减|满减|代金券|优惠券|消费券|商家券|消费金|花呗金|体验金|鼓励金|淘金币|京豆|美团红包|美团津贴|美团神券|神券|下单返现|配送费|打包费|餐盒费|餐具费|运费|折扣|抵扣|抵用|补贴|减免|已减|共减|直降|免单|返现|笔笔攒|运费险|组合支付|集分宝|已省|共省|立省|省了|省钱|节省|支付宝红包(?!$)|红包(?!$)|使用\\s*[0-9.]+\\s*元|满\\s*[0-9.]+\\s*减\\s*[0-9.]+|当前余额|可用余额|账户余额|卡内余额|卡余额|卡上余额|剩余金额|剩余余额|余额|尾号|卡号)"
         )
         private val MERCHANT_ACTION_PREFIX_REGEX = Regex("^(?:向|给|付款给|转账给|转给|在)\\s*")
-        private val MERCHANT_ACTION_SUFFIX_REGEX = Regex("\\s*(?:付款|支付|转账|消费|收款)$")
+        private val MERCHANT_ACTION_SUFFIX_REGEX = Regex(
+            "\\s*(?:确认收款|确认收钱|已收款|已收钱|待确认|发红包|收红包|付款|支付|转账|消费|收款|确认|完成|复制|查看|详情)$"
+        )
+        private val MERCHANT_PENDING_WRAPPER_REGEX = Regex(
+            "^(?:请?等待?|请?待)(.+?)(?:确认收款|确认收钱|确认领取|确认|收款|收钱|领取|查收)$"
+        )
+        private val MERCHANT_FROM_WRAPPER_REGEX = Regex(
+            "^来自(.+?)的(?:转账|红包|收款|付款)$"
+        )
+        private val TRAILING_MASKED_REALNAME_PAREN_REGEX = Regex(
+            "\\s*[(（]\\s*(?:[*＊]{1,4}[\\u4e00-\\u9fa5A-Za-z]{1,2}|[\\u4e00-\\u9fa5A-Za-z][*＊]{1,4})\\s*[)）]$"
+        )
         private val PURE_NUMBER_OR_CARD_REGEX = Regex("^[\\d*xX()（）\\s-]+$")
 
         private val UI_STOP_WORDS = setOf(
@@ -3154,15 +3365,21 @@ class ScreenBillParser(
             "支付成功", "付款成功", "交易成功", "消费成功", "转账成功", "汇款成功", "收款成功",
             "已收款", "已存入零钱", "退款成功", "已退款", "退款到账", "已退回",
             "完成", "返回", "关闭", "确定", "确认", "取消", "返回商家", "查看账单", "查看详情",
-            "查看零钱", "复制", "分享", "截屏", "投诉", "联系客服", "联系收款方", "常见问题",
-            "对订单有疑惑", "对此订单有疑问", "申请退款", "申请售后", "申请开票", "在此商户的交易记录",
-            "在此商户的交易", "账单服务", "发起群收款", "申请电子凭证", "本服务由财付通提供",
-            "定位到聊天位置", "查看往来记录", "全部账单", "查看红包详情", "红包详情",
+            "查看零钱", "复制", "分享", "截屏", "投诉", "联系客服", "联系收款方", "联系商户", "常见问题",
+            "对订单有疑惑", "对此订单有疑问", "对订单有疑问", "申请退款", "申请售后", "申请开票", "在此商户的交易记录",
+            "在此商户的交易", "账单服务", "发起群收款", "申请电子凭证", "申请转账电子凭证", "本服务由财付通提供",
+            "定位到聊天位置", "查看往来记录", "查看往来转账", "全部账单", "查看红包详情", "红包详情",
             "复制链接", "在浏览器打开", "在默认浏览器打开", "刷新", "搜索页面内容", "字体大小", "调整字体", "浮窗",
             "发送给朋友", "分享到朋友圈",
             "更多", "删除账单", "标签和备注", "添加备注", "备注…", "备注...", "分类", "计入收支", "不计入收支",
-            "联系商家", "aa收款", "查看往来记录", "往来流水证明", "申请电子回单",
+            "联系商家", "aa收款", "往来流水证明", "申请电子回单",
             "账单管理", "我的消费图鉴", "为您推荐", "服务详情", "进入小程序", "转账红包",
+            "回首页", "返回首页", "回到首页", "去首页", "首页", "返回上一页", "返回应用", "返回app",
+            "返回微信", "返回支付宝", "回到商家", "继续逛逛", "我知道了", "知道了", "好的", "跳过",
+            "下一步", "立即体验", "去看看", "查看订单", "查看账单详情", "支付完成", "付款完成",
+            "已完成", "关闭页面", "收起", "展开", "分享给好友", "保存图片", "再来一单",
+            "去评价", "立即评价", "开发中", "加载中", "加载中...",
+            "待确认", "待收款", "待确认收款", "待确认收钱", "对方", "朋友", "发红包",
             "添加", "去添加", "点击添加", "请选择", "开关", "未设置", "暂无", "去设置",
             "微信", "微信支付", "微信收款助手", "支付宝", "云闪付", "财付通",
             "小米钱包", "小米智能卡", "华为钱包", "荣耀钱包", "oppo钱包", "vivo钱包", "三星智付",
@@ -3186,6 +3403,51 @@ class ScreenBillParser(
             RegexOption.IGNORE_CASE
         )
 
+        private val DISCOUNT_BREAKDOWN_CLASSIFY_NOISE_REGEX = Regex(
+            "(?:支付宝红包|美团红包|红包抵扣|红包优惠|立减金|微信立减金|碰一下立减|官方立减|店铺立减|跨店满减|满减|消费券|代金券|优惠券|商家券|组合支付|笔笔攒|抵扣金)\\s*(?:[+-]?\\s*[¥￥$€£₩]?\\s*[0-9]+(?:\\.[0-9]{1,2})?|[+-]\\s*[0-9]+)",
+            RegexOption.IGNORE_CASE
+        )
+
+        private val P2P_PRESERVED_LABEL_MERCHANTS = setOf(
+            "支付宝红包", "微信红包", "qq红包", "企业微信红包"
+        )
+
+        private val P2P_COMMERCIAL_EXCLUSION_MARKERS = listOf(
+            "扫二维码付款", "二维码付款", "扫码付款", "扫二维码收款", "二维码收款", "扫码收款",
+            "向商户付款", "向商家付款", "收款商户", "收款商户全称", "收单机构", "清算机构",
+            "在此商户的交易", "商户单号", "商户订单号", "商家订单号"
+        )
+
+        private val P2P_CONTEXT_MARKERS = listOf(
+            "口令红包", "收到口令红包", "发口令红包", "支付宝红包", "微信红包", "qq红包", "企业微信红包",
+            "转账给", "转账说明", "转账备注", "转账单号", "转账对象", "转账时间", "收钱时间",
+            "微信转账", "支付宝转账", "个人转账", "好友转账", "面对面红包", "拼手气红包",
+            "红包说明", "发红包时间", "收红包时间", "红包个数", "查看红包详情",
+            "对方已收钱", "对方已收款", "对方已领取", "已被领完", "等待对方收钱", "等待对方收款",
+            "待确认收钱", "待确认收款", "朋友已确认收钱",
+            "查看往来转账", "申请转账电子凭证", "定位到聊天位置"
+        )
+
+        private val P2P_TRANSFER_LINE_REGEX = Regex(
+            "(?:(?:向|给|来自).{1,24}(?:转账|红包)|(?:待|等待).{1,24}(?:确认收钱|确认收款|确认领取))"
+        )
+
+        private val COMMERCIAL_ENTITY_KEYWORDS = listOf(
+            "餐饮", "餐馆", "餐厅", "饭店", "饭馆", "食堂", "面馆", "粉馆", "汤馆", "小馆", "小厨", "食府",
+            "茶餐厅", "火锅", "烧烤", "烤肉", "烤鱼", "麻辣烫", "奶茶", "咖啡", "烘焙", "蛋糕", "面包",
+            "小吃", "早餐", "夜宵", "大排档", "胡辣汤", "煎饼", "拉面", "米线", "酸辣粉",
+            "商超", "超市", "便利店", "百货", "商场", "商店", "小店", "小铺", "店铺", "门店", "专柜",
+            "旗舰店", "专卖店", "专营店", "官方店", "自营店", "自营",
+            "大药房", "药房", "药店", "医院", "诊所", "口腔", "门诊",
+            "公司", "有限公司", "有限责任公司", "经营部", "工作室", "个体户", "商户_",
+            "银行", "酒店", "宾馆", "民宿", "客栈", "影城", "影院", "美容", "理发", "美发", "美甲",
+            "健身", "宠物", "书店", "加油站", "停车场", "航空", "铁路", "外卖", "商城", "平台",
+            "coffee", "cafe", "shop", "store", "mart", "market", "mall", "inc", "ltd", "llc",
+            "corp", "studio", "hotel", "restaurant", "clinic", "hospital"
+        )
+
+        private val COMMERCIAL_STORE_SUFFIX_REGEX = Regex("店(?:[(（][^()（）]+[)）])?$")
+
         private val QR_EXPENSE_PAYEE_REGEX = Regex(
             "(?:扫二维码付款|二维码付款|扫码付款|向商户付款|向商家付款)\\s*(?:[-—–:：]\\s*)?给\\s*(.+)"
         )
@@ -3201,14 +3463,20 @@ class ScreenBillParser(
         )
 
         private val MASKED_PERSONAL_NAME_REGEX = Regex(
-            "^(?:\\*{1,3}[\\u4e00-\\u9fa5A-Za-z]{1,2}|[\\u4e00-\\u9fa5A-Za-z]\\*{1,3})$"
+            "^(?:[*＊]{1,4}[\\u4e00-\\u9fa5A-Za-z]{1,2}|[\\u4e00-\\u9fa5A-Za-z][*＊]{1,4}|[*＊]{2,4})$"
         )
 
         private val CHROME_NOISE_LINES = setOf(
-            "返回", "复制", "已复制", "copy", "常见问题", "对订单有疑惑", "对此订单有疑问",
+            "返回", "复制", "已复制", "copy", "常见问题", "对订单有疑惑", "对此订单有疑问", "对订单有疑问",
             "在此商户的交易记录", "申请开票", "标签和备注", "添加备注", "备注…", "备注...",
-            "联系商家", "aa收款", "查看往来记录", "往来流水证明", "申请电子回单",
+            "联系商家", "联系商户", "aa收款", "查看往来记录", "查看往来转账", "往来流水证明",
+            "申请电子回单", "申请转账电子凭证",
             "账单管理", "我的消费图鉴", "为您推荐", "服务详情", "进入小程序",
+            "回首页", "返回首页", "回到首页", "去首页", "首页", "返回上一页", "返回应用", "返回app",
+            "返回微信", "返回支付宝", "回到商家", "继续逛逛", "我知道了", "知道了", "好的", "跳过",
+            "下一步", "立即体验", "去看看", "查看订单", "查看账单详情", "支付完成", "付款完成",
+            "已完成", "关闭页面", "收起", "展开", "分享给好友", "保存图片", "再来一单",
+            "去评价", "立即评价", "开发中", "加载中", "加载中...",
             "添加", "去添加", "点击添加", "请选择", "开关", "未设置", "暂无", "去设置", "删除账单"
         )
 

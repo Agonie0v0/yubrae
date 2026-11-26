@@ -62,6 +62,8 @@ public struct QuickRecordSheet: View {
 
     @State private var showDeleteConfirm = false
     @State private var validationMessage: String?
+    @State private var inSheetToast: String?
+    @State private var inSheetToastTask: Task<Void, Never>?
 
     @FocusState private var noteFocused: Bool
 
@@ -180,47 +182,57 @@ public struct QuickRecordSheet: View {
     }
 
     public var body: some View {
-        VStack(spacing: 0) {
-            topHeaderBar
-            amountAndCategoryBanner
-            if let validationMessage {
-                Text(validationMessage)
-                    .font(.caption.weight(.medium))
-                    .foregroundColor(palette.dangerColor)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 14)
-                    .padding(.bottom, 4)
-            }
+        ZStack(alignment: .top) {
+            VStack(spacing: 0) {
+                topHeaderBar
+                amountAndCategoryBanner
+                if let validationMessage {
+                    Text(validationMessage)
+                        .font(.caption.weight(.medium))
+                        .foregroundColor(palette.dangerColor)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 14)
+                        .padding(.bottom, 4)
+                }
 
-            mainWorkspaceArea
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                mainWorkspaceArea
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-            Divider().overlay(palette.outline)
+                Divider().overlay(palette.outline)
 
-            workbenchAttrBar
-            if activePanel != .tags && !selectedTags.isEmpty {
-                selectedTagsSummaryStrip
-            }
-            independentNoteRow
+                workbenchAttrBar
+                if activePanel != .tags && !selectedTags.isEmpty {
+                    selectedTagsSummaryStrip
+                }
+                independentNoteRow
 
-            Divider().overlay(palette.outline)
+                Divider().overlay(palette.outline)
 
-            Group {
-                if shouldShowKeypad {
-                    calculatorKeypadView
-                } else {
-                    collapsedBottomSaveBar
+                Group {
+                    if shouldShowKeypad {
+                        calculatorKeypadView
+                    } else {
+                        collapsedBottomSaveBar
+                    }
+                }
+                .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
+                    isKeyboardVisible = true
+                }
+                .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+                    isKeyboardVisible = false
+                    noteFocused = false
                 }
             }
-            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
-                isKeyboardVisible = true
-            }
-            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
-                isKeyboardVisible = false
-                noteFocused = false
+            .background(palette.background.ignoresSafeArea())
+
+            if let toastText = inSheetToast {
+                YubraeToastBanner(text: toastText, isError: false)
+                    .padding(.top, 10)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .zIndex(50)
+                    .allowsHitTesting(false)
             }
         }
-        .background(palette.background.ignoresSafeArea())
         .onChange(of: amountExpr) { _ in
             validationMessage = nil
         }
@@ -259,6 +271,10 @@ public struct QuickRecordSheet: View {
                     store.lastErrorMessage = error.localizedDescription
                 }
             }
+        }
+        .onDisappear {
+            inSheetToastTask?.cancel()
+            inSheetToastTask = nil
         }
     }
 
@@ -1873,7 +1889,7 @@ public struct QuickRecordSheet: View {
         )
         selectedCategoryId = saved.id
         isCreatingCategory = false
-        store.toastMessage = "已新建分类「\(saved.name)」"
+        showInSheetToast("已新建分类「\(saved.name)」")
     }
 
     private func quickCreateAndSelectTag(name: String) {
@@ -1978,13 +1994,30 @@ public struct QuickRecordSheet: View {
                 manualToAmountText = ""
                 activePanel = .category
                 dismissSystemKeyboard()
-                store.toastMessage = "已记一笔，可继续记录"
+                showInSheetToast("已记一笔，可继续记录")
             } else {
                 store.toastMessage = editingTransaction == nil ? "已保存一笔新账单" : "账单修改已保存"
                 dismiss()
             }
         } catch {
             validationMessage = error.localizedDescription
+        }
+    }
+
+    private func showInSheetToast(_ message: String) {
+        inSheetToastTask?.cancel()
+        withAnimation(.spring(response: 0.32, dampingFraction: 0.85)) {
+            inSheetToast = message
+        }
+        inSheetToastTask = Task {
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                guard !Task.isCancelled else { return }
+                withAnimation(.easeOut(duration: 0.22)) {
+                    inSheetToast = nil
+                }
+            }
         }
     }
 }

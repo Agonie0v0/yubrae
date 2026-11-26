@@ -132,6 +132,11 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 
+internal fun shouldDisplayInRootSnackbarHost(
+    latestShowQuickRecord: Boolean,
+    currentShowQuickRecord: Boolean
+): Boolean = !(latestShowQuickRecord && currentShowQuickRecord)
+
 private data class BottomTabItem(
     val index: Int,
     val label: String,
@@ -272,10 +277,13 @@ fun KairoAppRoot(
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
 
-    // 监听 ViewModel 全局 SnackBar 提示
+    // 监听 ViewModel 全局 SnackBar 提示（全屏记账页展示期间跳过底层重复弹窗）
+    val latestShowQuickRecord by rememberUpdatedState(showQuickRecord)
     LaunchedEffect(viewModel) {
         viewModel.snackbarEvents.collect { msg ->
-            snackbarHostState.showSnackbar(msg)
+            if (shouldDisplayInRootSnackbarHost(latestShowQuickRecord, showQuickRecord)) {
+                snackbarHostState.showSnackbar(msg)
+            }
         }
     }
 
@@ -748,6 +756,60 @@ fun KairoAppRoot(
                             bottom = snackbarBottomPadding
                         )
                 )
+
+                val dismissQuickRecord = {
+                    showQuickRecord = false
+                    editingTransaction = null
+                    refundOriginTransaction = null
+                }
+                BackHandler(enabled = showQuickRecord) {
+                    dismissQuickRecord()
+                }
+
+                if (showQuickRecord) {
+                    val activeAccounts by viewModel.activeAccounts.collectAsStateWithLifecycle()
+                    val categories by viewModel.categories.collectAsStateWithLifecycle()
+                    val ledgers by viewModel.ledgers.collectAsStateWithLifecycle()
+                    val tags by viewModel.tags.collectAsStateWithLifecycle()
+                    val resolvedLedgerId = settings.activeLedgerId.takeIf { id ->
+                        id > 0L && ledgers.any { it.id == id && !it.archived }
+                    } ?: viewModel.firstActiveLedgerId(ledgers) ?: 0L
+                    QuickRecordSheet(
+                        viewModel = viewModel,
+                        accounts = activeAccounts,
+                        categories = categories,
+                        pinnedCurrencies = settings.pinnedCurrencies,
+                        baseCurrency = settings.baseCurrency,
+                        existingTransaction = editingTransaction,
+                        initialType = quickRecordInitialType,
+                        initialAccountId = quickRecordInitialAccountId,
+                        ledgers = ledgers,
+                        initialLedgerId = resolvedLedgerId,
+                        refundOfTransaction = refundOriginTransaction,
+                        llmEnabled = settings.llmEnabled,
+                        onAnalyzeReceiptImage = { path -> viewModel.parseReceiptImage(path) },
+                        onOpenCategoryManager = {
+                            dismissQuickRecord()
+                            overlayKind = OverlayRouteKinds.CATEGORIES
+                        },
+                        availableTags = tags,
+                        onQuickCreateTag = { name, colorHex ->
+                            viewModel.saveTag(
+                                TagEntity(
+                                    name = name,
+                                    groupName = "自定义",
+                                    colorHex = colorHex,
+                                    sortOrder = 300,
+                                    isSystem = false
+                                )
+                            )
+                        },
+                        onQuickCreateCategory = { category ->
+                            viewModel.createCategoryAndReturnId(category)
+                        },
+                        onDismiss = dismissQuickRecord
+                    )
+                }
                 }
 
                 // 后台多任务卡片隐私磨砂遮罩
@@ -802,57 +864,6 @@ fun KairoAppRoot(
                         errorMessage = lockError
                     )
                 }
-            }
-
-            if (showQuickRecord) {
-                val activeAccounts by viewModel.activeAccounts.collectAsStateWithLifecycle()
-                val categories by viewModel.categories.collectAsStateWithLifecycle()
-                val ledgers by viewModel.ledgers.collectAsStateWithLifecycle()
-                val tags by viewModel.tags.collectAsStateWithLifecycle()
-                val resolvedLedgerId = settings.activeLedgerId.takeIf { id ->
-                    id > 0L && ledgers.any { it.id == id && !it.archived }
-                } ?: viewModel.firstActiveLedgerId(ledgers) ?: 0L
-                QuickRecordSheet(
-                    viewModel = viewModel,
-                    accounts = activeAccounts,
-                    categories = categories,
-                    pinnedCurrencies = settings.pinnedCurrencies,
-                    baseCurrency = settings.baseCurrency,
-                    existingTransaction = editingTransaction,
-                    initialType = quickRecordInitialType,
-                    initialAccountId = quickRecordInitialAccountId,
-                    ledgers = ledgers,
-                    initialLedgerId = resolvedLedgerId,
-                    refundOfTransaction = refundOriginTransaction,
-                    llmEnabled = settings.llmEnabled,
-                    onAnalyzeReceiptImage = { path -> viewModel.parseReceiptImage(path) },
-                    onOpenCategoryManager = {
-                        showQuickRecord = false
-                        editingTransaction = null
-                        refundOriginTransaction = null
-                        overlayKind = OverlayRouteKinds.CATEGORIES
-                    },
-                    availableTags = tags,
-                    onQuickCreateTag = { name, colorHex ->
-                        viewModel.saveTag(
-                            TagEntity(
-                                name = name,
-                                groupName = "自定义",
-                                colorHex = colorHex,
-                                sortOrder = 300,
-                                isSystem = false
-                            )
-                        )
-                    },
-                    onQuickCreateCategory = { category ->
-                        viewModel.createCategoryAndReturnId(category)
-                    },
-                    onDismiss = {
-                        showQuickRecord = false
-                        editingTransaction = null
-                        refundOriginTransaction = null
-                    }
-                )
             }
 
             if (showLedgerSheet) {

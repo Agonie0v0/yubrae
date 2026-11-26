@@ -454,4 +454,47 @@ class LocalRuleParserTest {
         )
         assertEquals("三餐外食", noodleCat?.name)
     }
+
+    @Test
+    fun distinguishesAlipayPasswordRedPacketFromWeChatRedPacketCategory() = runTest {
+        val fullCatDao = FakeCategoryDao()
+        DefaultSeedData.ensurePresetCategories(fullCatDao)
+        val fullCategories = fullCatDao.getAll()
+
+        val alipayReceiveRedPacketCat = parser.resolveCategory(
+            type = TransactionType.INCOME,
+            merchant = "",
+            fullText = "收到口令红包 账户余额 红包",
+            ruleDefaultCategoryName = "其他收入",
+            categories = fullCategories
+        )
+        assertEquals("人情礼金", alipayReceiveRedPacketCat?.name)
+
+        val wechatReceiveRedPacketCat = parser.resolveCategory(
+            type = TransactionType.INCOME,
+            merchant = "微信红包",
+            fullText = "微信红包 已存入零钱",
+            ruleDefaultCategoryName = "其他收入",
+            categories = fullCategories
+        )
+        assertEquals("微信红包", wechatReceiveRedPacketCat?.name)
+
+        val alipaySendRedPacketCat = parser.resolveCategory(
+            type = TransactionType.EXPENSE,
+            merchant = "支付宝红包",
+            fullText = "支付宝红包 发口令红包",
+            ruleDefaultCategoryName = "其他支出",
+            categories = fullCategories
+        )
+        assertEquals("红包礼金", alipaySendRedPacketCat?.name)
+
+        val wechatSendRedPacketCat = parser.resolveCategory(
+            type = TransactionType.EXPENSE,
+            merchant = "微信红包",
+            fullText = "微信红包 发红包",
+            ruleDefaultCategoryName = "其他支出",
+            categories = fullCategories
+        )
+        assertEquals("红包礼金", wechatSendRedPacketCat?.name)
+    }
 }

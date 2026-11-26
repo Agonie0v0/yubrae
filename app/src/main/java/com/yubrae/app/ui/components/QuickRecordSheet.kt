@@ -13,6 +13,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -21,19 +22,21 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.isImeVisible
-import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -84,7 +87,6 @@ import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -97,21 +99,16 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
-import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
-import androidx.compose.ui.window.DialogWindowProvider
-import androidx.core.view.WindowCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.yubrae.app.core.contract.ConversionPreview
 import com.yubrae.app.core.contract.ParsedBillDraft
@@ -140,6 +137,14 @@ import java.time.LocalDateTime
 import java.time.LocalTime
 import java.time.ZoneId
 import java.time.ZoneOffset
+
+internal fun quickRecordKeypadKeyHeightDp(screenHeightDp: Int): Int =
+    if (screenHeightDp < 660) 40 else 44
+
+internal fun shouldShowQuickRecordKeypad(
+    isSystemImeVisible: Boolean,
+    imeInputFocused: Boolean
+): Boolean = !isSystemImeVisible && !imeInputFocused
 
 private enum class RecordWorkspacePanel {
     CATEGORY,
@@ -705,66 +710,57 @@ fun QuickRecordSheet(
         count
     }
 
-    Dialog(
-        onDismissRequest = onDismiss,
-        properties = DialogProperties(
-            usePlatformDefaultWidth = false,
-            decorFitsSystemWindows = false
-        )
+    val focusManager = LocalFocusManager.current
+    val isSystemImeVisible = rememberIsSystemImeVisible()
+    var hasSeenImeSinceFocus by remember { mutableStateOf(false) }
+    LaunchedEffect(isSystemImeVisible) {
+        if (isSystemImeVisible) {
+            hasSeenImeSinceFocus = true
+        } else if (hasSeenImeSinceFocus) {
+            hasSeenImeSinceFocus = false
+            imeInputFocused = false
+            focusManager.clearFocus()
+        }
+    }
+    LaunchedEffect(imeInputFocused, clearFocusNonce) {
+        if (!imeInputFocused) {
+            focusManager.clearFocus()
+        }
+    }
+    val showKeypad = shouldShowQuickRecordKeypad(
+        isSystemImeVisible = isSystemImeVisible,
+        imeInputFocused = imeInputFocused
+    )
+
+    val sheetBgColor = yubraeSheetContainerColor()
+    val screenHeightDp = LocalConfiguration.current.screenHeightDp
+    val keypadKeyHeight = quickRecordKeypadKeyHeightDp(screenHeightDp).dp
+
+    val localSnackbarHostState = remember { SnackbarHostState() }
+    LaunchedEffect(viewModel) {
+        viewModel.snackbarEvents.collectLatest { msg ->
+            localSnackbarHostState.currentSnackbarData?.dismiss()
+            localSnackbarHostState.showSnackbar(msg)
+        }
+    }
+
+    Surface(
+        modifier = Modifier
+            .fillMaxSize()
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = {}
+            ),
+        color = sheetBgColor
     ) {
-        val focusManager = LocalFocusManager.current
-        val isSystemImeVisible = rememberIsSystemImeVisible()
-        var hasSeenImeSinceFocus by remember { mutableStateOf(false) }
-        LaunchedEffect(isSystemImeVisible) {
-            if (isSystemImeVisible) {
-                hasSeenImeSinceFocus = true
-            } else if (hasSeenImeSinceFocus) {
-                hasSeenImeSinceFocus = false
-                imeInputFocused = false
-                focusManager.clearFocus()
-            }
-        }
-        LaunchedEffect(imeInputFocused, clearFocusNonce) {
-            if (!imeInputFocused) {
-                focusManager.clearFocus()
-            }
-        }
-        val showKeypad = !isSystemImeVisible && !imeInputFocused
-
-        val dialogView = LocalView.current
-        val sheetBgColor = yubraeSheetContainerColor()
-        val isLightSheet = sheetBgColor.luminance() > 0.5f
-        if (!dialogView.isInEditMode) {
-            SideEffect {
-                val dialogWindow = (dialogView.parent as? DialogWindowProvider)?.window
-                if (dialogWindow != null) {
-                    val controller = WindowCompat.getInsetsController(dialogWindow, dialogView)
-                    controller.isAppearanceLightStatusBars = isLightSheet
-                    controller.isAppearanceLightNavigationBars = isLightSheet
-                }
-            }
-        }
-
-        val localSnackbarHostState = remember { SnackbarHostState() }
-        LaunchedEffect(viewModel) {
-            viewModel.snackbarEvents.collectLatest { msg ->
-                localSnackbarHostState.currentSnackbarData?.dismiss()
-                localSnackbarHostState.showSnackbar(msg)
-            }
-        }
-
-        Surface(
-            modifier = Modifier.fillMaxSize(),
-            color = sheetBgColor
-        ) {
-            Box(modifier = Modifier.fillMaxSize()) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .statusBarsPadding()
-                        .navigationBarsPadding()
-                        .imePadding()
-                ) {
+        Box(modifier = Modifier.fillMaxSize()) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .statusBarsPadding()
+                    .windowInsetsPadding(WindowInsets.navigationBars.union(WindowInsets.ime))
+            ) {
             // 1. 顶栏：三槽等重 Row，左(删除/账本) | 中(支出/收入/转账) | 右(关闭)，彻底防止长账本名与分段器重叠
             Row(
                 modifier = Modifier
@@ -1734,7 +1730,7 @@ fun QuickRecordSheet(
                     saveLabel = if (isEditMode) "保存" else "完成",
                     showSaveAndContinue = !isEditMode && !isRefundMode,
                     onSaveAndContinue = { saveWithMode(true) },
-                    keyHeight = 44.dp
+                    keyHeight = keypadKeyHeight
                 )
             } else {
                 Row(
@@ -1782,17 +1778,15 @@ fun QuickRecordSheet(
                     }
                 }
             }
-                }
-
-                SnackbarHost(
-                    hostState = localSnackbarHostState,
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .navigationBarsPadding()
-                        .imePadding()
-                        .padding(horizontal = 16.dp, vertical = 12.dp)
-                )
             }
+
+            SnackbarHost(
+                hostState = localSnackbarHostState,
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .statusBarsPadding()
+                    .padding(top = 56.dp, start = 16.dp, end = 16.dp)
+            )
         }
     }
 
