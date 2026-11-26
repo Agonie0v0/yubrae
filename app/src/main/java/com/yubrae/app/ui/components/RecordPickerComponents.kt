@@ -114,20 +114,27 @@ private val QUICK_CATEGORY_ICON_KEYS: List<String> = listOf(
 
 private val QUICK_TAG_ICON_KEYS: List<String> = listOf(
     "",
-    "delivery_dining",
-    "shopping_cart",
-    "storefront",
-    "subway",
-    "flight",
-    "celebration",
-    "verified",
-    "subscriptions",
-    "local_offer",
-    "receipt_long",
-    "person",
-    "favorite",
-    "pets",
-    "diamond"
+    "tag_pdd",
+    "tag_taobao",
+    "tag_jd",
+    "tag_meituan",
+    "tag_offline",
+    "tag_crossborder",
+    "tag_commute",
+    "tag_businesstrip",
+    "tag_travel",
+    "tag_stockup",
+    "tag_essential",
+    "tag_installment",
+    "tag_discount",
+    "tag_impulse",
+    "tag_large",
+    "tag_self",
+    "tag_family",
+    "tag_partner",
+    "tag_aa",
+    "tag_taxdeduct",
+    "tag_renovation"
 )
 
 private val SMART_TIME_FORMATTER = DateTimeFormatter.ofPattern("HH:mm")
@@ -1138,13 +1145,18 @@ internal fun GroupedTagPickerPanel(
     val triggerCreate: () -> Unit = {
         if (trimmedQuery.isNotEmpty() && !isCreating) {
             isCreating = true
+            val suggested = RecordUsageRanker.suggestTagStyle(trimmedQuery)
             val resolvedColor = if (showCreateStyleDrawer) {
                 newTagColor
             } else {
-                KairoIcons.fallbackTagColorHex(trimmedQuery)
+                suggested.second
             }
             val resolvedGroup = if (showCreateStyleDrawer) newTagGroup else "自定义"
-            val resolvedIcon = if (showCreateStyleDrawer) newTagIcon else ""
+            val resolvedIcon = if (showCreateStyleDrawer && newTagIcon.isNotBlank()) {
+                newTagIcon
+            } else {
+                suggested.first
+            }
             coroutineScope.launch {
                 onQuickCreateTag(trimmedQuery, resolvedGroup, resolvedColor, resolvedIcon)
                 searchQuery = ""
@@ -1381,7 +1393,6 @@ internal fun GroupedTagPickerPanel(
                             LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                                 items(QUICK_TAG_ICON_KEYS, key = { "ti_$it" }) { key ->
                                     val selected = newTagIcon == key
-                                    val iconVec = if (key.isEmpty()) null else KairoIcons.tagIcon(key)
                                     Surface(
                                         shape = CircleShape,
                                         color = if (selected) {
@@ -1396,18 +1407,17 @@ internal fun GroupedTagPickerPanel(
                                             .clickable { newTagIcon = key }
                                     ) {
                                         Box(contentAlignment = Alignment.Center) {
-                                            if (iconVec == null) {
+                                            if (key.isEmpty()) {
                                                 Text(
-                                                    text = "无",
-                                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                                                    text = "自动",
+                                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp),
                                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                                 )
                                             } else {
-                                                Icon(
-                                                    imageVector = iconVec,
-                                                    contentDescription = null,
-                                                    tint = Color(newTagColor),
-                                                    modifier = Modifier.size(15.dp)
+                                                CartoonCategoryIcon(
+                                                    iconKey = key,
+                                                    size = 18.dp,
+                                                    fallbackColorHex = newTagColor
                                                 )
                                             }
                                         }

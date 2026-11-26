@@ -9,11 +9,14 @@ import com.yubrae.app.data.db.AccountAliasEntity
 import com.yubrae.app.data.db.AccountEntity
 import com.yubrae.app.data.db.AccountGroup
 import com.yubrae.app.data.db.AliasMatchType
+import com.yubrae.app.data.db.BudgetEntity
 import com.yubrae.app.data.db.CaptureChannel
 import com.yubrae.app.data.db.CategoryEntity
 import com.yubrae.app.data.db.DefaultSeedData
+import com.yubrae.app.data.db.InstallmentPlanEntity
 import com.yubrae.app.data.db.LedgerEntity
 import com.yubrae.app.data.db.ParseRuleEntity
+import com.yubrae.app.data.db.RecurringRuleEntity
 import com.yubrae.app.data.db.TagEntity
 import com.yubrae.app.data.db.TagTextCodec
 import com.yubrae.app.data.db.TransactionEntity
@@ -118,33 +121,34 @@ class DefaultSeedDataTest {
         val customExisting = all.first { it.name == "外卖" }
         assertEquals(customSameNameId, customExisting.id)
         assertEquals("自定义组", customExisting.groupName)
-        assertEquals("", customExisting.icon)
+        assertTrue(customExisting.icon.isNotBlank())
+        assertFalse(customExisting.icon in all.filter { it.isSystem }.map { it.icon })
 
-        assertEquals("family_restroom", all.first { it.id == legacyFamilyId }.icon)
-        assertEquals("add_shopping_cart", all.first { it.id == legacyStockupId }.icon)
+        assertEquals("tag_family", all.first { it.id == legacyFamilyId }.icon)
+        assertEquals("tag_stockup", all.first { it.id == legacyStockupId }.icon)
 
         val expectedIcons = mapOf(
-            "拼多多" to "loyalty",
-            "淘宝" to "shopping_bag",
-            "京东" to "local_shipping",
-            "美团" to "fastfood",
-            "线下" to "storefront",
-            "跨境" to "public",
-            "通勤" to "subway",
-            "差旅" to "luggage",
-            "旅行" to "flight",
-            "大促囤货" to "add_shopping_cart",
-            "刚需" to "verified",
-            "分期" to "credit_card",
-            "优惠立减" to "local_offer",
-            "冲动消费" to "bolt",
-            "大额" to "diamond",
-            "自己" to "person",
-            "家人" to "family_restroom",
-            "伴侣" to "favorite",
-            "AA" to "groups",
-            "可抵税" to "calculate",
-            "装修" to "handyman"
+            "拼多多" to "tag_pdd",
+            "淘宝" to "tag_taobao",
+            "京东" to "tag_jd",
+            "美团" to "tag_meituan",
+            "线下" to "tag_offline",
+            "跨境" to "tag_crossborder",
+            "通勤" to "tag_commute",
+            "差旅" to "tag_businesstrip",
+            "旅行" to "tag_travel",
+            "大促囤货" to "tag_stockup",
+            "刚需" to "tag_essential",
+            "分期" to "tag_installment",
+            "优惠立减" to "tag_discount",
+            "冲动消费" to "tag_impulse",
+            "大额" to "tag_large",
+            "自己" to "tag_self",
+            "家人" to "tag_family",
+            "伴侣" to "tag_partner",
+            "AA" to "tag_aa",
+            "可抵税" to "tag_taxdeduct",
+            "装修" to "tag_renovation"
         )
         assertEquals(21, expectedIcons.size)
         expectedIcons.forEach { (name, iconKey) ->
@@ -189,6 +193,20 @@ class DefaultSeedDataTest {
         assertTrue(tagIcons.all { it.isNotBlank() && CartoonCategoryIcons.hasBespokeIcon(it) })
         assertEquals(21, tagIcons.toSet().size)
         assertEquals(21, tagIcons.mapNotNull { KairoIcons.tagIcon(it) }.toSet().size)
+
+        // 4. 全部 115 分类 + 21 标签共计 136 个图标键与卡通绘图全局 100% 唯一、零跨界撞图
+        val combinedIcons = catIcons + tagIcons
+        assertEquals(136, combinedIcons.toSet().size)
+        val combinedVariants = combinedIcons.map { CartoonCategoryIcons.resolveVisualVariantId(it) }.toSet()
+        assertEquals(
+            "Expected 136 globally unique cartoon drawings across 115 categories + 21 tags, got ${combinedVariants.size}",
+            136,
+            combinedVariants.size
+        )
+        assertTrue(
+            CartoonCategoryIcons.resolveVisualVariantId("more_horiz") !=
+                CartoonCategoryIcons.resolveVisualVariantId("category")
+        )
     }
 
     @Test
@@ -415,8 +433,264 @@ class DefaultSeedDataTest {
         assertFalse(ledgerDao.getAll().any { it.name == "默认账本" })
         assertEquals(21, tagDao.getAll().size)
         assertTrue(tagDao.getAll().all { it.icon.isNotBlank() })
-        assertEquals("loyalty", tagDao.getAll().first { it.name == "拼多多" }.icon)
-        assertEquals("family_restroom", tagDao.getAll().first { it.name == "家人" }.icon)
+        assertEquals("tag_pdd", tagDao.getAll().first { it.name == "拼多多" }.icon)
+        assertEquals("tag_family", tagDao.getAll().first { it.name == "家人" }.icon)
+    }
+
+    @Test
+    fun ensurePresetCategories_mergesYimuSynonymParentsAndRepairsAllSubcategoryAndTagIcons() = runTest {
+        val categoryDao = FakeCategoryDao()
+        val transactionDao = FakeTransactionDao()
+        val budgetDao = FakeBudgetDao()
+        val recurringRuleDao = FakeRecurringRuleDao()
+        val installmentPlanDao = FakeInstallmentPlanDao()
+        val tagDao = FakeTagDao()
+
+        DefaultSeedData.ensurePresetCategories(categoryDao)
+        DefaultSeedData.ensurePresetTags(tagDao)
+
+        // 复现旧版导入后产生的同义大类及撞图/默认占位图标子分类
+        val impTravelId = categoryDao.insert(
+            CategoryEntity(parentId = null, name = "出行交通", type = TransactionType.EXPENSE, icon = "directions_car", colorHex = 0xFF0B57D0L, isSystem = false)
+        )
+        val impBusId = categoryDao.insert(
+            CategoryEntity(parentId = impTravelId, name = "公共交通", type = TransactionType.EXPENSE, icon = "directions_car", colorHex = 0xFF0B57D0L, isSystem = false)
+        )
+
+        val impShoppingId = categoryDao.insert(
+            CategoryEntity(parentId = null, name = "购物消费", type = TransactionType.EXPENSE, icon = "shopping_bag", colorHex = 0xFFDB2777L, isSystem = false)
+        )
+        val pinkBagChildNames = listOf(
+            "办公用品", "虚拟充值", "手机数码", "个护美妆", "日常家居",
+            "生活电器", "配饰腕表", "服务器", "服饰运动", "母婴玩具"
+        )
+        for (childName in pinkBagChildNames) {
+            categoryDao.insert(
+                CategoryEntity(
+                    parentId = impShoppingId,
+                    name = childName,
+                    type = TransactionType.EXPENSE,
+                    icon = "shopping_bag",
+                    colorHex = 0xFFDB2777L,
+                    isSystem = false
+                )
+            )
+        }
+
+        val impFoodId = categoryDao.insert(
+            CategoryEntity(parentId = null, name = "食品餐饮", type = TransactionType.EXPENSE, icon = "restaurant", colorHex = 0xFFEA580CL, isSystem = false)
+        )
+        categoryDao.insert(
+            CategoryEntity(parentId = impFoodId, name = "早餐", type = TransactionType.EXPENSE, icon = "ramen_dining", colorHex = 0xFFEA580CL, isSystem = false)
+        )
+        categoryDao.insert(
+            CategoryEntity(parentId = impFoodId, name = "晚餐", type = TransactionType.EXPENSE, icon = "ramen_dining", colorHex = 0xFFEA580CL, isSystem = false)
+        )
+        categoryDao.insert(
+            CategoryEntity(parentId = impFoodId, name = "休闲零食", type = TransactionType.EXPENSE, icon = "bakery_dining", colorHex = 0xFFEA580CL, isSystem = false)
+        )
+
+        val impHomeId = categoryDao.insert(
+            CategoryEntity(parentId = null, name = "居家生活", type = TransactionType.EXPENSE, icon = "home", colorHex = 0xFF0B57D0L, isSystem = false)
+        )
+        val impElectricId = categoryDao.insert(
+            CategoryEntity(parentId = impHomeId, name = "电费", type = TransactionType.EXPENSE, icon = "category", colorHex = 0xFF0B57D0L, isSystem = false)
+        )
+        val impBroadbandId = categoryDao.insert(
+            CategoryEntity(parentId = impHomeId, name = "话费宽带", type = TransactionType.EXPENSE, icon = "category", colorHex = 0xFF0B57D0L, isSystem = false)
+        )
+        for (childName in listOf("房租还贷", "水费", "物业费", "快递费", "燃气费")) {
+            categoryDao.insert(
+                CategoryEntity(
+                    parentId = impHomeId,
+                    name = childName,
+                    type = TransactionType.EXPENSE,
+                    icon = "category",
+                    colorHex = 0xFF0B57D0L,
+                    isSystem = false
+                )
+            )
+        }
+
+        val impSocialId = categoryDao.insert(
+            CategoryEntity(parentId = null, name = "送礼人情", type = TransactionType.EXPENSE, icon = "card_giftcard", colorHex = 0xFF0B57D0L, isSystem = false)
+        )
+        val impHealthId = categoryDao.insert(
+            CategoryEntity(parentId = null, name = "健康医疗", type = TransactionType.EXPENSE, icon = "medical_services", colorHex = 0xFF0B57D0L, isSystem = false)
+        )
+        val impOtherId = categoryDao.insert(
+            CategoryEntity(parentId = null, name = "其他", type = TransactionType.EXPENSE, icon = "category", colorHex = 0xFF0B57D0L, isSystem = false)
+        )
+
+        // 空图标的导入标签
+        val impTagMealId = tagDao.insert(TagEntity(name = "聚餐", groupName = "导入", colorHex = 0xFFEC4899L, isSystem = false, icon = ""))
+        val impTagOvertimeId = tagDao.insert(TagEntity(name = "加班", groupName = "导入", colorHex = 0xFF0284C7L, isSystem = false, icon = ""))
+        val impTagCustomId = tagDao.insert(TagEntity(name = "咖啡续命", groupName = "导入", colorHex = 0xFF2AA876L, isSystem = false, icon = ""))
+
+        // 关联交易、预算、周期记账与分期计划
+        val txOnTravelId = transactionDao.insert(
+            TransactionEntity(
+                type = TransactionType.EXPENSE,
+                timestamp = 1_760_000_001_000L,
+                origAmountMicros = 2_000_000L,
+                origCurrency = "CNY",
+                accountId = 1L,
+                accountAmountMicros = 2_000_000L,
+                accountCurrency = "CNY",
+                categoryId = impTravelId
+            )
+        )
+        val txOnBroadbandId = transactionDao.insert(
+            TransactionEntity(
+                type = TransactionType.EXPENSE,
+                timestamp = 1_760_000_002_000L,
+                origAmountMicros = 10_000_000L,
+                origCurrency = "CNY",
+                accountId = 1L,
+                accountAmountMicros = 10_000_000L,
+                accountCurrency = "CNY",
+                categoryId = impBroadbandId
+            )
+        )
+        val txOnElectricId = transactionDao.insert(
+            TransactionEntity(
+                type = TransactionType.EXPENSE,
+                timestamp = 1_760_000_003_000L,
+                origAmountMicros = 8_000_000L,
+                origCurrency = "CNY",
+                accountId = 1L,
+                accountAmountMicros = 8_000_000L,
+                accountCurrency = "CNY",
+                categoryId = impElectricId
+            )
+        )
+        val budgetOnShoppingId = budgetDao.insert(
+            BudgetEntity(name = "购物预算", categoryId = impShoppingId, limitAmountMicros = 500_000_000L)
+        )
+        val budgetOnBroadbandId = budgetDao.insert(
+            BudgetEntity(name = "宽带预算", categoryId = impBroadbandId, limitAmountMicros = 20_000_000L)
+        )
+        val ruleOnOtherId = recurringRuleDao.insert(
+            RecurringRuleEntity(
+                name = "杂项周期",
+                amountMicros = 5_000_000L,
+                currencyCode = "CNY",
+                accountId = 1L,
+                categoryId = impOtherId,
+                nextRunEpochMillis = 1_760_100_000_000L
+            )
+        )
+        val planOnSocialId = installmentPlanDao.insert(
+            InstallmentPlanEntity(
+                accountId = 1L,
+                name = "人情分期",
+                totalAmountMicros = 100_000_000L,
+                totalPeriods = 3,
+                nextDueMillis = 1_760_200_000_000L,
+                categoryId = impSocialId
+            )
+        )
+        val txOnHealthId = transactionDao.insert(
+            TransactionEntity(
+                type = TransactionType.EXPENSE,
+                timestamp = 1_760_000_004_000L,
+                origAmountMicros = 5_000_000L,
+                origCurrency = "CNY",
+                accountId = 1L,
+                accountAmountMicros = 5_000_000L,
+                accountCurrency = "CNY",
+                categoryId = impHealthId
+            )
+        )
+
+        DefaultSeedData.ensurePresetCategories(
+            categoryDao = categoryDao,
+            transactionDao = transactionDao,
+            budgetDao = budgetDao,
+            recurringRuleDao = recurringRuleDao,
+            installmentPlanDao = installmentPlanDao
+        )
+        DefaultSeedData.ensurePresetTags(tagDao)
+
+        val allCats = categoryDao.getAll()
+        val rootCats = allCats.filter { it.parentId == null }
+        assertEquals(25, rootCats.size)
+        for (synonymName in listOf("出行交通", "购物消费", "食品餐饮", "居家生活", "送礼人情", "健康医疗", "其他")) {
+            assertFalse("Synonym parent $synonymName should be merged", rootCats.any { it.name == synonymName })
+        }
+
+        val travelParent = rootCats.first { it.name == "交通出行" && it.type == TransactionType.EXPENSE }
+        val shoppingParent = rootCats.first { it.name == "日用购物" && it.type == TransactionType.EXPENSE }
+        val foodParent = rootCats.first { it.name == "餐饮美食" && it.type == TransactionType.EXPENSE }
+        val homeParent = rootCats.first { it.name == "居家物业" && it.type == TransactionType.EXPENSE }
+        val socialParent = rootCats.first { it.name == "人情社交" && it.type == TransactionType.EXPENSE }
+        val healthParent = rootCats.first { it.name == "医疗健康" && it.type == TransactionType.EXPENSE }
+        val otherParent = rootCats.first { it.name == "其他支出" && it.type == TransactionType.EXPENSE }
+        val canonicalBroadband = allCats.first { it.parentId == homeParent.id && it.name == "话费宽带" }
+
+        // 无损迁移校验
+        assertEquals(travelParent.id, transactionDao.getById(txOnTravelId)!!.categoryId)
+        assertEquals(canonicalBroadband.id, transactionDao.getById(txOnBroadbandId)!!.categoryId)
+        assertEquals(impElectricId, transactionDao.getById(txOnElectricId)!!.categoryId)
+        assertEquals(healthParent.id, transactionDao.getById(txOnHealthId)!!.categoryId)
+        assertEquals(shoppingParent.id, budgetDao.getAll().first { it.id == budgetOnShoppingId }.categoryId)
+        assertEquals(canonicalBroadband.id, budgetDao.getAll().first { it.id == budgetOnBroadbandId }.categoryId)
+        assertEquals(otherParent.id, recurringRuleDao.getAll().first { it.id == ruleOnOtherId }.categoryId)
+        assertEquals(socialParent.id, installmentPlanDao.getAll().first { it.id == planOnSocialId }.categoryId)
+
+        // 话费宽带去重（全局仅保留 1 条）
+        assertEquals(1, allCats.count { it.name == "话费宽带" && it.type == TransactionType.EXPENSE })
+        assertEquals(null, categoryDao.getById(impBroadbandId))
+        assertEquals(travelParent.id, categoryDao.getById(impBusId)!!.parentId)
+
+        // 检查所有合并后子分类：无 "category"、无复制父图标、继承父色、同级卡通图案 100% 唯一
+        for (parent in listOf(travelParent, shoppingParent, foodParent, homeParent)) {
+            val siblings = allCats.filter { it.parentId == parent.id }
+            assertTrue(siblings.none { it.icon.isBlank() || it.icon == "category" || it.icon == parent.icon })
+            assertTrue(siblings.all { it.colorHex == parent.colorHex })
+            val variantIds = siblings.map { CartoonCategoryIcons.resolveVisualVariantId(it.icon) }
+            assertEquals(
+                "Duplicate sibling variantId under ${parent.name}: ${siblings.map { it.name to it.icon }}",
+                siblings.size,
+                variantIds.toSet().size
+            )
+            assertFalse(parent.icon.let { CartoonCategoryIcons.resolveVisualVariantId(it) } in variantIds)
+        }
+
+        val expectedSubIcons = mapOf(
+            "公共交通" to "directions_bus",
+            "办公用品" to "office_folder",
+            "虚拟充值" to "virtual_recharge",
+            "手机数码" to "smartphone_dev",
+            "个护美妆" to "personal_care",
+            "日常家居" to "household_lamp",
+            "生活电器" to "appliance_washer",
+            "配饰腕表" to "wrist_watch",
+            "服务器" to "server_rack",
+            "服饰运动" to "sport_shoe",
+            "母婴玩具" to "baby_rattle",
+            "早餐" to "breakfast_egg",
+            "晚餐" to "dinner_bowl",
+            "休闲零食" to "snack_bag",
+            "电费" to "electric_plug",
+            "水费" to "water_drop",
+            "燃气费" to "propane_tank",
+            "物业费" to "property_fee",
+            "房租还贷" to "house_contract",
+            "快递费" to "local_shipping",
+            "话费宽带" to "wifi"
+        )
+        expectedSubIcons.forEach { (name, expectedIcon) ->
+            val cat = allCats.first { it.name == name && it.type == TransactionType.EXPENSE }
+            assertEquals("Unexpected icon for $name", expectedIcon, cat.icon)
+        }
+
+        // 导入标签自动补全非空图标
+        val allTags = tagDao.getAll()
+        assertTrue(allTags.all { it.icon.isNotBlank() })
+        assertEquals("celebration", allTags.first { it.id == impTagMealId }.icon)
+        assertEquals("schedule", allTags.first { it.id == impTagOvertimeId }.icon)
+        assertTrue(allTags.first { it.id == impTagCustomId }.icon.isNotBlank())
     }
 
     @Test

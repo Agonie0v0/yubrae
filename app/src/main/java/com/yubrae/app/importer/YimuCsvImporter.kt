@@ -14,6 +14,7 @@ import com.yubrae.app.data.db.AccountGroup
 import com.yubrae.app.data.db.CaptureChannel
 import com.yubrae.app.data.db.CategoryDao
 import com.yubrae.app.data.db.CategoryEntity
+import com.yubrae.app.data.db.DefaultSeedData
 import com.yubrae.app.data.db.KairoDatabase
 import com.yubrae.app.data.db.LedgerDao
 import com.yubrae.app.data.db.LedgerEntity
@@ -26,6 +27,7 @@ import com.yubrae.app.data.db.TransactionStatus
 import com.yubrae.app.data.db.TransactionType
 import com.yubrae.app.data.prefs.AppSettings
 import com.yubrae.app.data.prefs.SettingsStore
+import com.yubrae.app.domain.RecordUsageRanker
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -410,7 +412,8 @@ class YimuCsvImporter(
                                 groupName = "导入",
                                 colorHex = IMPORT_PALETTE[(existingTags.size + createdTags) % IMPORT_PALETTE.size],
                                 sortOrder = nextTagSortOrder,
-                                isSystem = false
+                                isSystem = false,
+                                icon = RecordUsageRanker.suggestTagStyle(tagName).first
                             )
                             nextTagSortOrder += 10
                             tagDao.insert(newTag)
@@ -424,8 +427,7 @@ class YimuCsvImporter(
                     val catType = row.type
                     val parentName = row.categoryName.ifBlank { defaultCategoryName(catType) }
                     val parentKey = CategoryKey(null, normalizeNameKey(parentName), catType)
-                    var parentCat = categoriesByKey[parentKey]
-                        ?: findTopOrAnyCategory(categoriesByKey.values, parentName, catType)
+                    var parentCat = resolveExistingParentCategory(categoriesByKey, parentName, catType)
                     if (parentCat == null) {
                         val toInsert = CategoryEntity(
                             parentId = null,
@@ -446,8 +448,15 @@ class YimuCsvImporter(
                         val subKey = CategoryKey(parentCat.id, normalizeNameKey(subName), catType)
                         var subCat = categoriesByKey[subKey]
                         if (subCat == null) {
-                            val subSuggested = defaultCategoryIcon(subName, catType)
-                            val resolvedSubIcon = if (subSuggested != "category") subSuggested else parentCat.icon
+                            val siblingIcons = categoriesByKey.values
+                                .asSequence()
+                                .filter { it.parentId == parentCat.id && it.icon.isNotBlank() }
+                                .mapTo(HashSet()) { it.icon }
+                            val resolvedSubIcon = DefaultSeedData.pickDistinctImportedCategoryIcon(
+                                name = subName,
+                                parentIcon = parentCat.icon,
+                                siblingUsedIcons = siblingIcons
+                            )
                             val toInsert = CategoryEntity(
                                 parentId = parentCat.id,
                                 name = subName,
@@ -996,8 +1005,7 @@ class YimuCsvImporter(
                 }
             }
             if (txType == TransactionType.EXPENSE || txType == TransactionType.INCOME) {
-                val existingParent = existingCategoryKeys[CategoryKey(null, normalizeNameKey(categoryName), txType)]
-                    ?: findTopOrAnyCategory(existingCategories, categoryName, txType)
+                val existingParent = resolveExistingParentCategory(existingCategoryKeys, categoryName, txType)
                 if (existingParent == null) {
                     newCategoryNames.add(categoryName)
                 }
@@ -1665,6 +1673,20 @@ class YimuCsvImporter(
         for (f in files) {
             runCatching { if (f.exists()) f.delete() }
         }
+    }
+
+    private fun resolveExistingParentCategory(
+        categoriesByKey: Map<CategoryKey, CategoryEntity>,
+        parentName: String,
+        catType: String
+    ): CategoryEntity? {
+        val parentKey = CategoryKey(null, normalizeNameKey(parentName), catType)
+        categoriesByKey[parentKey]?.let { return it }
+        findTopOrAnyCategory(categoriesByKey.values, parentName, catType)?.let { return it }
+        val canonicalName = DefaultSeedData.canonicalImportedParentName(parentName, catType) ?: return null
+        val canonicalKey = CategoryKey(null, normalizeNameKey(canonicalName), catType)
+        return categoriesByKey[canonicalKey]
+            ?: findTopOrAnyCategory(categoriesByKey.values, canonicalName, catType)
     }
 
     private fun findTopOrAnyCategory(

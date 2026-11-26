@@ -266,7 +266,10 @@ public final class LedgerStore: ObservableObject {
             let syncRes = DefaultSeedData.syncPresetCatalog(
                 categories: &self.categories,
                 tags: &self.tags,
-                transactions: &self.transactions
+                transactions: &self.transactions,
+                budgets: &self.budgets,
+                recurringRules: &self.recurringRules,
+                installments: &self.installments
             )
             if syncRes.changed {
                 needsPersist = true
@@ -984,7 +987,10 @@ public final class LedgerStore: ObservableObject {
         let res = DefaultSeedData.syncPresetCatalog(
             categories: &categories,
             tags: &tags,
-            transactions: &transactions
+            transactions: &transactions,
+            budgets: &budgets,
+            recurringRules: &recurringRules,
+            installments: &installments
         )
         if res.changed {
             persist()

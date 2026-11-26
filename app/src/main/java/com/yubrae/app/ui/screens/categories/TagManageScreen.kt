@@ -62,6 +62,8 @@ import androidx.compose.ui.unit.dp
 import com.yubrae.app.data.db.TagEntity
 import com.yubrae.app.data.db.TagTextCodec
 import com.yubrae.app.data.db.TransactionEntity
+import com.yubrae.app.domain.RecordUsageRanker
+import com.yubrae.app.ui.components.CartoonCategoryIcon
 import com.yubrae.app.ui.components.ConfirmActionDialog
 import com.yubrae.app.ui.components.EmptyStateCard
 import com.yubrae.app.ui.components.GroupedIconPicker
@@ -341,7 +343,6 @@ private fun TagRow(
     onDelete: () -> Unit
 ) {
     val tagColor = Color(tag.colorHex)
-    val resolvedIcon = KairoIcons.tagIcon(tag.icon)
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -356,12 +357,11 @@ private fun TagRow(
             modifier = Modifier.size(34.dp)
         ) {
             Box(contentAlignment = Alignment.Center) {
-                if (resolvedIcon != null) {
-                    Icon(
-                        imageVector = resolvedIcon,
-                        contentDescription = null,
-                        tint = tagColor,
-                        modifier = Modifier.size(18.dp)
+                if (tag.icon.isNotBlank()) {
+                    CartoonCategoryIcon(
+                        iconKey = tag.icon,
+                        size = 22.dp,
+                        fallbackColorHex = tag.colorHex
                     )
                 } else {
                     Box(
@@ -466,6 +466,9 @@ private fun TagEditorDialog(
                         nameError = true
                         return@Button
                     }
+                    val resolvedIcon = selectedIcon.trim().ifBlank {
+                        if (isEditing) "" else RecordUsageRanker.suggestTagStyle(trimmed).first
+                    }
                     onSave(
                         TagEntity(
                             id = editing?.id ?: 0L,
@@ -474,7 +477,7 @@ private fun TagEditorDialog(
                             colorHex = selectedColor,
                             sortOrder = editing?.sortOrder ?: defaultSortOrder,
                             isSystem = editing?.isSystem ?: false,
-                            icon = selectedIcon.trim()
+                            icon = resolvedIcon
                         )
                     )
                 },
@@ -549,7 +552,7 @@ private fun TagEditorDialog(
             }
 
             Text(
-                text = "标签图标（可选）",
+                text = "标签图标（留空保存将按名称自动匹配）",
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -559,8 +562,9 @@ private fun TagEditorDialog(
                 onSelect = { selectedIcon = it },
                 accentColor = Color(selectedColor),
                 allowClear = true,
-                clearLabel = "无图标",
-                gridMaxHeight = 200.dp
+                clearLabel = "自动",
+                gridMaxHeight = 200.dp,
+                useCartoonCategoryIcons = true
             )
 
             Text(

@@ -31,6 +31,10 @@ public enum DefaultSeedData {
         // 1. 餐饮美食 (9 内置唯一 + 扩展)
         "restaurant": "fork.knife",
         "ramen_dining": "takeoutbag.and.cup.and.straw.fill",
+        "breakfast_egg": "sun.horizon.fill",
+        "lunch_bento": "fork.knife.circle",
+        "dinner_bowl": "moon.stars.fill",
+        "snack_bag": "popcorn.fill",
         "delivery_dining": "scooter",
         "local_cafe": "cup.and.saucer.fill",
         "bakery_dining": "birthday.cake.fill",
@@ -96,9 +100,12 @@ public enum DefaultSeedData {
         // 4. 服饰美容 (5 内置唯一 + 扩展)
         "style": "wand.and.stars",
         "checkroom": "tshirt.fill",
+        "sport_shoe": "figure.run",
         "face_retouching_natural": "sparkles",
+        "personal_care": "shower.fill",
         "content_cut": "scissors",
         "diamond": "diamond.fill",
+        "wrist_watch": "applewatch",
         "watch": "applewatch",
         "dry_cleaning": "washer.fill",
         "iron": "sparkles.rectangle.stack.fill",
@@ -109,9 +116,12 @@ public enum DefaultSeedData {
 
         // 5. 数码家电 (4 内置唯一 + 扩展)
         "devices": "laptopcomputer.and.iphone",
+        "smartphone_dev": "iphone",
         "laptop_mac": "laptopcomputer",
         "headphones": "headphones",
         "tv": "tv.fill",
+        "appliance_washer": "washer.fill",
+        "server_rack": "server.rack",
         "desktop_windows": "desktopcomputer",
         "tablet_mac": "ipad",
         "keyboard": "keyboard.fill",
@@ -126,7 +136,11 @@ public enum DefaultSeedData {
         // 6. 居家物业 (6 内置唯一 + 扩展)
         "home": "house.fill",
         "cottage": "key.fill",
+        "house_contract": "doc.richtext.fill",
+        "property_fee": "building.fill",
+        "household_lamp": "lamp.desk.fill",
         "bolt": "bolt.fill",
+        "electric_plug": "powerplug.fill",
         "handyman": "hammer.fill",
         "wifi": "wifi",
         "cleaning_services": "bubbles.and.sparkles.fill",
@@ -138,16 +152,17 @@ public enum DefaultSeedData {
         "yard": "leaf.fill",
         "bathtub": "bathtub.fill",
         "ac_unit": "snowflake.circle.fill",
-        "propane_tank": "flame",
+        "propane_tank": "flame.fill",
         "local_fire_department": "flame.fill",
         "local_florist": "camera.macro.circle.fill",
 
-        // 7. 数字订阅 (5 内置唯一)
+        // 7. 数字订阅 (5 内置唯一 + 扩展)
         "subscriptions": "repeat.circle.fill",
         "cloud_done": "icloud.fill",
         "smart_toy": "cpu.fill",
         "music_note": "music.note",
         "sports_esports": "gamecontroller.fill",
+        "virtual_recharge": "bolt.circle.fill",
 
         // 8. 休闲娱乐 (5 内置唯一 + 扩展)
         "theater_comedy": "theatermasks.fill",
@@ -192,8 +207,11 @@ public enum DefaultSeedData {
         // 11. 学习成长 (5 内置唯一 + 扩展)
         "school": "graduationcap.fill",
         "book": "book.fill",
+        "menu_course": "studentdesk",
         "science": "studentdesk",
         "edit_note": "pencil.and.list.clipboard",
+        "stationery": "pencil.and.ruler.fill",
+        "office_folder": "folder.fill",
         "palette": "pencil.and.ruler.fill",
         "menu_book": "book.closed.fill",
 
@@ -207,12 +225,16 @@ public enum DefaultSeedData {
         "handshake": "person.2.fill",
         "family_restroom": "house.circle.fill",
 
-        // 13. 宠物生活 & 14. 亲子育儿 (8 内置唯一)
+        // 13. 宠物生活 & 14. 亲子育儿 (8 内置唯一 + 扩展)
         "pets": "pawprint.fill",
+        "pet_food": "fish.fill",
         "set_meal": "fish.fill",
+        "pet_supplies": "tennisball.fill",
         "stroller": "figure.and.child.holdinghands",
         "child_care": "drop.fill",
         "toys": "puzzlepiece.fill",
+        "baby_rattle": "teddybear.fill",
+        "early_edu": "abc",
         "translate": "abc",
 
         // 15. 金融保险 & 16. 其他支出 (8 内置唯一)
@@ -240,8 +262,10 @@ public enum DefaultSeedData {
         "monetization_on": "eurosign.circle.fill",
         "replay": "arrow.uturn.backward.circle.fill",
         "receipt_long": "doc.text.fill",
+        "refund_parcel": "arrow.uturn.left.square.fill",
         "local_post_office": "arrow.counterclockwise.circle.fill",
         "request_quote": "doc.plaintext.fill",
+        "commute_allowance": "creditcard.circle.fill",
         "business_center": "case.fill",
         "sell": "tag.fill",
         "card_membership": "giftcard.fill",
@@ -255,6 +279,29 @@ public enum DefaultSeedData {
         "attach_money": "dollarsign.circle.fill",
         "category": "square.grid.2x2.fill",
         "label": "tag.square.fill",
+
+        // 预置标签专属图标（21 个，与全量 115 预置分类 SF Symbols 零重叠）
+        "tag_pdd": "flame.circle.fill",
+        "tag_taobao": "bag.badge.plus",
+        "tag_jd": "shippingbox.circle.fill",
+        "tag_meituan": "fork.knife.circle.fill",
+        "tag_offline": "mappin.and.ellipse",
+        "tag_crossborder": "globe.asia.australia.fill",
+        "tag_commute": "tram.circle.fill",
+        "tag_businesstrip": "suitcase.rolling.fill",
+        "tag_travel": "camera.circle.fill",
+        "tag_stockup": "cart.fill.badge.plus",
+        "tag_essential": "checkmark.seal.fill",
+        "tag_installment": "calendar.badge.clock",
+        "tag_discount": "tag.circle.fill",
+        "tag_impulse": "bolt.heart.fill",
+        "tag_large": "crown.fill",
+        "tag_self": "person.crop.circle.fill",
+        "tag_family": "figure.2.and.child.holdinghands",
+        "tag_partner": "heart.rectangle.fill",
+        "tag_aa": "equal.circle.fill",
+        "tag_taxdeduct": "doc.badge.gearshape.fill",
+        "tag_renovation": "paintbrush.fill",
 
         // 账户 & 标签扩展图标
         "wallet": "wallet.pass.fill",
@@ -399,9 +446,9 @@ public enum DefaultSeedData {
             name: "学习成长", type: TransactionType.EXPENSE, icon: "school", colorHex: 0xFF1677FF, sortOrder: 110,
             children: [
                 ChildSpec(name: "书籍资料", icon: "book"),
-                ChildSpec(name: "课程培训", icon: "science"),
+                ChildSpec(name: "课程培训", icon: "menu_course"),
                 ChildSpec(name: "考试考证", icon: "edit_note"),
-                ChildSpec(name: "文具办公", icon: "palette")
+                ChildSpec(name: "文具办公", icon: "stationery")
             ]
         ),
         ParentSpec(
@@ -416,8 +463,8 @@ public enum DefaultSeedData {
         ParentSpec(
             name: "宠物生活", type: TransactionType.EXPENSE, icon: "pets", colorHex: 0xFFD97706, sortOrder: 130,
             children: [
-                ChildSpec(name: "宠物食品", icon: "set_meal"),
-                ChildSpec(name: "宠物用品", icon: "shopping_basket"),
+                ChildSpec(name: "宠物食品", icon: "pet_food"),
+                ChildSpec(name: "宠物用品", icon: "pet_supplies"),
                 ChildSpec(name: "宠物医疗", icon: "healing")
             ]
         ),
@@ -426,7 +473,7 @@ public enum DefaultSeedData {
             children: [
                 ChildSpec(name: "奶粉辅食", icon: "child_care"),
                 ChildSpec(name: "童装玩具", icon: "toys"),
-                ChildSpec(name: "早教培训", icon: "translate")
+                ChildSpec(name: "早教培训", icon: "early_edu")
             ]
         ),
         ParentSpec(
@@ -459,7 +506,7 @@ public enum DefaultSeedData {
             name: "奖金补贴", type: TransactionType.INCOME, icon: "star", colorHex: 0xFF15803D, sortOrder: 20,
             children: [
                 ChildSpec(name: "绩效奖金", icon: "bar_chart"),
-                ChildSpec(name: "餐补交通补", icon: "directions_bus"),
+                ChildSpec(name: "餐补交通补", icon: "commute_allowance"),
                 ChildSpec(name: "节日福利", icon: "cake")
             ]
         ),
@@ -476,7 +523,7 @@ public enum DefaultSeedData {
             name: "报销退款", type: TransactionType.INCOME, icon: "replay", colorHex: 0xFF0284C7, sortOrder: 40,
             children: [
                 ChildSpec(name: "公司报销", icon: "receipt_long"),
-                ChildSpec(name: "购物退款", icon: "local_post_office"),
+                ChildSpec(name: "购物退款", icon: "refund_parcel"),
                 ChildSpec(name: "保险理赔", icon: "request_quote")
             ]
         ),
@@ -517,31 +564,31 @@ public enum DefaultSeedData {
     ]
 
     private static let presetTags: [TagSpec] = [
-        // 渠道平台 (6)
-        TagSpec(name: "拼多多", groupName: "渠道平台", colorHex: 0xFFE11D48, sortOrder: 10, icon: "loyalty"),
-        TagSpec(name: "淘宝", groupName: "渠道平台", colorHex: 0xFFD97706, sortOrder: 20, icon: "shopping_bag"),
-        TagSpec(name: "京东", groupName: "渠道平台", colorHex: 0xFFDC2626, sortOrder: 30, icon: "local_shipping"),
-        TagSpec(name: "美团", groupName: "渠道平台", colorHex: 0xFFF59E0B, sortOrder: 40, icon: "fastfood"),
-        TagSpec(name: "线下", groupName: "渠道平台", colorHex: 0xFF0D9488, sortOrder: 50, icon: "storefront"),
-        TagSpec(name: "跨境", groupName: "渠道平台", colorHex: 0xFF4F46E5, sortOrder: 60, icon: "public"),
+        // 渠道平台 (6) —— 使用 tag_* 专属图标，与 115 个分类 SF Symbols 完全隔离
+        TagSpec(name: "拼多多", groupName: "渠道平台", colorHex: 0xFFE11D48, sortOrder: 10, icon: "tag_pdd"),
+        TagSpec(name: "淘宝", groupName: "渠道平台", colorHex: 0xFFD97706, sortOrder: 20, icon: "tag_taobao"),
+        TagSpec(name: "京东", groupName: "渠道平台", colorHex: 0xFFDC2626, sortOrder: 30, icon: "tag_jd"),
+        TagSpec(name: "美团", groupName: "渠道平台", colorHex: 0xFFF59E0B, sortOrder: 40, icon: "tag_meituan"),
+        TagSpec(name: "线下", groupName: "渠道平台", colorHex: 0xFF0D9488, sortOrder: 50, icon: "tag_offline"),
+        TagSpec(name: "跨境", groupName: "渠道平台", colorHex: 0xFF4F46E5, sortOrder: 60, icon: "tag_crossborder"),
         // 场景行程 (4)
-        TagSpec(name: "通勤", groupName: "场景行程", colorHex: 0xFF0369A1, sortOrder: 70, icon: "subway"),
-        TagSpec(name: "差旅", groupName: "场景行程", colorHex: 0xFF2563EB, sortOrder: 80, icon: "luggage"),
-        TagSpec(name: "旅行", groupName: "场景行程", colorHex: 0xFF0F766E, sortOrder: 90, icon: "flight"),
-        TagSpec(name: "大促囤货", groupName: "场景行程", colorHex: 0xFF9333EA, sortOrder: 100, icon: "add_shopping_cart"),
+        TagSpec(name: "通勤", groupName: "场景行程", colorHex: 0xFF0369A1, sortOrder: 70, icon: "tag_commute"),
+        TagSpec(name: "差旅", groupName: "场景行程", colorHex: 0xFF2563EB, sortOrder: 80, icon: "tag_businesstrip"),
+        TagSpec(name: "旅行", groupName: "场景行程", colorHex: 0xFF0F766E, sortOrder: 90, icon: "tag_travel"),
+        TagSpec(name: "大促囤货", groupName: "场景行程", colorHex: 0xFF9333EA, sortOrder: 100, icon: "tag_stockup"),
         // 消费属性 (5)
-        TagSpec(name: "刚需", groupName: "消费属性", colorHex: 0xFF16A34A, sortOrder: 110, icon: "verified"),
-        TagSpec(name: "分期", groupName: "消费属性", colorHex: 0xFF64748B, sortOrder: 120, icon: "credit_card"),
-        TagSpec(name: "优惠立减", groupName: "消费属性", colorHex: 0xFF15803D, sortOrder: 130, icon: "local_offer"),
-        TagSpec(name: "冲动消费", groupName: "消费属性", colorHex: 0xFFE11D48, sortOrder: 140, icon: "bolt"),
-        TagSpec(name: "大额", groupName: "消费属性", colorHex: 0xFFDC2626, sortOrder: 150, icon: "diamond"),
+        TagSpec(name: "刚需", groupName: "消费属性", colorHex: 0xFF16A34A, sortOrder: 110, icon: "tag_essential"),
+        TagSpec(name: "分期", groupName: "消费属性", colorHex: 0xFF64748B, sortOrder: 120, icon: "tag_installment"),
+        TagSpec(name: "优惠立减", groupName: "消费属性", colorHex: 0xFF15803D, sortOrder: 130, icon: "tag_discount"),
+        TagSpec(name: "冲动消费", groupName: "消费属性", colorHex: 0xFFE11D48, sortOrder: 140, icon: "tag_impulse"),
+        TagSpec(name: "大额", groupName: "消费属性", colorHex: 0xFFDC2626, sortOrder: 150, icon: "tag_large"),
         // 对象账务 (6)
-        TagSpec(name: "自己", groupName: "对象账务", colorHex: 0xFF2AA876, sortOrder: 160, icon: "person"),
-        TagSpec(name: "家人", groupName: "对象账务", colorHex: 0xFFEA580C, sortOrder: 170, icon: "family_restroom"),
-        TagSpec(name: "伴侣", groupName: "对象账务", colorHex: 0xFFEC4899, sortOrder: 180, icon: "favorite"),
-        TagSpec(name: "AA", groupName: "对象账务", colorHex: 0xFF0284C7, sortOrder: 190, icon: "groups"),
-        TagSpec(name: "可抵税", groupName: "对象账务", colorHex: 0xFF4F46E5, sortOrder: 200, icon: "calculate"),
-        TagSpec(name: "装修", groupName: "对象账务", colorHex: 0xFF0D9488, sortOrder: 210, icon: "handyman")
+        TagSpec(name: "自己", groupName: "对象账务", colorHex: 0xFF2AA876, sortOrder: 160, icon: "tag_self"),
+        TagSpec(name: "家人", groupName: "对象账务", colorHex: 0xFFEA580C, sortOrder: 170, icon: "tag_family"),
+        TagSpec(name: "伴侣", groupName: "对象账务", colorHex: 0xFFEC4899, sortOrder: 180, icon: "tag_partner"),
+        TagSpec(name: "AA", groupName: "对象账务", colorHex: 0xFF0284C7, sortOrder: 190, icon: "tag_aa"),
+        TagSpec(name: "可抵税", groupName: "对象账务", colorHex: 0xFF4F46E5, sortOrder: 200, icon: "tag_taxdeduct"),
+        TagSpec(name: "装修", groupName: "对象账务", colorHex: 0xFF0D9488, sortOrder: 210, icon: "tag_renovation")
     ]
 
     private static let removedDuplicateSystemCategories: Set<String> = [
@@ -565,26 +612,28 @@ public enum DefaultSeedData {
         "\(TransactionType.EXPENSE)::差旅住宿": ["flight"],
         "\(TransactionType.EXPENSE)::旅游门票": ["luggage"],
         "\(TransactionType.EXPENSE)::特产纪念": ["redeem"],
-        "\(TransactionType.EXPENSE)::课程培训": ["school"],
-        "\(TransactionType.EXPENSE)::文具办公": ["menu_book"],
+        "\(TransactionType.EXPENSE)::课程培训": ["school", "science"],
+        "\(TransactionType.EXPENSE)::文具办公": ["menu_book", "palette"],
         "\(TransactionType.EXPENSE)::人情社交": ["favorite"],
         "\(TransactionType.EXPENSE)::孝敬长辈": ["volunteer_activism"],
-        "\(TransactionType.EXPENSE)::宠物食品": ["pets"],
+        "\(TransactionType.EXPENSE)::宠物食品": ["pets", "set_meal"],
+        "\(TransactionType.EXPENSE)::宠物用品": ["shopping_basket"],
         "\(TransactionType.EXPENSE)::宠物医疗": ["local_hospital"],
         "\(TransactionType.EXPENSE)::亲子育儿": ["child_care"],
         "\(TransactionType.EXPENSE)::童装玩具": ["redeem"],
-        "\(TransactionType.EXPENSE)::早教培训": ["school"],
+        "\(TransactionType.EXPENSE)::早教培训": ["school", "translate"],
         "\(TransactionType.EXPENSE)::金融保险": ["currency_exchange"],
         "\(TransactionType.EXPENSE)::商业保险": ["health_and_safety"],
         "\(TransactionType.INCOME)::加班津贴": ["work"],
         "\(TransactionType.INCOME)::年终奖": ["card_giftcard"],
         "\(TransactionType.INCOME)::奖金补贴": ["card_giftcard"],
         "\(TransactionType.INCOME)::绩效奖金": ["trending_up"],
+        "\(TransactionType.INCOME)::餐补交通补": ["directions_bus"],
         "\(TransactionType.INCOME)::节日福利": ["redeem"],
         "\(TransactionType.INCOME)::基金股票": ["trending_up"],
         "\(TransactionType.INCOME)::分红收益": ["attach_money"],
         "\(TransactionType.INCOME)::外汇收益": ["currency_exchange"],
-        "\(TransactionType.INCOME)::购物退款": ["replay"],
+        "\(TransactionType.INCOME)::购物退款": ["replay", "local_post_office"],
         "\(TransactionType.INCOME)::保险理赔": ["health_and_safety"],
         "\(TransactionType.INCOME)::兼职副业": ["laptop_mac"],
         "\(TransactionType.INCOME)::外包私活": ["laptop_mac"],
@@ -598,10 +647,150 @@ public enum DefaultSeedData {
     ]
 
     private static let legacyTagIcons: [String: Set<String>] = [
-        "大促囤货": ["shopping_basket"],
-        "家人": ["home"],
-        "装修": ["build"]
+        "拼多多": ["loyalty"],
+        "淘宝": ["shopping_bag"],
+        "京东": ["local_shipping"],
+        "美团": ["fastfood"],
+        "线下": ["storefront"],
+        "跨境": ["public"],
+        "通勤": ["subway"],
+        "差旅": ["luggage"],
+        "旅行": ["flight"],
+        "大促囤货": ["shopping_basket", "add_shopping_cart"],
+        "刚需": ["verified"],
+        "分期": ["credit_card"],
+        "优惠立减": ["local_offer"],
+        "冲动消费": ["bolt"],
+        "大额": ["diamond"],
+        "自己": ["person"],
+        "家人": ["home", "family_restroom"],
+        "伴侣": ["favorite"],
+        "AA": ["groups"],
+        "可抵税": ["calculate"],
+        "装修": ["build", "handyman"]
     ]
+
+    private static let synonymImportedParentMap: [String: String] = [
+        "\(TransactionType.EXPENSE)::出行交通": "交通出行",
+        "\(TransactionType.EXPENSE)::交通": "交通出行",
+        "\(TransactionType.EXPENSE)::购物消费": "日用购物",
+        "\(TransactionType.EXPENSE)::购物": "日用购物",
+        "\(TransactionType.EXPENSE)::食品餐饮": "餐饮美食",
+        "\(TransactionType.EXPENSE)::餐饮": "餐饮美食",
+        "\(TransactionType.EXPENSE)::饮食": "餐饮美食",
+        "\(TransactionType.EXPENSE)::居家生活": "居家物业",
+        "\(TransactionType.EXPENSE)::居家": "居家物业",
+        "\(TransactionType.EXPENSE)::住房物业": "居家物业",
+        "\(TransactionType.EXPENSE)::通讯物流": "居家物业",
+        "\(TransactionType.EXPENSE)::送礼人情": "人情社交",
+        "\(TransactionType.EXPENSE)::人情往来": "人情社交",
+        "\(TransactionType.EXPENSE)::人情": "人情社交",
+        "\(TransactionType.EXPENSE)::健康医疗": "医疗健康",
+        "\(TransactionType.EXPENSE)::医疗": "医疗健康",
+        "\(TransactionType.EXPENSE)::衣饰美容": "服饰美容",
+        "\(TransactionType.EXPENSE)::服装美容": "服饰美容",
+        "\(TransactionType.EXPENSE)::服饰": "服饰美容",
+        "\(TransactionType.EXPENSE)::数码电器": "数码家电",
+        "\(TransactionType.EXPENSE)::娱乐休闲": "休闲娱乐",
+        "\(TransactionType.EXPENSE)::文教娱乐": "休闲娱乐",
+        "\(TransactionType.EXPENSE)::娱乐": "休闲娱乐",
+        "\(TransactionType.EXPENSE)::学习进修": "学习成长",
+        "\(TransactionType.EXPENSE)::教育学习": "学习成长",
+        "\(TransactionType.EXPENSE)::学习": "学习成长",
+        "\(TransactionType.EXPENSE)::旅行出差": "差旅住宿",
+        "\(TransactionType.EXPENSE)::旅游度假": "差旅住宿",
+        "\(TransactionType.EXPENSE)::旅游": "差旅住宿",
+        "\(TransactionType.EXPENSE)::宠物": "宠物生活",
+        "\(TransactionType.EXPENSE)::母婴亲子": "亲子育儿",
+        "\(TransactionType.EXPENSE)::育儿": "亲子育儿",
+        "\(TransactionType.EXPENSE)::金融理财": "金融保险",
+        "\(TransactionType.EXPENSE)::其他": "其他支出",
+        "\(TransactionType.EXPENSE)::其它": "其他支出",
+        "\(TransactionType.EXPENSE)::其它支出": "其他支出",
+        "\(TransactionType.EXPENSE)::未分类": "其他支出",
+        "\(TransactionType.INCOME)::职业收入": "工资薪金",
+        "\(TransactionType.INCOME)::薪资收入": "工资薪金",
+        "\(TransactionType.INCOME)::工资收入": "工资薪金",
+        "\(TransactionType.INCOME)::工资": "工资薪金",
+        "\(TransactionType.INCOME)::理财收入": "投资理财",
+        "\(TransactionType.INCOME)::投资收益": "投资理财",
+        "\(TransactionType.INCOME)::理财": "投资理财",
+        "\(TransactionType.INCOME)::兼职收入": "兼职副业",
+        "\(TransactionType.INCOME)::副业收入": "兼职副业",
+        "\(TransactionType.INCOME)::人情往来": "人情礼金",
+        "\(TransactionType.INCOME)::礼金人情": "人情礼金",
+        "\(TransactionType.INCOME)::生意经营": "经营所得",
+        "\(TransactionType.INCOME)::营业收入": "经营所得",
+        "\(TransactionType.INCOME)::其他": "其他收入",
+        "\(TransactionType.INCOME)::其它": "其他收入",
+        "\(TransactionType.INCOME)::其它收入": "其他收入",
+        "\(TransactionType.INCOME)::未分类": "其他收入"
+    ]
+
+    private static let legacyMisinferredImportedIcons: [String: Set<String>] = [
+        "母婴玩具": ["shopping_basket", "pets"],
+        "电费": ["bolt"],
+        "水费": ["bolt"],
+        "燃气费": ["bolt"],
+        "服务器": ["smart_toy"],
+        "虚拟充值": ["sports_esports"],
+        "早餐": ["ramen_dining"],
+        "午餐": ["ramen_dining"],
+        "晚餐": ["ramen_dining"],
+        "休闲零食": ["bakery_dining"],
+        "办公用品": ["palette"],
+        "配饰腕表": ["diamond"],
+        "手机数码": ["laptop_mac"],
+        "日常家居": ["weekend"],
+        "房租还贷": ["cottage"],
+        "物业费": ["handyman"]
+    ]
+
+    private static let categoryRepairFallbackIcons: [String] = [
+        "breakfast_egg", "lunch_bento", "dinner_bowl", "snack_bag",
+        "electric_plug", "water_drop", "propane_tank", "property_fee",
+        "house_contract", "smartphone_dev", "appliance_washer", "wrist_watch",
+        "server_rack", "virtual_recharge", "personal_care", "sport_shoe",
+        "baby_rattle", "office_folder", "household_lamp", "directions_bus",
+        "fastfood", "luggage", "camera_alt", "self_improvement",
+        "psychology", "visibility", "qr_code_scanner", "account_balance_wallet",
+        "credit_card"
+    ]
+
+    public static func canonicalImportedParentName(name: String, type: String) -> String? {
+        let key = "\(type.trimmingCharacters(in: .whitespacesAndNewlines).uppercased())::\(name.trimmingCharacters(in: .whitespacesAndNewlines))"
+        return synonymImportedParentMap[key]
+    }
+
+    public static func pickDistinctImportedCategoryIcon(
+        name: String,
+        parentIcon: String,
+        siblingUsedIcons: Set<String>
+    ) -> String {
+        var blocked = Set(
+            siblingUsedIcons
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+        )
+        let cleanParent = parentIcon.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !cleanParent.isEmpty {
+            blocked.insert(cleanParent)
+        }
+        blocked.insert("category")
+
+        let candidates = IOSRecordUsageRanker.suggestCategoryIconCandidates(name: name)
+            .filter { !$0.hasPrefix("tag_") }
+        if let firstUnused = candidates.first(where: { !blocked.contains($0) }) {
+            return firstUnused
+        }
+        if let firstFallback = categoryRepairFallbackIcons.first(where: { !blocked.contains($0) }) {
+            return firstFallback
+        }
+        if let firstCandidate = candidates.first, !firstCandidate.isEmpty {
+            return firstCandidate
+        }
+        return categoryRepairFallbackIcons.first ?? "more_horiz"
+    }
 
     // MARK: - Builders
 
@@ -668,19 +857,105 @@ public enum DefaultSeedData {
             (legacyCategoryIcons[key]?.contains(existing.icon) ?? false)
     }
 
-    /// 同步预置分类与标签目录：补齐缺失项、无损升级旧默认系统图标、并清理已去重的冗余系统项（不丢流水且保护自定义配置）。
+    private static func normalizeCategoryNameKey(_ name: String) -> String {
+        name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    private static func remapCategoryReferences(
+        from oldId: Int64,
+        to newId: Int64,
+        transactions: inout [TransactionDto],
+        budgets: inout [BudgetDto],
+        recurringRules: inout [RecurringRuleDto],
+        installments: inout [InstallmentPlanDto]
+    ) -> Bool {
+        guard oldId != newId else { return false }
+        var changed = false
+        for i in transactions.indices where transactions[i].categoryId == oldId {
+            transactions[i].categoryId = newId
+            changed = true
+        }
+        for i in budgets.indices where budgets[i].categoryId == oldId {
+            budgets[i].categoryId = newId
+            changed = true
+        }
+        for i in recurringRules.indices where recurringRules[i].categoryId == oldId {
+            recurringRules[i].categoryId = newId
+            changed = true
+        }
+        for i in installments.indices where installments[i].categoryId == oldId {
+            installments[i].categoryId = newId
+            changed = true
+        }
+        return changed
+    }
+
+    private static func needsImportedCategoryIconRepair(
+        _ cat: CategoryDto,
+        parent: CategoryDto?,
+        legacyParentIcon: String?
+    ) -> Bool {
+        guard !cat.isSystem else { return false }
+        let icon = cat.icon.trimmingCharacters(in: .whitespacesAndNewlines)
+        if icon.isEmpty || icon == "category" || icon.hasPrefix("tag_") {
+            return true
+        }
+        if let parent, icon == parent.icon.trimmingCharacters(in: .whitespacesAndNewlines) {
+            return true
+        }
+        if let legacyParentIcon {
+            let cleanLegacy = legacyParentIcon.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !cleanLegacy.isEmpty && icon == cleanLegacy {
+                return true
+            }
+        }
+        let normName = cat.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        return legacyMisinferredImportedIcons[normName]?.contains(icon) == true
+    }
+
+    /// 同步预置分类与标签目录（兼容旧 3 参数调用）。
     @discardableResult
     public static func syncPresetCatalog(
         categories: inout [CategoryDto],
         tags: inout [TagDto],
         transactions: inout [TransactionDto]
     ) -> (changed: Bool, addedCategories: Int, addedTags: Int) {
+        var emptyBudgets: [BudgetDto] = []
+        var emptyRules: [RecurringRuleDto] = []
+        var emptyInstallments: [InstallmentPlanDto] = []
+        return syncPresetCatalog(
+            categories: &categories,
+            tags: &tags,
+            transactions: &transactions,
+            budgets: &emptyBudgets,
+            recurringRules: &emptyRules,
+            installments: &emptyInstallments
+        )
+    }
+
+    /// 同步预置分类与标签目录：补齐缺失项、无损升级旧默认系统图标、归并导入同义大类并修复非系统分类/标签图标（不丢流水与预算/周期/分期引用）。
+    @discardableResult
+    public static func syncPresetCatalog(
+        categories: inout [CategoryDto],
+        tags: inout [TagDto],
+        transactions: inout [TransactionDto],
+        budgets: inout [BudgetDto],
+        recurringRules: inout [RecurringRuleDto],
+        installments: inout [InstallmentPlanDto]
+    ) -> (changed: Bool, addedCategories: Int, addedTags: Int) {
         var didMutate = false
         var addedCategories = 0
 
         var indexByKey: [String: Int] = [:]
         for (idx, cat) in categories.enumerated() {
-            indexByKey["\(cat.type)::\(cat.name)"] = idx
+            let key = "\(cat.type)::\(cat.name)"
+            if let prevIdx = indexByKey[key] {
+                if !categories[prevIdx].isSystem && cat.isSystem {
+                    indexByKey[key] = idx
+                }
+            } else {
+                indexByKey[key] = idx
+            }
         }
         var nextCategoryId = (categories.map(\.id).max() ?? 0) + 1
 
@@ -742,7 +1017,7 @@ public enum DefaultSeedData {
             }
         }
 
-        // 无损移除历史冗余系统子分类（如 “其他支出/其他杂项”），并将对应交易归并至父级
+        // a) 无损移除历史冗余系统子分类（如 “其他支出/其他杂项”），并将对应引用归并至父级
         let fallbackOtherExpenseId = indexByKey["\(TransactionType.EXPENSE)::其他支出"].map { categories[$0].id }
         var removedCategoryIds: Set<Int64> = []
         for cat in categories where cat.isSystem {
@@ -753,9 +1028,16 @@ public enum DefaultSeedData {
         }
         if !removedCategoryIds.isEmpty {
             if let fallbackId = fallbackOtherExpenseId {
-                for i in transactions.indices {
-                    if let cid = transactions[i].categoryId, removedCategoryIds.contains(cid) {
-                        transactions[i].categoryId = fallbackId
+                for oldId in removedCategoryIds {
+                    if remapCategoryReferences(
+                        from: oldId,
+                        to: fallbackId,
+                        transactions: &transactions,
+                        budgets: &budgets,
+                        recurringRules: &recurringRules,
+                        installments: &installments
+                    ) {
+                        didMutate = true
                     }
                 }
             }
@@ -763,7 +1045,177 @@ public enum DefaultSeedData {
             didMutate = true
         }
 
-        // 同步标签目录：先移除冗余系统标签，再升级保留的系统标签图标并补齐新标签
+        // b) 无损归并同义导入大类（如 "居家生活" -> "居家物业"、"购物消费" -> "日用购物"）
+        var preMergeLegacyParentIconByChildId: [Int64: String] = [:]
+        var mergedParentIds: Set<Int64> = []
+        var deletedChildIds: Set<Int64> = []
+
+        let candidateParents = categories
+            .filter { !$0.isSystem && $0.parentId == nil }
+            .sorted { $0.id < $1.id }
+
+        for sourceParent in candidateParents {
+            guard !mergedParentIds.contains(sourceParent.id),
+                  let canonicalName = canonicalImportedParentName(name: sourceParent.name, type: sourceParent.type) else {
+                continue
+            }
+            let targetParent = categories
+                .filter {
+                    $0.parentId == nil &&
+                        $0.id != sourceParent.id &&
+                        !mergedParentIds.contains($0.id) &&
+                        $0.type.caseInsensitiveCompare(sourceParent.type) == .orderedSame &&
+                        $0.name.trimmingCharacters(in: .whitespacesAndNewlines) == canonicalName
+                }
+                .sorted { ($0.isSystem ? 0 : 1, $0.id) < ($1.isSystem ? 0 : 1, $1.id) }
+                .first
+            guard let targetParent else { continue }
+
+            if remapCategoryReferences(
+                from: sourceParent.id,
+                to: targetParent.id,
+                transactions: &transactions,
+                budgets: &budgets,
+                recurringRules: &recurringRules,
+                installments: &installments
+            ) {
+                didMutate = true
+            }
+
+            var targetChildByNormName: [String: CategoryDto] = [:]
+            for existingChild in categories where existingChild.parentId == targetParent.id && !deletedChildIds.contains(existingChild.id) {
+                let norm = normalizeCategoryNameKey(existingChild.name)
+                if let prev = targetChildByNormName[norm] {
+                    if !prev.isSystem && existingChild.isSystem {
+                        targetChildByNormName[norm] = existingChild
+                    }
+                } else {
+                    targetChildByNormName[norm] = existingChild
+                }
+            }
+
+            for childIdx in categories.indices {
+                guard categories[childIdx].parentId == sourceParent.id,
+                      !deletedChildIds.contains(categories[childIdx].id) else {
+                    continue
+                }
+                let child = categories[childIdx]
+                preMergeLegacyParentIconByChildId[child.id] = sourceParent.icon
+                let normChildName = normalizeCategoryNameKey(child.name)
+                if let existingTargetChild = targetChildByNormName[normChildName], existingTargetChild.id != child.id {
+                    _ = remapCategoryReferences(
+                        from: child.id,
+                        to: existingTargetChild.id,
+                        transactions: &transactions,
+                        budgets: &budgets,
+                        recurringRules: &recurringRules,
+                        installments: &installments
+                    )
+                    deletedChildIds.insert(child.id)
+                    didMutate = true
+                } else {
+                    categories[childIdx].parentId = targetParent.id
+                    if categories[childIdx].colorHex == 0xFF0B57D0 || categories[childIdx].colorHex == sourceParent.colorHex {
+                        categories[childIdx].colorHex = targetParent.colorHex
+                    }
+                    targetChildByNormName[normChildName] = categories[childIdx]
+                    didMutate = true
+                }
+            }
+
+            mergedParentIds.insert(sourceParent.id)
+            didMutate = true
+        }
+
+        if !mergedParentIds.isEmpty || !deletedChildIds.isEmpty {
+            categories.removeAll { mergedParentIds.contains($0.id) || deletedChildIds.contains($0.id) }
+            didMutate = true
+        }
+
+        // c) 自动修复非系统分类异常/撞图图标（空白、"category"、沿用父图标或历史误判图标），同级防撞图
+        var byId: [Int64: CategoryDto] = Dictionary(categories.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        func scopeKey(for cat: CategoryDto) -> String {
+            cat.parentId.map { "PARENT::\($0)" } ?? "ROOT::\(cat.type.trimmingCharacters(in: .whitespacesAndNewlines).uppercased())"
+        }
+
+        var usedIconsByScope: [String: Set<String>] = [:]
+        var colorOnlyRepairIndices: [Int] = []
+        for (idx, cat) in categories.enumerated() {
+            let scope = scopeKey(for: cat)
+            let parent = cat.parentId.flatMap { byId[$0] }
+            if let parent {
+                let pIcon = parent.icon.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !pIcon.isEmpty {
+                    usedIconsByScope[scope, default: []].insert(pIcon)
+                }
+            }
+            if cat.isSystem || !needsImportedCategoryIconRepair(
+                cat,
+                parent: parent,
+                legacyParentIcon: preMergeLegacyParentIconByChildId[cat.id]
+            ) {
+                let cleanIcon = cat.icon.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !cleanIcon.isEmpty {
+                    usedIconsByScope[scope, default: []].insert(cleanIcon)
+                }
+                if !cat.isSystem, parent != nil, cat.colorHex == 0xFF0B57D0 {
+                    colorOnlyRepairIndices.append(idx)
+                }
+            }
+        }
+
+        let orderedIndices = categories.indices.sorted { lhs, rhs in
+            let a = categories[lhs]
+            let b = categories[rhs]
+            let aDepth = a.parentId == nil ? 0 : 1
+            let bDepth = b.parentId == nil ? 0 : 1
+            if aDepth != bDepth { return aDepth < bDepth }
+            let aHasMatch = IOSRecordUsageRanker.suggestCategoryIconCandidates(name: a.name).isEmpty ? 1 : 0
+            let bHasMatch = IOSRecordUsageRanker.suggestCategoryIconCandidates(name: b.name).isEmpty ? 1 : 0
+            if aHasMatch != bHasMatch { return aHasMatch < bHasMatch }
+            if a.sortOrder != b.sortOrder { return a.sortOrder < b.sortOrder }
+            return a.id < b.id
+        }
+        for idx in orderedIndices {
+            let cat = categories[idx]
+            let parent = cat.parentId.flatMap { byId[$0] }
+            guard needsImportedCategoryIconRepair(
+                cat,
+                parent: parent,
+                legacyParentIcon: preMergeLegacyParentIconByChildId[cat.id]
+            ) else {
+                continue
+            }
+            let scope = scopeKey(for: cat)
+            let used = usedIconsByScope[scope] ?? []
+            let repairedIcon = pickDistinctImportedCategoryIcon(
+                name: cat.name,
+                parentIcon: parent?.icon ?? "",
+                siblingUsedIcons: used
+            )
+            usedIconsByScope[scope, default: []].insert(repairedIcon)
+            if categories[idx].icon != repairedIcon {
+                categories[idx].icon = repairedIcon
+                didMutate = true
+            }
+            if let parent, categories[idx].colorHex == 0xFF0B57D0 && categories[idx].colorHex != parent.colorHex {
+                categories[idx].colorHex = parent.colorHex
+                didMutate = true
+            }
+            byId[categories[idx].id] = categories[idx]
+        }
+
+        for idx in colorOnlyRepairIndices {
+            guard let parentId = categories[idx].parentId,
+                  let parent = byId[parentId],
+                  categories[idx].colorHex != parent.colorHex else {
+                continue
+            }
+            categories[idx].colorHex = parent.colorHex
+            didMutate = true
+        }
+
+        // 同步标签目录：先移除冗余系统标签，再升级保留的系统标签图标、补齐新标签、并修复空白非系统标签图标
         let beforeTagCount = tags.count
         tags.removeAll { $0.isSystem && removedDuplicateSystemTags.contains($0.name) }
         if tags.count != beforeTagCount {
@@ -809,6 +1261,23 @@ public enum DefaultSeedData {
                 tagIndexByName[spec.name] = tags.count - 1
                 nextTagId += 1
                 addedTags += 1
+                didMutate = true
+            }
+        }
+
+        for idx in tags.indices {
+            guard !tags[idx].isSystem else { continue }
+            if tags[idx].icon.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                let suggested = IOSRecordUsageRanker.suggestTagStyle(name: tags[idx].name)
+                tags[idx] = TagDto(
+                    id: tags[idx].id,
+                    name: tags[idx].name,
+                    groupName: tags[idx].groupName,
+                    colorHex: tags[idx].colorHex,
+                    sortOrder: tags[idx].sortOrder,
+                    isSystem: tags[idx].isSystem,
+                    icon: suggested.icon
+                )
                 didMutate = true
             }
         }

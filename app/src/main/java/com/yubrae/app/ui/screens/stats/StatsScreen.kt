@@ -123,6 +123,7 @@ import com.yubrae.app.data.db.TransactionStatus
 import com.yubrae.app.data.db.TransactionType
 import com.yubrae.app.domain.LedgerAnalytics
 import com.yubrae.app.ui.components.AutoResizeAmountText
+import com.yubrae.app.ui.components.CartoonCategoryIcon
 import com.yubrae.app.ui.components.CategoryIconBadge
 import com.yubrae.app.ui.components.ChannelChip
 import com.yubrae.app.ui.components.CompactHairlineDivider
@@ -3146,7 +3147,6 @@ private fun TagBreakdownCard(
                     stats.forEachIndexed { index, stat ->
                         val tagColor = Color(stat.colorHex)
                         val iconKey = tagMap[stat.tagName]?.icon.orEmpty()
-                        val resolvedTagIcon = KairoIcons.tagIcon(iconKey)
                         val isHighlighted = highlightedTagName == stat.tagName
                         val rowBg = if (isHighlighted) {
                             MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.28f)
@@ -3168,12 +3168,11 @@ private fun TagBreakdownCard(
                                 modifier = Modifier.size(32.dp)
                             ) {
                                 Box(contentAlignment = Alignment.Center) {
-                                    if (resolvedTagIcon != null) {
-                                        Icon(
-                                            imageVector = resolvedTagIcon,
-                                            contentDescription = null,
-                                            tint = if (isHighlighted) Color.White else tagColor,
-                                            modifier = Modifier.size(16.dp)
+                                    if (iconKey.isNotBlank()) {
+                                        CartoonCategoryIcon(
+                                            iconKey = iconKey,
+                                            size = 18.dp,
+                                            fallbackColorHex = stat.colorHex
                                         )
                                     } else {
                                         Box(
@@ -3280,7 +3279,7 @@ private fun TagDrillDownBottomSheet(
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val semantic = KairoTheme.semantic
     val tagColor = Color(stat.colorHex)
-    val headerIcon = KairoIcons.tagIcon(tagMap[stat.tagName]?.icon.orEmpty()) ?: Icons.AutoMirrored.Rounded.Label
+    val tagIconKey = tagMap[stat.tagName]?.icon.orEmpty()
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -3308,12 +3307,20 @@ private fun TagDrillDownBottomSheet(
                     modifier = Modifier.size(44.dp)
                 ) {
                     Box(contentAlignment = Alignment.Center) {
-                        Icon(
-                            imageVector = headerIcon,
-                            contentDescription = null,
-                            tint = tagColor,
-                            modifier = Modifier.size(22.dp)
-                        )
+                        if (tagIconKey.isNotBlank()) {
+                            CartoonCategoryIcon(
+                                iconKey = tagIconKey,
+                                size = 24.dp,
+                                fallbackColorHex = stat.colorHex
+                            )
+                        } else {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Rounded.Label,
+                                contentDescription = null,
+                                tint = tagColor,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
                     }
                 }
                 Column(modifier = Modifier.weight(1f)) {

@@ -197,26 +197,33 @@ public struct CategoryManagementView: View {
     @State private var colorHex: Int64 = 0xFF2AA876
 
     private let iconChoices = [
-        "restaurant", "ramen_dining", "delivery_dining", "local_cafe", "bakery_dining",
-        "local_grocery_store", "kitchen", "local_bar", "emoji_food_beverage",
+        "restaurant", "ramen_dining", "breakfast_egg", "lunch_bento", "dinner_bowl", "snack_bag",
+        "delivery_dining", "local_cafe", "bakery_dining", "local_grocery_store", "kitchen",
+        "local_bar", "emoji_food_beverage",
         "directions_car", "subway", "local_taxi", "pedal_bike", "train", "local_gas_station",
-        "local_parking", "local_car_wash", "shopping_bag", "local_mall", "shopping_cart",
-        "weekend", "local_shipping", "style", "checkroom", "face_retouching_natural",
-        "content_cut", "diamond", "devices", "laptop_mac", "headphones", "tv",
-        "home", "cottage", "bolt", "handyman", "wifi", "cleaning_services",
-        "subscriptions", "cloud_done", "smart_toy", "music_note", "sports_esports",
+        "local_parking", "local_car_wash", "directions_bus",
+        "shopping_bag", "local_mall", "shopping_cart", "weekend", "household_lamp", "local_shipping",
+        "style", "checkroom", "sport_shoe", "face_retouching_natural", "personal_care",
+        "content_cut", "diamond", "wrist_watch",
+        "devices", "smartphone_dev", "laptop_mac", "headphones", "tv", "appliance_washer", "server_rack",
+        "home", "cottage", "house_contract", "property_fee", "bolt", "electric_plug",
+        "water_drop", "propane_tank", "handyman", "wifi", "cleaning_services",
+        "subscriptions", "cloud_done", "smart_toy", "music_note", "sports_esports", "virtual_recharge",
         "theater_comedy", "movie", "celebration", "fitness_center", "forest",
         "medical_services", "local_hospital", "medication", "monitor_heart", "health_and_safety",
         "explore", "flight", "hotel", "confirmation_number", "backpack",
-        "school", "book", "science", "edit_note", "palette",
-        "groups", "card_giftcard", "redeem", "elderly", "favorite",
-        "pets", "set_meal", "shopping_basket", "healing",
-        "stroller", "child_care", "toys", "translate",
+        "school", "book", "menu_course", "edit_note", "stationery", "office_folder",
+        "groups", "card_giftcard", "redeem", "elderly", "favorite", "volunteer_activism",
+        "pets", "pet_food", "pet_supplies", "healing",
+        "stroller", "child_care", "toys", "baby_rattle", "early_edu",
+        "assured_workload", "currency_exchange", "verified_user", "percent", "trending_down",
+        "more_horiz", "priority_high",
         "work", "payments", "schedule", "emoji_events",
-        "star", "bar_chart", "directions_bus", "cake",
+        "star", "bar_chart", "commute_allowance", "cake",
         "trending_up", "candlestick_chart", "savings", "pie_chart", "monetization_on",
-        "replay", "receipt_long", "local_post_office", "request_quote",
+        "replay", "receipt_long", "refund_parcel", "request_quote",
         "business_center", "desktop_windows", "mic", "sell",
+        "card_membership", "chat", "handshake",
         "storefront", "point_of_sale", "corporate_fare",
         "account_balance", "badge", "calculate", "local_offer", "attach_money", "category"
     ]
@@ -415,7 +422,16 @@ public struct TagManagementView: View {
                         let clean = newTagName.trimmingCharacters(in: .whitespacesAndNewlines)
                         guard !clean.isEmpty else { return }
                         let groupClean = newTagGroup.trimmingCharacters(in: .whitespacesAndNewlines)
-                        _ = store.saveTag(TagDto(name: clean, groupName: groupClean.isEmpty ? "常用" : groupClean, isSystem: false))
+                        let style = IOSRecordUsageRanker.suggestTagStyle(name: clean)
+                        _ = store.saveTag(
+                            TagDto(
+                                name: clean,
+                                groupName: groupClean.isEmpty ? "常用" : groupClean,
+                                colorHex: style.colorHex,
+                                isSystem: false,
+                                icon: style.icon
+                            )
+                        )
                         store.toastMessage = "已添加标签 #\(clean)"
                         newTagName = ""
                     }

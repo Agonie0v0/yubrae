@@ -486,21 +486,23 @@ object KairoIcons {
         iconGroup(
             "餐饮美食",
             Triple("restaurant", "餐饮", Icons.Rounded.Restaurant),
+            Triple("breakfast_egg", "早餐", Icons.Rounded.BreakfastDining),
+            Triple("lunch_bento", "午餐便当", Icons.Rounded.LunchDining),
+            Triple("dinner_bowl", "晚餐", Icons.Rounded.DinnerDining),
+            Triple("snack_bag", "零食", Icons.Rounded.Cookie),
             Triple("lunch_dining", "正餐", Icons.Rounded.LunchDining),
             Triple("delivery_dining", "外卖", Icons.Rounded.DeliveryDining),
             Triple("fastfood", "快餐", Icons.Rounded.Fastfood),
             Triple("ramen_dining", "面食", Icons.Rounded.RamenDining),
             Triple("local_pizza", "披萨", Icons.Rounded.LocalPizza),
             Triple("local_grocery_store", "生鲜", Icons.Rounded.LocalGroceryStore),
-            Triple("shopping_basket", "买菜", Icons.Rounded.ShoppingBasket),
             Triple("kitchen", "做饭", Icons.Rounded.Kitchen),
-            Triple("breakfast_dining", "早餐", Icons.Rounded.BreakfastDining),
+            Triple("breakfast_dining", "早点", Icons.Rounded.BreakfastDining),
             Triple("brunch_dining", "早午餐", Icons.Rounded.BrunchDining),
-            Triple("dinner_dining", "晚餐", Icons.Rounded.DinnerDining),
+            Triple("dinner_dining", "晚宴", Icons.Rounded.DinnerDining),
             Triple("rice_bowl", "米饭", Icons.Rounded.RiceBowl),
             Triple("soup_kitchen", "汤锅", Icons.Rounded.SoupKitchen),
-            Triple("set_meal", "套餐", Icons.Rounded.SetMeal),
-            Triple("bento", "便当", Icons.Rounded.Bento),
+            Triple("bento", "盒饭", Icons.Rounded.Bento),
             Triple("outdoor_grill", "烧烤", Icons.Rounded.OutdoorGrill),
             Triple("takeout_dining", "打包", Icons.Rounded.TakeoutDining)
         ),
@@ -562,16 +564,20 @@ object KairoIcons {
             Triple("inventory_2", "包裹", Icons.Rounded.Inventory2),
             Triple("backpack", "特产", Icons.Rounded.Backpack),
             Triple("qr_code_scanner", "扫码购", Icons.Rounded.QrCodeScanner),
-            Triple("local_post_office", "退货", Icons.Rounded.LocalPostOffice)
+            Triple("refund_parcel", "购物退款", Icons.Rounded.LocalPostOffice),
+            Triple("local_post_office", "退货寄回", Icons.Rounded.LocalPostOffice)
         ),
         iconGroup(
             "服饰美妆",
             Triple("checkroom", "服饰", Icons.Rounded.Checkroom),
-            Triple("face_retouching_natural", "护肤", Icons.Rounded.FaceRetouchingNatural),
+            Triple("sport_shoe", "运动鞋服", Icons.Rounded.SportsSoccer),
+            Triple("face_retouching_natural", "美妆护肤", Icons.Rounded.FaceRetouchingNatural),
+            Triple("personal_care", "个护洗护", Icons.Rounded.Spa),
             Triple("spa", "美容", Icons.Rounded.Spa),
             Triple("content_cut", "理发", Icons.Rounded.ContentCut),
             Triple("diamond", "首饰", Icons.Rounded.Diamond),
-            Triple("watch", "腕表", Icons.Rounded.Watch),
+            Triple("wrist_watch", "腕表", Icons.Rounded.Watch),
+            Triple("watch", "手表", Icons.Rounded.Watch),
             Triple("dry_cleaning", "干洗", Icons.Rounded.DryCleaning),
             Triple("iron", "熨烫", Icons.Rounded.Iron),
             Triple("style", "穿搭", Icons.Rounded.Style),
@@ -583,9 +589,13 @@ object KairoIcons {
             "居家生活",
             Triple("home", "居家", Icons.Rounded.Home),
             Triple("cottage", "房租", Icons.Rounded.Cottage),
+            Triple("house_contract", "房租还贷", Icons.Rounded.Home),
+            Triple("property_fee", "物业费", Icons.Rounded.CorporateFare),
+            Triple("household_lamp", "日常家居", Icons.Rounded.Weekend),
             Triple("chair", "家具", Icons.Rounded.Chair),
             Triple("bed", "床品", Icons.Rounded.Bed),
             Triple("bolt", "水电", Icons.Rounded.Bolt),
+            Triple("electric_plug", "电费", Icons.Rounded.Lightbulb),
             Triple("water_drop", "水费", Icons.Rounded.WaterDrop),
             Triple("lightbulb", "照明", Icons.Rounded.Lightbulb),
             Triple("wifi", "网络", Icons.Rounded.Wifi),
@@ -593,8 +603,13 @@ object KairoIcons {
             Triple("local_laundry_service", "洗护", Icons.Rounded.LocalLaundryService),
             Triple("yard", "园艺", Icons.Rounded.Yard),
             Triple("pets", "宠物", Icons.Rounded.Pets),
+            Triple("pet_food", "宠粮", Icons.Rounded.SetMeal),
+            Triple("set_meal", "喂食", Icons.Rounded.SetMeal),
+            Triple("pet_supplies", "宠用品", Icons.Rounded.ShoppingBasket),
+            Triple("shopping_basket", "篮筐", Icons.Rounded.ShoppingBasket),
             Triple("child_care", "育儿", Icons.Rounded.ChildCare),
             Triple("stroller", "童车", Icons.Rounded.Stroller),
+            Triple("baby_rattle", "母婴玩具", Icons.Rounded.ChildCare),
             Triple("toys", "玩具", Icons.Rounded.Toys),
             Triple("weekend", "家居", Icons.Rounded.Weekend),
             Triple("bathtub", "卫浴", Icons.Rounded.Bathtub),
@@ -606,13 +621,17 @@ object KairoIcons {
         iconGroup(
             "数码通信",
             Triple("devices", "数码", Icons.Rounded.Devices),
+            Triple("smartphone_dev", "手机数码", Icons.Rounded.Smartphone),
             Triple("laptop_mac", "电脑", Icons.Rounded.LaptopMac),
             Triple("phone_android", "话费", Icons.Rounded.PhoneAndroid),
             Triple("headphones", "配件", Icons.Rounded.Headphones),
-            Triple("tv", "家电", Icons.Rounded.Tv),
+            Triple("tv", "电视", Icons.Rounded.Tv),
+            Triple("appliance_washer", "生活电器", Icons.Rounded.LocalLaundryService),
+            Triple("server_rack", "服务器", Icons.Rounded.CloudDone),
+            Triple("virtual_recharge", "虚拟充值", Icons.Rounded.Bolt),
             Triple("camera_alt", "摄影", Icons.Rounded.CameraAlt),
             Triple("subscriptions", "订阅", Icons.Rounded.Subscriptions),
-            Triple("cloud_done", "云服务", Icons.Rounded.CloudDone),
+            Triple("cloud_done", "软件会员", Icons.Rounded.CloudDone),
             Triple("smart_toy", "AI", Icons.Rounded.SmartToy),
             Triple("tablet_mac", "平板", Icons.Rounded.TabletMac),
             Triple("desktop_windows", "外包", Icons.Rounded.DesktopWindows),
@@ -665,7 +684,9 @@ object KairoIcons {
             Triple("menu_book", "读本", Icons.AutoMirrored.Rounded.MenuBook),
             Triple("edit_note", "考证", Icons.Rounded.EditNote),
             Triple("calculate", "退税", Icons.Rounded.Calculate),
-            Triple("palette", "文具", Icons.Rounded.Palette),
+            Triple("stationery", "文具", Icons.AutoMirrored.Rounded.MenuBook),
+            Triple("office_folder", "办公用品", Icons.Rounded.Inventory2),
+            Triple("palette", "画材", Icons.Rounded.Palette),
             Triple("favorite", "恋爱", Icons.Rounded.Favorite),
             Triple("card_giftcard", "红包", Icons.Rounded.CardGiftcard),
             Triple("card_membership", "礼金", Icons.Rounded.CardMembership),
@@ -677,6 +698,7 @@ object KairoIcons {
             Triple("work", "工资", Icons.Rounded.Work),
             Triple("schedule", "津贴", Icons.Rounded.Schedule),
             Triple("payments", "底薪", Icons.Rounded.Payments),
+            Triple("commute_allowance", "餐车补", Icons.Rounded.Payments),
             Triple("star", "奖金", Icons.Rounded.Star),
             Triple("account_balance_wallet", "钱包", Icons.Rounded.AccountBalanceWallet),
             Triple("account_balance", "政务", Icons.Rounded.AccountBalance),
@@ -703,8 +725,10 @@ object KairoIcons {
             Triple("label", "标签", Icons.AutoMirrored.Rounded.Label),
             Triple("category", "分类", Icons.Rounded.Category),
             Triple("more_horiz", "其他", Icons.Rounded.MoreHoriz),
-            Triple("science", "课程", Icons.Rounded.Science),
-            Triple("translate", "早教", Icons.Rounded.Translate),
+            Triple("menu_course", "课程", Icons.Rounded.Science),
+            Triple("science", "实验课", Icons.Rounded.Science),
+            Triple("early_edu", "早教", Icons.Rounded.Translate),
+            Triple("translate", "语言", Icons.Rounded.Translate),
             Triple("business_center", "副业", Icons.Rounded.BusinessCenter),
             Triple("emoji_events", "年终奖", Icons.Rounded.EmojiEvents)
         )
@@ -712,61 +736,58 @@ object KairoIcons {
 
     val tagIconGroups: List<IconGroupSpec> = listOf(
         iconGroup(
-            "报销与账务",
+            "渠道平台",
+            Triple("tag_pdd", "拼多多", Icons.Rounded.Loyalty),
+            Triple("tag_taobao", "淘宝", Icons.Rounded.ShoppingBag),
+            Triple("tag_jd", "京东", Icons.Rounded.LocalShipping),
+            Triple("tag_meituan", "美团", Icons.Rounded.Fastfood),
+            Triple("tag_offline", "线下", Icons.Rounded.Storefront),
+            Triple("tag_crossborder", "跨境", Icons.Rounded.Public)
+        ),
+        iconGroup(
+            "场景行程",
+            Triple("tag_commute", "通勤", Icons.Rounded.Subway),
+            Triple("tag_businesstrip", "差旅", Icons.Rounded.Luggage),
+            Triple("tag_travel", "旅行", Icons.Rounded.Flight),
+            Triple("tag_stockup", "囤货", Icons.Rounded.AddShoppingCart)
+        ),
+        iconGroup(
+            "消费属性",
+            Triple("tag_essential", "刚需", Icons.Rounded.Verified),
+            Triple("tag_installment", "分期", Icons.Rounded.CreditCard),
+            Triple("tag_discount", "立减", Icons.Rounded.LocalOffer),
+            Triple("tag_impulse", "冲动", Icons.Rounded.Bolt),
+            Triple("tag_large", "大额", Icons.Rounded.Diamond)
+        ),
+        iconGroup(
+            "对象账务",
+            Triple("tag_self", "自己", Icons.Rounded.Person),
+            Triple("tag_family", "家人", Icons.Rounded.FamilyRestroom),
+            Triple("tag_partner", "伴侣", Icons.Rounded.Favorite),
+            Triple("tag_aa", "AA", Icons.Rounded.Groups),
+            Triple("tag_taxdeduct", "抵税", Icons.Rounded.Calculate),
+            Triple("tag_renovation", "装修", Icons.Rounded.Handyman)
+        ),
+        iconGroup(
+            "更多扩展",
             Triple("receipt_long", "报销", Icons.AutoMirrored.Rounded.ReceiptLong),
-            Triple("calculate", "计税", Icons.Rounded.Calculate),
-            Triple("credit_card", "分期", Icons.Rounded.CreditCard),
             Triple("subscriptions", "订阅", Icons.Rounded.Subscriptions),
-            Triple("local_offer", "优惠", Icons.Rounded.LocalOffer),
-            Triple("loyalty", "拼购", Icons.Rounded.Loyalty),
-            Triple("diamond", "大额", Icons.Rounded.Diamond),
             Triple("savings", "攒钱", Icons.Rounded.Savings),
             Triple("replay", "退款", Icons.Rounded.Replay),
-            Triple("request_quote", "账单", Icons.Rounded.RequestQuote)
-        ),
-        iconGroup(
-            "消费场景",
             Triple("delivery_dining", "外卖", Icons.Rounded.DeliveryDining),
             Triple("shopping_cart", "网购", Icons.Rounded.ShoppingCart),
-            Triple("shopping_bag", "商城", Icons.Rounded.ShoppingBag),
-            Triple("add_shopping_cart", "囤货", Icons.Rounded.AddShoppingCart),
-            Triple("local_shipping", "快递", Icons.Rounded.LocalShipping),
-            Triple("fastfood", "美食", Icons.Rounded.Fastfood),
-            Triple("storefront", "线下", Icons.Rounded.Storefront),
-            Triple("public", "跨境", Icons.Rounded.Public),
             Triple("celebration", "聚会", Icons.Rounded.Celebration),
-            Triple("handyman", "装修", Icons.Rounded.Handyman)
-        ),
-        iconGroup(
-            "时间与出行",
-            Triple("subway", "通勤", Icons.Rounded.Subway),
-            Triple("luggage", "差旅", Icons.Rounded.Luggage),
-            Triple("flight", "旅行", Icons.Rounded.Flight),
-            Triple("directions_car", "自驾", Icons.Rounded.DirectionsCar),
-            Triple("local_taxi", "打车", Icons.Rounded.LocalTaxi),
             Triple("hotel", "住宿", Icons.Rounded.Hotel),
             Triple("schedule", "日常", Icons.Rounded.Schedule),
             Triple("today", "周末", Icons.Rounded.Today),
             Triple("event_repeat", "周期", Icons.Rounded.EventRepeat),
-            Triple("beach_access", "假日", Icons.Rounded.BeachAccess)
-        ),
-        iconGroup(
-            "人物与关系",
-            Triple("person", "自己", Icons.Rounded.Person),
-            Triple("family_restroom", "家人", Icons.Rounded.FamilyRestroom),
-            Triple("favorite", "伴侣", Icons.Rounded.Favorite),
+            Triple("beach_access", "假日", Icons.Rounded.BeachAccess),
             Triple("pets", "宠物", Icons.Rounded.Pets),
             Triple("redeem", "送礼", Icons.Rounded.Redeem),
-            Triple("groups", "AA", Icons.Rounded.Groups),
             Triple("child_care", "孩子", Icons.Rounded.ChildCare),
             Triple("elderly", "长辈", Icons.Rounded.Elderly),
             Triple("handshake", "同事", Icons.Rounded.Handshake),
-            Triple("card_giftcard", "红包", Icons.Rounded.CardGiftcard)
-        ),
-        iconGroup(
-            "状态与标记",
-            Triple("verified", "刚需", Icons.Rounded.Verified),
-            Triple("bolt", "冲动", Icons.Rounded.Bolt),
+            Triple("card_giftcard", "红包", Icons.Rounded.CardGiftcard),
             Triple("star", "精选", Icons.Rounded.Star),
             Triple("flag", "重点", Icons.Rounded.Flag),
             Triple("bookmark", "待查", Icons.Rounded.Bookmark),
@@ -1757,7 +1778,6 @@ fun TagBadgeChip(
     iconKey: String = ""
 ) {
     val tagColor = Color(colorHex)
-    val resolvedIcon = KairoIcons.tagIcon(iconKey)
     val shape = RoundedCornerShape(6.dp)
     val bgColor = when {
         selected -> tagColor.copy(alpha = 0.16f)
@@ -1786,17 +1806,16 @@ fun TagBadgeChip(
         Row(
             modifier = Modifier.padding(
                 horizontal = if (compact) 5.dp else 8.dp,
-                vertical = if (compact) 1.5.dp else 4.dp
+                vertical = if (compact) 2.dp else 4.dp
             ),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(if (compact) 3.5.dp else 4.5.dp)
+            horizontalArrangement = Arrangement.spacedBy(if (compact) 4.dp else 5.dp)
         ) {
-            if (resolvedIcon != null) {
-                Icon(
-                    imageVector = resolvedIcon,
-                    contentDescription = null,
-                    tint = tagColor,
-                    modifier = Modifier.size(11.dp)
+            if (iconKey.isNotBlank()) {
+                CartoonCategoryIcon(
+                    iconKey = iconKey,
+                    size = if (compact) 13.dp else 15.dp,
+                    fallbackColorHex = colorHex
                 )
             } else {
                 Surface(

@@ -154,5 +154,46 @@ class RecordUsageRankerTest {
         val (icon2, color2) = RecordUsageRanker.suggestCategoryStyle("宠物驱虫", null)
         assertEquals("healing", icon2)
         assertEquals(0xFFD97706L, color2)
+
+        val expectedGranularIcons = mapOf(
+            "早餐" to "breakfast_egg",
+            "午餐" to "lunch_bento",
+            "晚餐" to "dinner_bowl",
+            "休闲零食" to "snack_bag",
+            "电费" to "electric_plug",
+            "水费" to "water_drop",
+            "燃气费" to "propane_tank",
+            "物业费" to "property_fee",
+            "房租还贷" to "house_contract",
+            "手机数码" to "smartphone_dev",
+            "生活电器" to "appliance_washer",
+            "配饰腕表" to "wrist_watch",
+            "服务器" to "server_rack",
+            "虚拟充值" to "virtual_recharge",
+            "办公用品" to "office_folder",
+            "日常家居" to "household_lamp",
+            "个护美妆" to "personal_care",
+            "服饰运动" to "sport_shoe",
+            "母婴玩具" to "baby_rattle",
+            "公共交通" to "directions_bus"
+        )
+        expectedGranularIcons.forEach { (name, expectedIcon) ->
+            assertEquals("Unexpected icon for $name", expectedIcon, RecordUsageRanker.suggestCategoryStyle(name, null).first)
+        }
+
+        val candidates = RecordUsageRanker.suggestCategoryIconCandidates("日常家居")
+        assertTrue(candidates.isNotEmpty())
+        assertEquals("household_lamp", candidates.first())
+        assertTrue("weekend" in candidates)
+    }
+
+    @Test
+    fun suggestTagStyle_assignsBespokeAndDistinctTagIcons() {
+        assertEquals("tag_pdd", RecordUsageRanker.suggestTagStyle("拼多多").first)
+        assertEquals("tag_taobao", RecordUsageRanker.suggestTagStyle("淘宝").first)
+        assertEquals("tag_meituan", RecordUsageRanker.suggestTagStyle("美团外卖").first)
+        assertEquals("celebration", RecordUsageRanker.suggestTagStyle("聚餐").first)
+        val fallbackIcon = RecordUsageRanker.suggestTagStyle("咖啡续命").first
+        assertTrue(fallbackIcon.isNotBlank() && fallbackIcon != "category")
     }
 }

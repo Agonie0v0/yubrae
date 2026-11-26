@@ -380,7 +380,16 @@ final class LedgerStoreTests: XCTestCase {
         XCTAssertEqual(Set(categorySymbols).count, 115)
         XCTAssertFalse(categorySymbols.contains("square.grid.2x2.fill"))
 
-        // 2. 验证默认标签（21 个）：无重复名称、与分类名零重叠、无已清理冗余系统标签、21 个唯一非兜底 SF Symbol
+        // 验证 7 个细化分类图标键
+        XCTAssertEqual(categories.first { $0.name == "课程培训" }?.icon, "menu_course")
+        XCTAssertEqual(categories.first { $0.name == "文具办公" }?.icon, "stationery")
+        XCTAssertEqual(categories.first { $0.name == "宠物食品" }?.icon, "pet_food")
+        XCTAssertEqual(categories.first { $0.name == "宠物用品" }?.icon, "pet_supplies")
+        XCTAssertEqual(categories.first { $0.name == "早教培训" }?.icon, "early_edu")
+        XCTAssertEqual(categories.first { $0.name == "餐补交通补" }?.icon, "commute_allowance")
+        XCTAssertEqual(categories.first { $0.name == "购物退款" }?.icon, "refund_parcel")
+
+        // 2. 验证默认标签（21 个）：无重复名称、与分类名零重叠、无已清理冗余系统标签、与 115 个分类合并共 136 个全局唯一非兜底 SF Symbol
         let tags = DefaultSeedData.makeDefaultTags()
         XCTAssertEqual(tags.count, 21)
         XCTAssertEqual(Set(tags.map(\.name)).count, 21)
@@ -389,11 +398,14 @@ final class LedgerStoreTests: XCTestCase {
         let removedTagNames: Set<String> = ["外卖", "网购", "聚餐", "宠物", "请客", "公司报销", "定期订阅"]
         XCTAssertTrue(tags.allSatisfy { !removedTagNames.contains($0.name) })
         XCTAssertEqual(Set(tags.map(\.icon)).count, 21)
+        XCTAssertTrue(tags.allSatisfy { $0.icon.hasPrefix("tag_") })
         let tagSymbols = tags.map { DefaultSeedData.sfSymbol(for: $0.icon) }
         XCTAssertEqual(Set(tagSymbols).count, 21)
         XCTAssertFalse(tagSymbols.contains("square.grid.2x2.fill"))
+        XCTAssertEqual(Set(categories.map(\.icon) + tags.map(\.icon)).count, 136)
+        XCTAssertEqual(Set(categorySymbols + tagSymbols).count, 136)
 
-        // 3. 构造历史快照并通过 LedgerStore.init 进行端到端无损迁移与升级验证
+        // 3. 构造历史快照并通过 LedgerStore.init 进行端到端无损迁移、标签修复与升级验证
         let dir = makeTempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -410,7 +422,9 @@ final class LedgerStoreTests: XCTestCase {
         snapshot.tags = [
             TagDto(id: 1, name: "网购", groupName: "渠道平台", isSystem: true, icon: "shopping_cart"),
             TagDto(id: 2, name: "大促囤货", groupName: "场景行程", isSystem: true, icon: "shopping_basket"),
-            TagDto(id: 3, name: "外卖", groupName: "自定义", isSystem: false, icon: "star")
+            TagDto(id: 3, name: "外卖", groupName: "自定义", isSystem: false, icon: "star"),
+            TagDto(id: 4, name: "海淘", groupName: "导入", isSystem: false, icon: ""),
+            TagDto(id: 5, name: "手冲咖啡", groupName: "自定义", isSystem: false, icon: "")
         ]
         snapshot.transactions = [
             TransactionDto(
@@ -445,16 +459,115 @@ final class LedgerStoreTests: XCTestCase {
         // 原关联到 “其他杂项(id=21)” 的流水无损迁移到 “其他支出(id=20)”
         XCTAssertEqual(store.transactions.first { $0.id == 100 }?.categoryId, 20)
 
-        // 21 个预置系统标签 + 1 个用户自建同名非系统标签 “外卖”
-        XCTAssertEqual(store.tags.count, 22)
+        // 21 个预置系统标签 + 3 个用户非系统标签（其中空白图标自动修复，自定义 "star" 保留）
+        XCTAssertEqual(store.tags.count, 24)
         XCTAssertFalse(store.tags.contains { $0.isSystem && $0.name == "网购" })
-        XCTAssertEqual(store.tags.first { $0.name == "大促囤货" }?.icon, "add_shopping_cart")
+        XCTAssertEqual(store.tags.first { $0.name == "大促囤货" }?.icon, "tag_stockup")
         let customTag = try XCTUnwrap(store.tags.first { !$0.isSystem && $0.name == "外卖" })
         XCTAssertEqual(customTag.icon, "star")
+        let repairedHaitaoTag = try XCTUnwrap(store.tags.first { !$0.isSystem && $0.name == "海淘" })
+        XCTAssertEqual(repairedHaitaoTag.icon, "tag_crossborder")
+        let repairedCoffeeTag = try XCTUnwrap(store.tags.first { !$0.isSystem && $0.name == "手冲咖啡" })
+        XCTAssertFalse(repairedCoffeeTag.icon.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
 
         // 幂等性检查
         let res = store.ensurePresetCatalogSeeded()
         XCTAssertEqual(res.addedCategories, 0)
         XCTAssertEqual(res.addedTags, 0)
+
+        // 4. 历史一木导入同义大类（居家生活 -> 居家物业、购物消费 -> 日用购物）无损合并、子类去重与图标修复验证
+        let dir2 = makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir2) }
+        try FileManager.default.createDirectory(at: dir2, withIntermediateDirectories: true)
+
+        var yimuSnapshot = DefaultSeedData.makeInitialSnapshot()
+        let homeCanonParent = try XCTUnwrap(yimuSnapshot.categories.first { $0.parentId == nil && $0.name == "居家物业" })
+        let homeCanonBroadband = try XCTUnwrap(yimuSnapshot.categories.first { $0.parentId == homeCanonParent.id && $0.name == "话费宽带" })
+        let shopCanonParent = try XCTUnwrap(yimuSnapshot.categories.first { $0.parentId == nil && $0.name == "日用购物" })
+
+        yimuSnapshot.categories.append(contentsOf: [
+            CategoryDto(id: 500, parentId: nil, name: "居家生活", type: TransactionType.EXPENSE, icon: "category", colorHex: 0xFF0B57D0, isSystem: false),
+            CategoryDto(id: 501, parentId: 500, name: "话费宽带", type: TransactionType.EXPENSE, icon: "category", colorHex: 0xFF0B57D0, isSystem: false),
+            CategoryDto(id: 502, parentId: 500, name: "电费", type: TransactionType.EXPENSE, icon: "bolt", colorHex: 0xFF0B57D0, isSystem: false),
+            CategoryDto(id: 503, parentId: 500, name: "水费", type: TransactionType.EXPENSE, icon: "category", colorHex: 0xFF0B57D0, isSystem: false),
+            CategoryDto(id: 504, parentId: 500, name: "燃气费", type: TransactionType.EXPENSE, icon: "bolt", colorHex: 0xFF0B57D0, isSystem: false),
+            CategoryDto(id: 505, parentId: 500, name: "物业费", type: TransactionType.EXPENSE, icon: "category", colorHex: 0xFF0B57D0, isSystem: false),
+            CategoryDto(id: 506, parentId: 500, name: "房租还贷", type: TransactionType.EXPENSE, icon: "category", colorHex: 0xFF0B57D0, isSystem: false),
+            CategoryDto(id: 507, parentId: 500, name: "快递费", type: TransactionType.EXPENSE, icon: "category", colorHex: 0xFF0B57D0, isSystem: false),
+            CategoryDto(id: 600, parentId: nil, name: "购物消费", type: TransactionType.EXPENSE, icon: "shopping_bag", colorHex: 0xFFDB2777, isSystem: false),
+            CategoryDto(id: 601, parentId: 600, name: "办公用品", type: TransactionType.EXPENSE, icon: "palette", colorHex: 0xFFDB2777, isSystem: false),
+            CategoryDto(id: 602, parentId: 600, name: "虚拟充值", type: TransactionType.EXPENSE, icon: "sports_esports", colorHex: 0xFFDB2777, isSystem: false),
+            CategoryDto(id: 603, parentId: 600, name: "手机数码", type: TransactionType.EXPENSE, icon: "laptop_mac", colorHex: 0xFFDB2777, isSystem: false),
+            CategoryDto(id: 604, parentId: 600, name: "个护美妆", type: TransactionType.EXPENSE, icon: "shopping_bag", colorHex: 0xFFDB2777, isSystem: false),
+            CategoryDto(id: 605, parentId: 600, name: "日常家居", type: TransactionType.EXPENSE, icon: "shopping_bag", colorHex: 0xFFDB2777, isSystem: false),
+            CategoryDto(id: 606, parentId: 600, name: "生活电器", type: TransactionType.EXPENSE, icon: "shopping_bag", colorHex: 0xFFDB2777, isSystem: false),
+            CategoryDto(id: 607, parentId: 600, name: "配饰腕表", type: TransactionType.EXPENSE, icon: "diamond", colorHex: 0xFFDB2777, isSystem: false),
+            CategoryDto(id: 608, parentId: 600, name: "服务器", type: TransactionType.EXPENSE, icon: "smart_toy", colorHex: 0xFFDB2777, isSystem: false),
+            CategoryDto(id: 609, parentId: 600, name: "服饰运动", type: TransactionType.EXPENSE, icon: "shopping_bag", colorHex: 0xFFDB2777, isSystem: false),
+            CategoryDto(id: 610, parentId: 600, name: "母婴玩具", type: TransactionType.EXPENSE, icon: "pets", colorHex: 0xFFDB2777, isSystem: false)
+        ])
+        yimuSnapshot.transactions = [
+            TransactionDto(
+                id: 901, type: TransactionType.EXPENSE, timestamp: 1_772_352_000_000,
+                origAmountMicros: 1_000_000, origCurrency: "CNY", accountId: 1,
+                accountAmountMicros: 1_000_000, accountCurrency: "CNY", categoryId: 501, merchant: "中国电信宽带"
+            ),
+            TransactionDto(
+                id: 902, type: TransactionType.EXPENSE, timestamp: 1_772_352_100_000,
+                origAmountMicros: 800_000, origCurrency: "CNY", accountId: 1,
+                accountAmountMicros: 800_000, accountCurrency: "CNY", categoryId: 502, merchant: "国家电网"
+            )
+        ]
+        yimuSnapshot.budgets = [
+            BudgetDto(id: 1, name: "居家生活预算", categoryId: 500, period: "MONTHLY", limitAmountMicros: 30_000_000)
+        ]
+        yimuSnapshot.recurringRules = [
+            RecurringRuleDto(id: 1, name: "月度宽带", amountMicros: 1_000_000, accountId: 1, categoryId: 501, nextRunEpochMillis: 1_772_352_000_000)
+        ]
+        yimuSnapshot.installments = [
+            InstallmentPlanDto(id: 1, accountId: 6, name: "购物分期", totalAmountMicros: 12_000_000, totalPeriods: 12, nextDueMillis: 1_772_352_000_000, categoryId: 600)
+        ]
+        yimuSnapshot.tags.append(TagDto(id: 99, name: "美团闪购", groupName: "导入", isSystem: false, icon: ""))
+
+        try JSONEncoder().encode(yimuSnapshot).write(to: dir2.appendingPathComponent("snapshot.json"))
+        let yimuStore = LedgerStore(storageDirectory: dir2, useKeychain: false, timeZone: TimeZone(secondsFromGMT: 8 * 3600)!)
+
+        XCTAssertFalse(yimuStore.categories.contains { $0.name == "居家生活" || $0.name == "购物消费" })
+        XCTAssertEqual(yimuStore.categories.filter { $0.name == "话费宽带" }.count, 1)
+        XCTAssertEqual(yimuStore.transactions.first { $0.id == 901 }?.categoryId, homeCanonBroadband.id)
+        XCTAssertEqual(yimuStore.transactions.first { $0.id == 902 }?.categoryId, 502)
+        XCTAssertEqual(yimuStore.budgets.first?.categoryId, homeCanonParent.id)
+        XCTAssertEqual(yimuStore.recurringRules.first?.categoryId, homeCanonBroadband.id)
+        XCTAssertEqual(yimuStore.installments.first?.categoryId, shopCanonParent.id)
+
+        let homeChildren = yimuStore.childCategories(of: homeCanonParent.id)
+        XCTAssertTrue(homeChildren.allSatisfy { $0.icon != "category" && $0.icon != homeCanonParent.icon })
+        XCTAssertEqual(homeChildren.first { $0.name == "电费" }?.icon, "electric_plug")
+        XCTAssertEqual(homeChildren.first { $0.name == "水费" }?.icon, "water_drop")
+        XCTAssertEqual(homeChildren.first { $0.name == "燃气费" }?.icon, "propane_tank")
+        XCTAssertEqual(homeChildren.first { $0.name == "物业费" }?.icon, "property_fee")
+        XCTAssertEqual(homeChildren.first { $0.name == "房租还贷" }?.icon, "house_contract")
+        XCTAssertEqual(homeChildren.first { $0.name == "快递费" }?.icon, "local_shipping")
+        XCTAssertEqual(homeChildren.first { $0.name == "电费" }?.colorHex, homeCanonParent.colorHex)
+        XCTAssertEqual(Set(homeChildren.map(\.icon)).count, homeChildren.count)
+
+        let shopChildren = yimuStore.childCategories(of: shopCanonParent.id)
+        XCTAssertTrue(shopChildren.allSatisfy { $0.icon != "category" && $0.icon != shopCanonParent.icon })
+        XCTAssertEqual(shopChildren.first { $0.name == "办公用品" }?.icon, "office_folder")
+        XCTAssertEqual(shopChildren.first { $0.name == "虚拟充值" }?.icon, "virtual_recharge")
+        XCTAssertEqual(shopChildren.first { $0.name == "手机数码" }?.icon, "smartphone_dev")
+        XCTAssertEqual(shopChildren.first { $0.name == "个护美妆" }?.icon, "personal_care")
+        XCTAssertEqual(shopChildren.first { $0.name == "日常家居" }?.icon, "household_lamp")
+        XCTAssertEqual(shopChildren.first { $0.name == "生活电器" }?.icon, "appliance_washer")
+        XCTAssertEqual(shopChildren.first { $0.name == "配饰腕表" }?.icon, "wrist_watch")
+        XCTAssertEqual(shopChildren.first { $0.name == "服务器" }?.icon, "server_rack")
+        XCTAssertEqual(shopChildren.first { $0.name == "服饰运动" }?.icon, "sport_shoe")
+        XCTAssertEqual(shopChildren.first { $0.name == "母婴玩具" }?.icon, "baby_rattle")
+        XCTAssertEqual(Set(shopChildren.map(\.icon)).count, shopChildren.count)
+
+        XCTAssertEqual(yimuStore.tags.first { !$0.isSystem && $0.name == "美团闪购" }?.icon, "tag_meituan")
+        let yimuIdempotent = yimuStore.ensurePresetCatalogSeeded()
+        XCTAssertEqual(yimuIdempotent.addedCategories, 0)
+        XCTAssertEqual(yimuIdempotent.addedTags, 0)
     }
 }
