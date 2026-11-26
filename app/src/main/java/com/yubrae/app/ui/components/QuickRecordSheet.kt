@@ -26,7 +26,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -422,7 +424,19 @@ fun QuickRecordSheet(
     var editingTransferRateField by remember { mutableStateOf(false) }
 
     var preview by remember { mutableStateOf<ConversionPreview?>(null) }
-    var showKeypad by remember { mutableStateOf(true) }
+    val isSystemImeVisible = rememberIsSystemImeVisible()
+    var imeInputFocused by remember { mutableStateOf(false) }
+    var hasSeenImeSinceFocus by remember { mutableStateOf(false) }
+    LaunchedEffect(isSystemImeVisible) {
+        if (isSystemImeVisible) {
+            hasSeenImeSinceFocus = true
+        } else if (hasSeenImeSinceFocus) {
+            hasSeenImeSinceFocus = false
+            imeInputFocused = false
+            focusManager.clearFocus()
+        }
+    }
+    val showKeypad = !isSystemImeVisible && !imeInputFocused
     var showCurrencyPicker by remember { mutableStateOf(false) }
     var showLedgerPicker by remember { mutableStateOf(false) }
     var showRateOverrideDialog by remember { mutableStateOf(false) }
@@ -667,7 +681,8 @@ fun QuickRecordSheet(
                             manualToAmountMicros = null
                             manualTransferRateMicros = null
                             activePanel = RecordWorkspacePanel.CATEGORY
-                            showKeypad = true
+                            imeInputFocused = false
+                            focusManager.clearFocus()
                             viewModel.showMessage("已记一笔，可继续记录下一笔")
                         } else {
                             onDismiss()
@@ -1042,7 +1057,7 @@ fun QuickRecordSheet(
                                     .clip(RoundedCornerShape(8.dp))
                                     .clickable {
                                         focusManager.clearFocus()
-                                        showKeypad = true
+                                        imeInputFocused = false
                                     }
                                     .padding(horizontal = 2.dp)
                             ) {
@@ -1160,8 +1175,11 @@ fun QuickRecordSheet(
                                                 ?: viewModel.createCategoryAndReturnId(entity)
                                         },
                                         onOpenCategoryManager = onOpenCategoryManager,
-                                        onRequestImeFocus = { showKeypad = false },
-                                        onReleaseImeFocus = { },
+                                        onRequestImeFocus = { imeInputFocused = true },
+                                        onReleaseImeFocus = {
+                                            imeInputFocused = false
+                                            focusManager.clearFocus()
+                                        },
                                         modifier = Modifier.fillMaxSize()
                                     )
                                 }
@@ -1257,7 +1275,7 @@ fun QuickRecordSheet(
                                     }
                                 },
                                 onDone = { activePanel = RecordWorkspacePanel.CATEGORY },
-                                onRequestImeFocus = { showKeypad = false },
+                                onRequestImeFocus = { imeInputFocused = true },
                                 modifier = Modifier.fillMaxSize()
                             )
                         }
@@ -1323,7 +1341,7 @@ fun QuickRecordSheet(
                                 },
                                 onPreviewAttachment = { previewImagePath = it },
                                 onAnalyzeReceipt = if (onAnalyzeReceiptImage != null) analyzeLastReceipt else null,
-                                onRequestImeFocus = { showKeypad = false },
+                                onRequestImeFocus = { imeInputFocused = true },
                                 onDone = { activePanel = RecordWorkspacePanel.CATEGORY },
                                 modifier = Modifier.fillMaxSize()
                             )
@@ -1547,12 +1565,12 @@ fun QuickRecordSheet(
                                 keyboardActions = KeyboardActions(
                                     onDone = {
                                         focusManager.clearFocus()
-                                        showKeypad = true
+                                        imeInputFocused = false
                                     }
                                 ),
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .onFocusChanged { if (it.isFocused) showKeypad = false }
+                                    .onFocusChanged { imeInputFocused = it.isFocused }
                             )
                         }
                         if (note.isNotEmpty()) {
@@ -1622,7 +1640,7 @@ fun QuickRecordSheet(
                         if (amountExpr.isNotEmpty()) amountExpr = amountExpr.dropLast(1)
                     },
                     onClear = { amountExpr = "" },
-                    onHideKeypad = { showKeypad = false },
+                    onHideKeypad = null,
                     onSave = { saveWithMode(false) },
                     saveLabel = if (isEditMode) "保存" else "完成",
                     showSaveAndContinue = !isEditMode && !isRefundMode,
@@ -1641,7 +1659,7 @@ fun QuickRecordSheet(
                     TextButton(
                         onClick = {
                             focusManager.clearFocus()
-                            showKeypad = true
+                            imeInputFocused = false
                         },
                         contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
                     ) {
@@ -2013,6 +2031,10 @@ private fun DateTimeQuickPanel(
         }
     }
 }
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun rememberIsSystemImeVisible(): Boolean = WindowInsets.isImeVisible
 
 @Composable
 private fun MoreAttributesPanel(

@@ -339,6 +339,11 @@ internal class InMemorySyncDatabase {
             publish()
         }
 
+        override suspend fun deleteByAccountId(accountId: Long) {
+            items.entries.removeAll { it.value.accountId == accountId }
+            publish()
+        }
+
         override suspend fun clearAll() {
             items.clear()
             publish()

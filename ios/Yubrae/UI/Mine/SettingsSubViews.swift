@@ -1,3 +1,4 @@
+import AppIntents
 import LocalAuthentication
 import SwiftUI
 import UIKit
@@ -556,6 +557,26 @@ public struct BudgetAndRecurringView: View {
 
 // MARK: - 5. iOS Shortcuts Automation Guide & URL Scheme Tester
 
+@MainActor
+enum ShortcutsDeepLinkHelper {
+    static func openShortcuts(createNew: Bool, onFallbackMessage: ((String) -> Void)? = nil) {
+        let primaryUrl = URL(string: createNew ? "shortcuts://create-shortcut" : "shortcuts://")!
+        let homeUrl = URL(string: "shortcuts://")!
+        let appStoreUrl = URL(string: "https://apps.apple.com/app/id1462947752")!
+        let app = UIApplication.shared
+        if app.canOpenURL(primaryUrl) {
+            app.open(primaryUrl)
+        } else if createNew && app.canOpenURL(homeUrl) {
+            app.open(homeUrl)
+        } else if app.canOpenURL(appStoreUrl) {
+            onFallbackMessage?("未检测到「快捷指令」App，正在前往 App Store")
+            app.open(appStoreUrl)
+        } else {
+            onFallbackMessage?("当前环境无法打开「快捷指令」App，请从主屏幕进入")
+        }
+    }
+}
+
 public struct ShortcutsAutomationGuideView: View {
     @ObservedObject public var store: LedgerStore
     @Environment(\.openURL) private var openURL
@@ -594,6 +615,43 @@ public struct ShortcutsAutomationGuideView: View {
     public var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
+                YubraeCard(palette: palette) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Label("直达 Apple「快捷指令」", systemImage: "bolt.horizontal.circle.fill")
+                            .font(.subheadline.weight(.bold))
+                            .foregroundColor(palette.primary)
+                        if #available(iOS 17.0, *) {
+                            ShortcutsLink()
+                            Text("点击上方系统卡片可直接查看或启用「快捷记一笔」「一句话智能记账」「小票识图记账」。")
+                                .font(.caption)
+                                .foregroundColor(palette.textSecondary)
+                        }
+                        HStack(spacing: 10) {
+                            Button {
+                                ShortcutsDeepLinkHelper.openShortcuts(createNew: true) { msg in
+                                    store.toastMessage = msg
+                                }
+                            } label: {
+                                Label("新建快捷指令", systemImage: "plus.app.fill")
+                                    .font(.subheadline.weight(.semibold))
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.borderedProminent)
+
+                            Button {
+                                ShortcutsDeepLinkHelper.openShortcuts(createNew: false) { msg in
+                                    store.toastMessage = msg
+                                }
+                            } label: {
+                                Label("打开快捷指令 App", systemImage: "arrow.up.forward.app")
+                                    .font(.subheadline.weight(.semibold))
+                                    .frame(maxWidth: .infinity)
+                            }
+                            .buttonStyle(.bordered)
+                        }
+                    }
+                }
+
                 // 方案 1：轻点背面 / 离开支付 App 截屏自动识图
                 YubraeCard(palette: palette) {
                     VStack(alignment: .leading, spacing: 10) {

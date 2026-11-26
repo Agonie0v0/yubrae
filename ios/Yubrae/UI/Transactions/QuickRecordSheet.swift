@@ -1,4 +1,6 @@
+import Combine
 import SwiftUI
+import UIKit
 
 private enum IOSRecordWorkspacePanel {
     case category
@@ -51,7 +53,8 @@ public struct QuickRecordSheet: View {
 
     // 跨币种与弹窗控制
     @State private var showCurrencySheet = false
-    @State private var showKeypad = true
+    @State private var isKeyboardVisible = false
+    private var shouldShowKeypad: Bool { !isKeyboardVisible && !noteFocused }
     @State private var showForexOverride = false
     @State private var manualAccountAmountText: String = ""
     @State private var manualRateText: String = ""
@@ -202,10 +205,19 @@ public struct QuickRecordSheet: View {
 
             Divider().overlay(palette.outline)
 
-            if showKeypad {
-                calculatorKeypadView
-            } else {
-                collapsedBottomSaveBar
+            Group {
+                if shouldShowKeypad {
+                    calculatorKeypadView
+                } else {
+                    collapsedBottomSaveBar
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
+                isKeyboardVisible = true
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+                isKeyboardVisible = false
+                noteFocused = false
             }
         }
         .background(palette.background.ignoresSafeArea())
@@ -400,8 +412,7 @@ public struct QuickRecordSheet: View {
                     .buttonStyle(.plain)
 
                     Button {
-                        noteFocused = false
-                        showKeypad = true
+                        dismissSystemKeyboard()
                     } label: {
                         VStack(alignment: .trailing, spacing: 1) {
                             Text("\(curInfo.symbol)\(amountExpr.isEmpty ? "0.00" : amountExpr)")
@@ -1552,9 +1563,6 @@ public struct QuickRecordSheet: View {
                 .font(.subheadline)
                 .focused($noteFocused)
                 .submitLabel(.done)
-                .onChange(of: noteFocused) { focused in
-                    if focused { showKeypad = false }
-                }
             if !note.isEmpty {
                 Button {
                     note = ""
@@ -1606,7 +1614,10 @@ public struct QuickRecordSheet: View {
                         keypadButton("3") { amountExpr = QuickExprEvaluator.appendDigit(amountExpr, digit: "3") }
                     }
                     HStack(spacing: 5) {
-                        keypadIconButton("keyboard.chevron.compact.down") { showKeypad = false }
+                        keypadButton("00") {
+                            amountExpr = QuickExprEvaluator.appendDigit(amountExpr, digit: "0")
+                            amountExpr = QuickExprEvaluator.appendDigit(amountExpr, digit: "0")
+                        }
                         keypadButton("0") { amountExpr = QuickExprEvaluator.appendDigit(amountExpr, digit: "0") }
                         keypadButton(".") { amountExpr = QuickExprEvaluator.appendDot(amountExpr) }
                     }
@@ -1701,11 +1712,15 @@ public struct QuickRecordSheet: View {
         .buttonStyle(.plain)
     }
 
+    private func dismissSystemKeyboard() {
+        noteFocused = false
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+    }
+
     private var collapsedBottomSaveBar: some View {
         HStack(spacing: 8) {
             Button {
-                noteFocused = false
-                showKeypad = true
+                dismissSystemKeyboard()
             } label: {
                 Label("键盘", systemImage: "keyboard")
                     .font(.subheadline.weight(.semibold))
@@ -1901,7 +1916,7 @@ public struct QuickRecordSheet: View {
                 manualRateText = ""
                 manualToAmountText = ""
                 activePanel = .category
-                showKeypad = true
+                dismissSystemKeyboard()
                 store.toastMessage = "已记一笔，可继续记录"
             } else {
                 store.toastMessage = editingTransaction == nil ? "已保存一笔新账单" : "账单修改已保存"

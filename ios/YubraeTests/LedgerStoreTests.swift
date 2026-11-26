@@ -295,4 +295,61 @@ final class LedgerStoreTests: XCTestCase {
             XCTAssertEqual(error as? LedgerStoreError, .cannotDeleteLastActiveLedger)
         }
     }
+
+    func testDeleteAccountCascadeRollbackAndMigrationAndAllowDeletingAllDefaults() throws {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("yubrae-acc-del-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = LedgerStore(baseDirectory: dir, enableSeedData: true)
+
+        XCTAssertFalse(store.accounts.isEmpty)
+        let wechat = try XCTUnwrap(store.accounts.first { $0.name == "微信零钱" })
+        let bank = try XCTUnwrap(store.accounts.first { $0.name == "银行储蓄卡" })
+
+        try store.calibrateAccountBalance(accountId: wechat.id, targetBalanceMicros: 1_000_000)
+        try store.calibrateAccountBalance(accountId: bank.id, targetBalanceMicros: 500_000)
+
+        try store.saveTransaction(
+            RecordTransactionRequest(
+                type: TransactionType.TRANSFER,
+                timestamp: 1_763_899_200_000,
+                origAmountMicros: 200_000,
+                origCurrency: "CNY",
+                accountId: wechat.id,
+                toAccountId: bank.id
+            )
+        )
+        XCTAssertEqual(store.account(byId: wechat.id)?.balanceMicros, 800_000)
+        XCTAssertEqual(store.account(byId: bank.id)?.balanceMicros, 700_000)
+
+        // 级联删除微信零钱并回滚转账对银行储蓄卡的影响
+        try store.deleteAccount(id: wechat.id, migrateToAccountId: nil)
+        XCTAssertNil(store.account(byId: wechat.id))
+        XCTAssertEqual(store.account(byId: bank.id)?.balanceMicros, 500_000)
+        XCTAssertTrue(store.accountAliases.allSatisfy { $0.accountId != wechat.id })
+
+        // 迁移删除到目标账户
+        let cash = try XCTUnwrap(store.accounts.first { $0.name == "现金" })
+        try store.saveTransaction(
+            RecordTransactionRequest(
+                type: TransactionType.INCOME,
+                timestamp: 1_763_899_300_000,
+                origAmountMicros: 150_000,
+                origCurrency: "CNY",
+                accountId: cash.id
+            )
+        )
+        try store.deleteAccount(id: cash.id, migrateToAccountId: bank.id)
+        XCTAssertNil(store.account(byId: cash.id))
+        XCTAssertEqual(store.account(byId: bank.id)?.balanceMicros, 650_000)
+
+        // 全部剩余默认账户也可删除且重开 Store 不复活
+        for id in store.accounts.map(\.id) {
+            try store.deleteAccount(id: id, migrateToAccountId: nil)
+        }
+        XCTAssertTrue(store.accounts.isEmpty)
+
+        let reopened = LedgerStore(baseDirectory: dir, enableSeedData: true)
+        XCTAssertTrue(reopened.accounts.isEmpty)
+    }
 }

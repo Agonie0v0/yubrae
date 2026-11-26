@@ -293,4 +293,104 @@ final class ExternalBillAndUpdateTests: XCTestCase {
         XCTAssertEqual(YubraeTab.mine.shifted(by: -1), .stats)
         XCTAssertEqual(YubraeTab.mine.shifted(by: -10), .transactions)
     }
+
+    // MARK: - Smart Text Chinese Numerals (Issue #4)
+
+    func testSmartTextParserHandlesChineseNumeralsAndProtectsNonMoneyTokens() {
+        let store = makeTempStore()
+        let accounts = store.accounts
+        let categories = store.categories
+        let aliases = store.accountAliases
+        let nowMs: Int64 = 1_763_899_200_000
+
+        let cnSubway = SmartTextBillParser.parseBatch(
+            text: "今天地铁花了九块钱",
+            accounts: accounts,
+            categories: categories,
+            aliases: aliases,
+            nowMillis: nowMs
+        )
+        XCTAssertEqual(cnSubway.count, 1)
+        XCTAssertEqual(cnSubway[0].type, TransactionType.EXPENSE)
+        XCTAssertEqual(cnSubway[0].origCurrency, "CNY")
+        XCTAssertEqual(cnSubway[0].origAmountMicros, MoneyAmount.parseToMicros("9.00"))
+        XCTAssertEqual(cnSubway[0].merchant, "地铁")
+
+        let arabicSubway = SmartTextBillParser.parseBatch(
+            text: "今天地铁花了9块钱",
+            accounts: accounts,
+            categories: categories,
+            aliases: aliases,
+            nowMillis: nowMs
+        )
+        XCTAssertEqual(arabicSubway.count, 1)
+        XCTAssertEqual(arabicSubway[0].origAmountMicros, MoneyAmount.parseToMicros("9.00"))
+        XCTAssertEqual(arabicSubway[0].merchant, "地铁")
+
+        let frac = SmartTextBillParser.parseBatch(
+            text: "瑞幸咖啡花了九块五",
+            accounts: accounts,
+            categories: categories,
+            aliases: aliases,
+            nowMillis: nowMs
+        )
+        XCTAssertEqual(frac.first?.origAmountMicros, MoneyAmount.parseToMicros("9.50"))
+
+        let jiao = SmartTextBillParser.parseBatch(
+            text: "便利店五毛钱",
+            accounts: accounts,
+            categories: categories,
+            aliases: aliases,
+            nowMillis: nowMs
+        )
+        XCTAssertEqual(jiao.first?.origAmountMicros, MoneyAmount.parseToMicros("0.50"))
+
+        let brand = SmartTextBillParser.parseBatch(
+            text: "在九毛九花了八十八",
+            accounts: accounts,
+            categories: categories,
+            aliases: aliases,
+            nowMillis: nowMs
+        )
+        XCTAssertEqual(brand.count, 1)
+        XCTAssertEqual(brand[0].origAmountMicros, MoneyAmount.parseToMicros("88.00"))
+        XCTAssertTrue(brand[0].merchant.contains("九毛九"))
+
+        let weekday = SmartTextBillParser.parseBatch(
+            text: "星期三麦当劳花了三十八块五",
+            accounts: accounts,
+            categories: categories,
+            aliases: aliases,
+            nowMillis: nowMs
+        )
+        XCTAssertEqual(weekday.first?.origAmountMicros, MoneyAmount.parseToMicros("38.50"))
+
+        let classifier = SmartTextBillParser.parseBatch(
+            text: "买了一块面包花了十二块钱",
+            accounts: accounts,
+            categories: categories,
+            aliases: aliases,
+            nowMillis: nowMs
+        )
+        XCTAssertEqual(classifier.first?.origAmountMicros, MoneyAmount.parseToMicros("12.00"))
+
+        let fx = SmartTextBillParser.parseBatch(
+            text: "亚马逊十美元",
+            accounts: accounts,
+            categories: categories,
+            aliases: aliases,
+            nowMillis: nowMs
+        )
+        XCTAssertEqual(fx.first?.origCurrency, "USD")
+        XCTAssertEqual(fx.first?.origAmountMicros, MoneyAmount.parseToMicros("10.00"))
+
+        let nonMoney = SmartTextBillParser.parseBatch(
+            text: "今天加班花了三个小时",
+            accounts: accounts,
+            categories: categories,
+            aliases: aliases,
+            nowMillis: nowMs
+        )
+        XCTAssertTrue(nonMoney.isEmpty)
+    }
 }

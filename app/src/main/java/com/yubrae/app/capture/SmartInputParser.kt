@@ -208,14 +208,215 @@ class SmartInputParser(
         return finalPieces
     }
 
-    private fun normalizeColloquialChineseMoney(text: String): String {
-        var s = COLLOQUIAL_YUAN_JIAO_REGEX.replace(text) { m ->
-            "${m.groupValues[1]}.${m.groupValues[2]}元"
+    internal fun normalizeColloquialChineseMoney(text: String): String {
+        var s = ARABIC_YUAN_JIAO_REGEX.replace(text) { m ->
+            val fen = m.groupValues[3]
+            if (fen.isNotEmpty()) "${m.groupValues[1]}.${m.groupValues[2]}${fen}元"
+            else "${m.groupValues[1]}.${m.groupValues[2]}元"
         }
-        s = COLLOQUIAL_YUAN_ONLY_REGEX.replace(s) { m ->
+        s = ARABIC_YUAN_ONLY_REGEX.replace(s) { m ->
             "${m.groupValues[1]}元"
         }
+        s = normalizeChineseNumeralsToMoney(s)
         return s
+    }
+
+    private fun normalizeChineseNumeralsToMoney(text: String): String {
+        var s = text
+
+        // 1) 外币中文数字（例如：十美元、两百日元）
+        s = CN_FX_REGEX.replace(s) { m ->
+            if (isProtectedNonMoneyToken(m.value)) return@replace m.value
+            val num = parseChineseNumber(m.groupValues[1]) ?: return@replace m.value
+            "${formatAmountNumber(num)}${m.groupValues[2]}"
+        }
+
+        // 2) 元/块 + 角/分口语（例如：九块五、九块五毛、九块零五、九块半、九块五毛钱）
+        s = CN_YUAN_FRAC_REGEX.replace(s) { m ->
+            val prefix = m.groupValues[1]
+            val yuanNum = parseChineseNumber(m.groupValues[2]) ?: return@replace m.value
+            val fracToken = m.groupValues[3]
+            val unitWord = m.groupValues[4]
+            val jiaoStr = m.groupValues[5]
+            val fenStr = m.groupValues[6]
+            val suffix = m.groupValues[7]
+            if (isProtectedNonMoneyToken(m.groupValues[2] + unitWord)) return@replace m.value
+
+            val total = if (fracToken == "半") {
+                yuanNum + 0.5
+            } else if (fracToken.startsWith("零") && fracToken.length >= 2) {
+                val fenDigit = parseChineseSingleDigit(fracToken.last().toString()) ?: return@replace m.value
+                yuanNum + fenDigit / 100.0
+            } else {
+                val jiao = parseChineseSingleDigit(jiaoStr) ?: return@replace m.value
+                val fen = if (fenStr.isNotEmpty()) parseChineseSingleDigit(fenStr) ?: 0 else 0
+                yuanNum + jiao / 10.0 + fen / 100.0
+            }
+            "$prefix${formatAmountNumber(total)}元$suffix"
+        }
+
+        // 3) 中文数字 + 元/圆/块钱/块（区分“一块蛋糕”等量词与“九块钱/花了九块/九块”金额）
+        s = CN_YUAN_REGEX.replace(s) { m ->
+            val verb = m.groupValues[1]
+            val cnPart = m.groupValues[2]
+            val unitPart = m.groupValues[3]
+            val lookaheadStart = m.range.last + 1
+            val after = if (lookaheadStart < s.length) s.substring(lookaheadStart) else ""
+
+            if (isProtectedNonMoneyToken(cnPart + unitPart)) return@replace m.value
+            if (unitPart == "块" && verb.isEmpty()) {
+                val boundaryOk = after.isEmpty() || CN_BARELY_KUAI_AFTER_REGEX.containsMatchIn(after)
+                if (!boundaryOk) return@replace m.value
+                if (cnPart == "半") return@replace m.value
+            }
+            val num = parseChineseNumber(cnPart) ?: return@replace m.value
+            "$verb${formatAmountNumber(num)}元"
+        }
+
+        // 4) 中文数字 + 毛/角/分（保护“九毛九”）
+        s = CN_SMALL_RMB_REGEX.replace(s) { m ->
+            if (isProtectedNonMoneyToken(m.value)) return@replace m.value
+            if (m.value == "九毛九") return@replace m.value
+            val mainDigit = parseChineseSingleDigit(m.groupValues[1]) ?: return@replace m.value
+            val unit = m.groupValues[2]
+            val subDigit = if (m.groupValues[3].isNotEmpty()) parseChineseSingleDigit(m.groupValues[3]) ?: 0 else 0
+            val amount = when (unit) {
+                "毛", "角" -> mainDigit / 10.0 + subDigit / 100.0
+                "分" -> mainDigit / 100.0
+                else -> return@replace m.value
+            }
+            "${formatAmountNumber(amount)}元"
+        }
+
+        // 5) 消费动词锚定的无单位中文数字（如：打车花了二十、花了三十买水；排除“花了三天/两个小时”）
+        s = VERB_ANCHORED_CN_REGEX.replace(s) { m ->
+            val verb = m.groupValues[1]
+            val cnPart = m.groupValues[2]
+            val lookaheadStart = m.range.last + 1
+            val after = if (lookaheadStart < s.length) s.substring(lookaheadStart) else ""
+            if (after.isNotEmpty() && NON_MONEY_CLASSIFIER_AFTER_REGEX.containsMatchIn(after)) {
+                return@replace m.value
+            }
+            if (cnPart == "半") return@replace m.value
+            val num = parseChineseNumber(cnPart) ?: return@replace m.value
+            "$verb${formatAmountNumber(num)}元"
+        }
+
+        return s
+    }
+
+    private fun isProtectedNonMoneyToken(token: String): Boolean {
+        return token == "九毛九" || token.contains("星期") || token.contains("号") || token.contains("线")
+    }
+
+    private fun formatAmountNumber(value: Double): String {
+        val rounded = kotlin.math.round(value * 100.0) / 100.0
+        val longVal = rounded.toLong()
+        if (kotlin.math.abs(rounded - longVal.toDouble()) < 1e-6) {
+            return longVal.toString()
+        }
+        return String.format(java.util.Locale.US, "%.2f", rounded).trimEnd('0').trimEnd('.')
+    }
+
+    private fun parseChineseSingleDigit(ch: String): Int? = when (ch) {
+        "零", "〇" -> 0
+        "一", "壹" -> 1
+        "二", "两", "俩", "贰" -> 2
+        "三", "叁" -> 3
+        "四", "肆" -> 4
+        "五", "伍" -> 5
+        "六", "陆" -> 6
+        "七", "柒" -> 7
+        "八", "捌" -> 8
+        "九", "玖" -> 9
+        else -> null
+    }
+
+    private fun parseChineseNumber(raw: String): Double? {
+        if (raw.isBlank()) return null
+        if (raw == "半") return 0.5
+        val dotParts = raw.split('点')
+        if (dotParts.size > 2) return null
+
+        val intVal = parseChineseInteger(dotParts[0]) ?: return null
+        if (dotParts.size == 1) return intVal.toDouble()
+
+        val fracStr = dotParts[1]
+        if (fracStr.isEmpty()) return null
+        if (fracStr == "半") return intVal + 0.5
+        var frac = 0.0
+        var scale = 0.1
+        for (c in fracStr) {
+            val d = parseChineseSingleDigit(c.toString()) ?: return null
+            frac += d * scale
+            scale *= 0.1
+        }
+        return intVal + frac
+    }
+
+    private fun parseChineseInteger(raw: String): Long? {
+        if (raw.isEmpty()) return null
+        if (raw == "零" || raw == "〇") return 0L
+        var total = 0L
+        var section = 0L
+        var current = -1L
+        var lastUnit = 0L
+        var sawZero = false
+
+        for (c in raw) {
+            val s = c.toString()
+            val d = parseChineseSingleDigit(s)
+            if (d != null) {
+                if (d == 0) {
+                    sawZero = true
+                    current = -1L
+                } else {
+                    if (current > 0L) return null
+                    current = d.toLong()
+                }
+                continue
+            }
+            when (c) {
+                '十', '拾' -> {
+                    val v = if (current <= 0L) 1L else current
+                    section += v * 10L
+                    current = -1L
+                    lastUnit = 10L
+                    sawZero = false
+                }
+                '百', '佰' -> {
+                    val v = if (current <= 0L) 1L else current
+                    section += v * 100L
+                    current = -1L
+                    lastUnit = 100L
+                    sawZero = false
+                }
+                '千', '仟' -> {
+                    val v = if (current <= 0L) 1L else current
+                    section += v * 1000L
+                    current = -1L
+                    lastUnit = 1000L
+                    sawZero = false
+                }
+                '万', '萬' -> {
+                    if (current > 0L) section += current
+                    total += (if (section == 0L) 1L else section) * 10000L
+                    section = 0L
+                    current = -1L
+                    lastUnit = 10000L
+                    sawZero = false
+                }
+                else -> return null
+            }
+        }
+        if (current > 0L) {
+            section += if (!sawZero && lastUnit >= 100L) {
+                current * (lastUnit / 10L)
+            } else {
+                current
+            }
+        }
+        return total + section
     }
 
     private fun detectDayOffset(clause: String): Int? = when {
@@ -470,6 +671,8 @@ class SmartInputParser(
             .replace(RELATIVE_DATE_WORDS_REGEX, " ")
             .replace(TIME_PERIOD_WORDS_REGEX, " ")
             .replace(PAYMENT_ACCOUNT_NOISE_REGEX, " ")
+            .replace(WHITESPACE_RUN_REGEX, " ")
+            .trim(' ', '，', ',', '。', '；', ';', '：', ':')
             .replace(LEADING_ACTION_FILLER_REGEX, "")
             .replace(TRAILING_ACTION_FILLER_REGEX, "")
             .replace(WHITESPACE_RUN_REGEX, " ")
@@ -489,8 +692,17 @@ class SmartInputParser(
         private val PRIMARY_SPLIT_REGEX = Regex("(?:[，；;、。\\r\\n]+|(?<!\\d),(?!\\d)|,(?![0-9]{3}(?:\\.[0-9]+)?(?:\\D|$)))")
         private val CONNECTOR_SPLIT_REGEX = Regex("(?:然后|接着|随后|另外|还有|以及|并且|(?<=\\s|[0-9元块美元欧镑币])又|又(?=买|花|付|吃|喝|收|转|充|退|订|打|看))")
 
-        private val COLLOQUIAL_YUAN_JIAO_REGEX = Regex("(\\d+)块(\\d{1,2})(?![0-9.])")
-        private val COLLOQUIAL_YUAN_ONLY_REGEX = Regex("(\\d+)块(?![0-9.])")
+        private const val CN_DIGITS = "零〇一壹二两俩贰三叁四肆五伍六陆七柒八捌九玖"
+        private const val CN_NUM_BODY = "[${CN_DIGITS}十拾百佰千仟万萬半]+(?:点[${CN_DIGITS}半]+)?"
+        private val ARABIC_YUAN_JIAO_REGEX = Regex("(\\d+)块(\\d)(\\d)?(?:[毛角]钱?|钱)?(?![0-9.])")
+        private val ARABIC_YUAN_ONLY_REGEX = Regex("(\\d+(?:\\.\\d+)?)块钱?(?![0-9.])")
+        private val CN_FX_REGEX = Regex("($CN_NUM_BODY)(美元|美金|港币|港元|欧元|日元|英镑|韩元|新台币|台币|泰铢|加元|澳元|新币|瑞士法郎)")
+        private val CN_YUAN_FRAC_REGEX = Regex("(花了|花费|消费了?|付款|支付了?|一共|共|合计|收了|收到|入账|发了|转了|充了|充值了?|扣了|交了|给了|)?($CN_NUM_BODY)(块|元|圆)(半|零[${CN_DIGITS}]分?|([${CN_DIGITS}])(?:[毛角](?:([${CN_DIGITS}])分?)?)?)(钱)?(?=$|[\\s,，.。!！?？;；、)）多左右整了呢吧啊])")
+        private val CN_YUAN_REGEX = Regex("(花了|花费|消费了?|付款|支付了?|一共|共|合计|收了|收到|入账|发了|转了|充了|充值了?|扣了|交了|给了|)?($CN_NUM_BODY)(块钱|块|元钱?|圆钱?)")
+        private val CN_BARELY_KUAI_AFTER_REGEX = Regex("^(?:多|左右|整|以内|吧|啊|呢|了|的)?(?=$|[\\s,，.。!！?？;；、)）])")
+        private val CN_SMALL_RMB_REGEX = Regex("(?!九毛九)([${CN_DIGITS}])([毛角分])(?:([${CN_DIGITS}])分?)?钱?")
+        private val VERB_ANCHORED_CN_REGEX = Regex("(花了|花费|消费了?|付款|支付了?|一共|共|合计|收了|收到|入账|发了|转了|充了|充值了?|扣了|交了|给了)($CN_NUM_BODY)")
+        private val NON_MONEY_CLASSIFIER_AFTER_REGEX = Regex("^(?:[个只条件张杯瓶碗盘份盒包袋斤两克次遍趟天日周月年时分秒号楼层线路岁倍成折%点块元圆毛角分])")
 
         private val EXPLICIT_DATE_REGEX = Regex("\\d{4}[-/.年]\\d{1,2}[-/.月]\\d{1,2}日?|\\d{1,2}[-/.月]\\d{1,2}日")
         private val EXPLICIT_CLOCK_REGEX = Regex("(?<!\\d)(\\d{1,2}):(\\d{2})(?::\\d{2})?(?!\\d)")
@@ -530,8 +742,8 @@ class SmartInputParser(
         private val PAYMENT_ACCOUNT_NOISE_REGEX = Regex(
             "(?:用|通过|使用|从)?\\s*(?:微信零钱|微信支付|微信|支付宝|花呗|余额宝|储蓄卡|借记卡|信用卡|全币种信用卡|招商信用卡\\d{0,4}|美元账户|欧元账户|英镑账户|现金)\\s*(?:付款|支付|扣款|消费|入账|收款)?"
         )
-        private val LEADING_ACTION_FILLER_REGEX = Regex("^(?:花了|花费|消费了|消费|支出|付款|支付|买了|买|收到|入账|发了)\\s*")
-        private val TRAILING_ACTION_FILLER_REGEX = Regex("\\s*(?:花了|花费|付款|支付|元|块)$")
+        private val LEADING_ACTION_FILLER_REGEX = Regex("^\\s*(?:花了|花费|消费了|消费|支出|付款|支付|买了|买|收到|入账|发了)\\s*")
+        private val TRAILING_ACTION_FILLER_REGEX = Regex("\\s*(?:花了|花费|消费了|消费|付款|支付|块钱|元|块|钱)\\s*$")
         private val WHITESPACE_RUN_REGEX = Regex("\\s+")
     }
 }

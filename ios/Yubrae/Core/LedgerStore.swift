@@ -13,6 +13,8 @@ public enum LedgerStoreError: LocalizedError, Equatable {
     case cannotDeleteLastActiveLedger
     case cannotMigrateToSameLedger
     case cannotMigrateToArchivedLedger(String)
+    case cannotMigrateToSameAccount
+    case cannotMigrateToArchivedAccount(String)
     case invalidReimbursementSelection
     case debtNotFound(Int64)
     case debtAlreadySettled
@@ -32,6 +34,8 @@ public enum LedgerStoreError: LocalizedError, Equatable {
         case .cannotDeleteLastActiveLedger: return "至少保留一个活跃账本，无法删除最后一个活跃账本"
         case .cannotMigrateToSameLedger: return "目标迁移账本不能与待删除账本相同"
         case .cannotMigrateToArchivedLedger(let name): return "不能迁移到已归档账本：\(name)"
+        case .cannotMigrateToSameAccount: return "目标迁移账户不能与待删除账户相同"
+        case .cannotMigrateToArchivedAccount(let name): return "不能迁移到已归档账户：\(name)"
         case .invalidReimbursementSelection: return "所选账单均非待报销状态或金额为 0"
         case .debtNotFound(let id): return "借贷记录不存在（id=\(id)）"
         case .debtAlreadySettled: return "该笔借贷已全部结清"
@@ -606,6 +610,120 @@ public final class LedgerStore: ObservableObject {
     }
 
     public func deleteAccount(id: Int64) {
+        try? deleteAccount(id: id, migrateToAccountId: nil)
+    }
+
+    public func deleteAccount(id: Int64, migrateToAccountId: Int64?) throws {
+        guard let sourceAccount = accounts.first(where: { $0.id == id }) else {
+            throw LedgerStoreError.accountNotFound(id)
+        }
+        if let targetId = migrateToAccountId, targetId == id {
+            throw LedgerStoreError.cannotMigrateToSameAccount
+        }
+
+        let now = currentEpochMillis()
+        if let targetId = migrateToAccountId {
+            guard let targetAccount = accounts.first(where: { $0.id == targetId }) else {
+                throw LedgerStoreError.accountNotFound(targetId)
+            }
+            if targetAccount.archived {
+                throw LedgerStoreError.cannotMigrateToArchivedAccount(targetAccount.name)
+            }
+
+            let sourceCur = CurrencyCatalog.normalize(sourceAccount.currencyCode)
+            let targetCur = CurrencyCatalog.normalize(targetAccount.currencyCode)
+            let rateToTarget: Int64 = sourceCur == targetCur
+                ? MoneyAmount.rateScale
+                : getRate(from: sourceCur, to: targetCur).rateMicros
+
+            if sourceAccount.balanceMicros != 0 {
+                let delta = sourceCur == targetCur
+                    ? sourceAccount.balanceMicros
+                    : MoneyAmount.convert(amountMicros: sourceAccount.balanceMicros, rateMicros: rateToTarget)
+                adjustAccountBalance(id: targetAccount.id, delta: delta, now: now)
+            }
+
+            for i in transactions.indices {
+                var changed = false
+                if transactions[i].accountId == id {
+                    transactions[i].accountId = targetId
+                    if sourceCur != targetCur {
+                        let converted = MoneyAmount.convert(
+                            amountMicros: transactions[i].accountAmountMicros,
+                            rateMicros: rateToTarget
+                        )
+                        transactions[i].accountAmountMicros = converted
+                        transactions[i].rateToAccountMicros = MoneyAmount.computeRate(
+                            fromAmountMicros: transactions[i].origAmountMicros,
+                            toAmountMicros: converted
+                        )
+                    }
+                    changed = true
+                }
+                if transactions[i].toAccountId == id {
+                    transactions[i].toAccountId = targetId
+                    if transactions[i].accountId == targetId && transactions[i].type == TransactionType.TRANSFER {
+                        transactions[i].toAmountMicros = transactions[i].accountAmountMicros
+                    } else if sourceCur != targetCur, let toAmt = transactions[i].toAmountMicros {
+                        transactions[i].toAmountMicros = MoneyAmount.convert(amountMicros: toAmt, rateMicros: rateToTarget)
+                    }
+                    changed = true
+                }
+                if changed {
+                    transactions[i].updatedAt = now
+                }
+            }
+
+            for i in recurringRules.indices {
+                if recurringRules[i].accountId == id { recurringRules[i].accountId = targetId }
+                if recurringRules[i].toAccountId == id { recurringRules[i].toAccountId = targetId }
+            }
+            for i in debts.indices where debts[i].accountId == id {
+                debts[i].accountId = targetId
+                debts[i].updatedAt = now
+            }
+            for i in installments.indices where installments[i].accountId == id {
+                installments[i].accountId = targetId
+            }
+        } else {
+            let linkedTxs = transactions.filter { $0.accountId == id || $0.toAccountId == id }
+            let linkedIds = Set(linkedTxs.map(\.id))
+
+            for tx in linkedTxs where tx.type == TransactionType.TRANSFER {
+                if tx.accountId == id,
+                   let toId = tx.toAccountId,
+                   toId != id,
+                   let toAmount = tx.toAmountMicros {
+                    adjustAccountBalance(id: toId, delta: -toAmount, now: now)
+                } else if tx.toAccountId == id,
+                          tx.accountId != id {
+                    adjustAccountBalance(id: tx.accountId, delta: tx.accountAmountMicros, now: now)
+                }
+            }
+
+            if !linkedIds.isEmpty {
+                transactions.removeAll { linkedIds.contains($0.id) }
+                for i in transactions.indices {
+                    if let ref = transactions[i].refundOfTxId, linkedIds.contains(ref) {
+                        transactions[i].refundOfTxId = nil
+                        transactions[i].updatedAt = now
+                    }
+                    if let reimb = transactions[i].reimbursedTxId, linkedIds.contains(reimb) {
+                        transactions[i].reimbursedTxId = nil
+                        transactions[i].reimburseStatus = ReimburseStatus.PENDING
+                        transactions[i].updatedAt = now
+                    }
+                }
+            }
+
+            recurringRules.removeAll { $0.accountId == id || $0.toAccountId == id }
+            installments.removeAll { $0.accountId == id }
+            for i in debts.indices where debts[i].accountId == id {
+                debts[i].accountId = nil
+                debts[i].updatedAt = now
+            }
+        }
+
         accounts.removeAll { $0.id == id }
         accountAliases.removeAll { $0.accountId == id }
         settings.hiddenAssetAccountIds.removeAll { $0 == id }

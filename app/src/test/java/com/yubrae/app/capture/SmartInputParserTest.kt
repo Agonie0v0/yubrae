@@ -376,4 +376,50 @@ class SmartInputParserTest {
         assertEquals(MoneyAmount.parseToMicros("35"), fallbackDrafts[0].origAmountMicros)
         assertEquals(MoneyAmount.parseToMicros("28.5"), fallbackDrafts[1].origAmountMicros)
     }
+
+    @Test
+    fun parsesChineseNumeralsAndColloquialMoneyExpressionsAndProtectsNonMoneyTokens() {
+        val subwayCn = smartParser.parseLocalBatch("今天地铁花了九块钱", accounts, categories, aliases).single()
+        assertEquals(TransactionType.EXPENSE, subwayCn.type)
+        assertEquals("CNY", subwayCn.origCurrency)
+        assertEquals(MoneyAmount.parseToMicros("9.00"), subwayCn.origAmountMicros)
+        assertEquals("地铁", subwayCn.merchant)
+
+        val subwayAr = smartParser.parseLocalBatch("今天地铁花了9块钱", accounts, categories, aliases).single()
+        assertEquals(MoneyAmount.parseToMicros("9.00"), subwayAr.origAmountMicros)
+        assertEquals("地铁", subwayAr.merchant)
+
+        val coffee = smartParser.parseLocalBatch("瑞幸咖啡花了九块五", accounts, categories, aliases).single()
+        assertEquals(MoneyAmount.parseToMicros("9.50"), coffee.origAmountMicros)
+
+        val bag = smartParser.parseLocalBatch("便利店五毛钱", accounts, categories, aliases).single()
+        assertEquals(MoneyAmount.parseToMicros("0.50"), bag.origAmountMicros)
+
+        val hundred = smartParser.parseLocalBatch("聚餐两百五十元", accounts, categories, aliases).single()
+        assertEquals(MoneyAmount.parseToMicros("250.00"), hundred.origAmountMicros)
+
+        val verbOnly = smartParser.parseLocalBatch("打车花了三十", accounts, categories, aliases).single()
+        assertEquals(MoneyAmount.parseToMicros("30.00"), verbOnly.origAmountMicros)
+
+        val fx = smartParser.parseLocalBatch("亚马逊十美元", accounts, categories, aliases).single()
+        assertEquals("USD", fx.origCurrency)
+        assertEquals(MoneyAmount.parseToMicros("10.00"), fx.origAmountMicros)
+
+        // 保护非金额数字（品牌名“九毛九”、星期几、地铁线路、商品数量、时间时长）
+        val brand = smartParser.parseLocalBatch("在九毛九花了八十八", accounts, categories, aliases).single()
+        assertEquals(MoneyAmount.parseToMicros("88.00"), brand.origAmountMicros)
+        assertTrue(brand.merchant.contains("九毛九"))
+
+        val weekday = smartParser.parseLocalBatch("星期三麦当劳花了三十八块五", accounts, categories, aliases).single()
+        assertEquals(MoneyAmount.parseToMicros("38.50"), weekday.origAmountMicros)
+
+        val line = smartParser.parseLocalBatch("二号线地铁花了五块", accounts, categories, aliases).single()
+        assertEquals(MoneyAmount.parseToMicros("5.00"), line.origAmountMicros)
+
+        val classifier = smartParser.parseLocalBatch("买了一块面包花了十二块钱", accounts, categories, aliases).single()
+        assertEquals(MoneyAmount.parseToMicros("12.00"), classifier.origAmountMicros)
+
+        val nonMoney = smartParser.parseLocalBatch("今天加班花了三个小时", accounts, categories, aliases)
+        assertTrue(nonMoney.isEmpty())
+    }
 }

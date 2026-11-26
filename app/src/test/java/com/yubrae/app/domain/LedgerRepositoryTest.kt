@@ -1111,4 +1111,123 @@ class LedgerRepositoryTest {
         val updated = tagDao.getById(insertedId)!!
         assertEquals("luggage", updated.icon)
     }
+
+    @Test
+    fun deleteAccount_cascadesAndRollsBackTransfers_andSupportsMigration() = runTest {
+        val accountAliasDao = com.yubrae.app.capture.FakeAccountAliasDao()
+        var hiddenIds = setOf<Long>()
+        var initialSeededFlag = false
+        val repoWithAlias = LedgerRepositoryImpl(
+            accountDao = accountDao,
+            transactionDao = transactionDao,
+            categoryDao = FakeCategoryDao(),
+            budgetDao = FakeBudgetDao(),
+            recurringRuleDao = FakeRecurringRuleDao(),
+            exchangeRateProvider = ExchangeRateRepositoryImpl(
+                exchangeRateDao = FakeExchangeRateDao(),
+                exchangeRateApi = ExchangeRateApi(OkHttpClient()),
+                currentDateProvider = { LocalDate.of(2026, 11, 22) }
+            ),
+            ledgerDao = ledgerDao,
+            getSettings = {
+                com.yubrae.app.data.prefs.AppSettings(
+                    hiddenAssetAccountIds = hiddenIds,
+                    initialAccountsSeeded = initialSeededFlag
+                )
+            },
+            updateSettings = { transform ->
+                val updated = transform(
+                    com.yubrae.app.data.prefs.AppSettings(
+                        hiddenAssetAccountIds = hiddenIds,
+                        initialAccountsSeeded = initialSeededFlag
+                    )
+                )
+                hiddenIds = updated.hiddenAssetAccountIds
+                initialSeededFlag = updated.initialAccountsSeeded
+            },
+            accountAliasDao = accountAliasDao
+        )
+
+        val accA = accountDao.insert(
+            AccountEntity(
+                name = "微信零钱",
+                groupType = AccountGroup.WALLET,
+                currencyCode = "CNY",
+                balanceMicros = MoneyAmount.parseToMicros("100.00")!!
+            )
+        )
+        val accB = accountDao.insert(
+            AccountEntity(
+                name = "银行储蓄卡",
+                groupType = AccountGroup.DEBIT,
+                currencyCode = "CNY",
+                balanceMicros = MoneyAmount.parseToMicros("50.00")!!
+            )
+        )
+        val accC = accountDao.insert(
+            AccountEntity(
+                name = "现金",
+                groupType = AccountGroup.WALLET,
+                currencyCode = "CNY",
+                balanceMicros = MoneyAmount.parseToMicros("10.00")!!
+            )
+        )
+        hiddenIds = setOf(accA)
+        accountAliasDao.insert(
+            com.yubrae.app.data.db.AccountAliasEntity(accountId = accA, matchType = "KEYWORD", pattern = "微信")
+        )
+
+        // 转账 20 元 A -> B (A=80, B=70)，再用 5 元 B -> A (A=85, B=65)
+        repoWithAlias.saveTransaction(
+            RecordTransactionRequest(
+                type = TransactionType.TRANSFER,
+                timestamp = millisOf(2026, 11, 22, 9, 0),
+                origAmountMicros = MoneyAmount.parseToMicros("20.00")!!,
+                origCurrency = "CNY",
+                accountId = accA,
+                toAccountId = accB
+            )
+        ).getOrThrow()
+        repoWithAlias.saveTransaction(
+            RecordTransactionRequest(
+                type = TransactionType.TRANSFER,
+                timestamp = millisOf(2026, 11, 22, 10, 0),
+                origAmountMicros = MoneyAmount.parseToMicros("5.00")!!,
+                origCurrency = "CNY",
+                accountId = accB,
+                toAccountId = accA
+            )
+        ).getOrThrow()
+
+        // 级联删除 A：删除关联账单，准确回滚对账户 B 的转账余额影响（B 恢复 50.00 元），并清理别名与隐藏列表
+        val delResA = repoWithAlias.deleteAccount(accA, migrateToAccountId = null)
+        assertTrue(delResA.isSuccess)
+        assertEquals(null, accountDao.getById(accA))
+        assertEquals(MoneyAmount.parseToMicros("50.00")!!, accountDao.getById(accB)!!.balanceMicros)
+        assertTrue(transactionDao.getAll().isEmpty())
+        assertTrue(accountAliasDao.getAll().none { it.accountId == accA })
+        assertFalse(accA in hiddenIds)
+        assertTrue(initialSeededFlag)
+
+        // 迁移删除 C -> B：先记录一笔 3 元支出（C=7.00），再迁移删除 C 到 B（B=57.00）
+        repoWithAlias.saveTransaction(
+            RecordTransactionRequest(
+                type = TransactionType.EXPENSE,
+                timestamp = millisOf(2026, 11, 22, 11, 0),
+                origAmountMicros = MoneyAmount.parseToMicros("3.00")!!,
+                origCurrency = "CNY",
+                accountId = accC
+            )
+        ).getOrThrow()
+        val migrateRes = repoWithAlias.deleteAccount(accC, migrateToAccountId = accB)
+        assertTrue(migrateRes.isSuccess)
+        assertEquals(null, accountDao.getById(accC))
+        assertEquals(MoneyAmount.parseToMicros("57.00")!!, accountDao.getById(accB)!!.balanceMicros)
+        assertEquals(accB, transactionDao.getAll().single().accountId)
+
+        // 允许删除最后一个活跃账户
+        val delLast = repoWithAlias.deleteAccount(accB, migrateToAccountId = null)
+        assertTrue(delLast.isSuccess)
+        assertTrue(accountDao.getAll().isEmpty())
+    }
 }

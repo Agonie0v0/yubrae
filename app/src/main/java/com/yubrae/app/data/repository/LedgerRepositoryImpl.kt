@@ -12,6 +12,7 @@ import com.yubrae.app.core.contract.NetWorthSummary
 import com.yubrae.app.core.contract.RecordTransactionRequest
 import com.yubrae.app.core.contract.TrendBucketPoint
 import com.yubrae.app.core.model.MoneyAmount
+import com.yubrae.app.data.db.AccountAliasDao
 import com.yubrae.app.data.db.AccountDao
 import com.yubrae.app.data.db.AccountEntity
 import com.yubrae.app.data.db.BudgetDao
@@ -70,7 +71,8 @@ class LedgerRepositoryImpl(
     private val clockMillisProvider: () -> Long = { System.currentTimeMillis() },
     private val tagDao: TagDao? = null,
     private val presetCatalogSeeder: (suspend () -> Pair<Int, Int>)? = null,
-    private val updateSettings: suspend ((AppSettings) -> AppSettings) -> Unit = {}
+    private val updateSettings: suspend ((AppSettings) -> AppSettings) -> Unit = {},
+    private val accountAliasDao: AccountAliasDao? = null
 ) : LedgerService {
 
     constructor(
@@ -93,7 +95,8 @@ class LedgerRepositoryImpl(
         presetCatalogSeeder = {
             DefaultSeedData.ensurePresetCategories(db) to DefaultSeedData.ensurePresetTags(db)
         },
-        updateSettings = { transform -> settingsStore.update(transform) }
+        updateSettings = { transform -> settingsStore.update(transform) },
+        accountAliasDao = db.accountAliasDao()
     )
 
     override fun observeActiveAccounts(): Flow<List<AccountEntity>> = accountDao.observeActive()
@@ -343,6 +346,174 @@ class LedgerRepositoryImpl(
     override suspend fun archiveAccount(accountId: Long, archived: Boolean) {
         val existing = accountDao.getById(accountId) ?: return
         accountDao.update(existing.copy(archived = archived, updatedAt = clockMillisProvider()))
+    }
+
+    override suspend fun deleteAccount(accountId: Long, migrateToAccountId: Long?): Result<Unit> {
+        if (migrateToAccountId != null && migrateToAccountId == accountId) {
+            return Result.failure(IllegalArgumentException("目标迁移账户不能与待删除账户相同"))
+        }
+        return try {
+            runInTransaction {
+                val sourceAccount = accountDao.getById(accountId)
+                    ?: throw IllegalArgumentException("账户不存在: $accountId")
+                val now = clockMillisProvider()
+
+                if (migrateToAccountId != null) {
+                    val targetAccount = accountDao.getById(migrateToAccountId)
+                        ?: throw IllegalArgumentException("目标迁移账户不存在: $migrateToAccountId")
+                    if (targetAccount.archived) {
+                        throw IllegalArgumentException("不能迁移到已归档账户: ${targetAccount.name}")
+                    }
+
+                    val sourceCur = LedgerAnalytics.normalizeCurrency(sourceAccount.currencyCode)
+                    val targetCur = LedgerAnalytics.normalizeCurrency(targetAccount.currencyCode)
+                    val rateToTarget = if (sourceCur == targetCur) {
+                        MoneyAmount.RATE_SCALE
+                    } else {
+                        exchangeRateProvider.getRate(sourceCur, targetCur).rateMicros
+                    }
+
+                    if (sourceAccount.balanceMicros != 0L) {
+                        val delta = if (sourceCur == targetCur) {
+                            sourceAccount.balanceMicros
+                        } else {
+                            MoneyAmount.convert(sourceAccount.balanceMicros, rateToTarget)
+                        }
+                        accountDao.adjustBalance(targetAccount.id, delta, now)
+                    }
+
+                    val allTxs = transactionDao.getAll()
+                    for (tx in allTxs) {
+                        if (tx.accountId != accountId && tx.toAccountId != accountId) continue
+                        val newAccountId = if (tx.accountId == accountId) migrateToAccountId else tx.accountId
+                        val newToAccountId = if (tx.toAccountId == accountId) migrateToAccountId else tx.toAccountId
+                        var newAccountAmount = tx.accountAmountMicros
+                        var newRateToAccount = tx.rateToAccountMicros
+                        var newToAmount = tx.toAmountMicros
+
+                        if (tx.accountId == accountId && sourceCur != targetCur) {
+                            newAccountAmount = MoneyAmount.convert(tx.accountAmountMicros, rateToTarget)
+                            newRateToAccount = MoneyAmount.computeRate(tx.origAmountMicros, newAccountAmount)
+                        }
+                        if (tx.toAccountId == accountId) {
+                            if (newAccountId == newToAccountId && tx.type == TransactionType.TRANSFER) {
+                                newToAmount = newAccountAmount
+                            } else if (sourceCur != targetCur && newToAmount != null) {
+                                newToAmount = MoneyAmount.convert(newToAmount, rateToTarget)
+                            }
+                        }
+
+                        transactionDao.update(
+                            tx.copy(
+                                accountId = newAccountId,
+                                toAccountId = newToAccountId,
+                                accountAmountMicros = newAccountAmount,
+                                rateToAccountMicros = newRateToAccount,
+                                toAmountMicros = newToAmount,
+                                updatedAt = now
+                            )
+                        )
+                    }
+
+                    for (rule in recurringRuleDao.getAll()) {
+                        if (rule.accountId == accountId || rule.toAccountId == accountId) {
+                            recurringRuleDao.update(
+                                rule.copy(
+                                    accountId = if (rule.accountId == accountId) migrateToAccountId else rule.accountId,
+                                    toAccountId = if (rule.toAccountId == accountId) migrateToAccountId else rule.toAccountId
+                                )
+                            )
+                        }
+                    }
+
+                    debtRecordDao?.getAll()?.forEach { debt ->
+                        if (debt.accountId == accountId) {
+                            debtRecordDao.update(debt.copy(accountId = migrateToAccountId, updatedAt = now))
+                        }
+                    }
+
+                    installmentPlanDao?.getAll()?.forEach { plan ->
+                        if (plan.accountId == accountId) {
+                            installmentPlanDao.update(plan.copy(accountId = migrateToAccountId))
+                        }
+                    }
+                } else {
+                    val allTxs = transactionDao.getAll()
+                    val linkedTxs = allTxs.filter { it.accountId == accountId || it.toAccountId == accountId }
+                    val linkedIds = linkedTxs.mapTo(HashSet()) { it.id }
+
+                    for (tx in linkedTxs) {
+                        if (tx.type == TransactionType.TRANSFER) {
+                            val toId = tx.toAccountId
+                            val toAmt = tx.toAmountMicros
+                            if (tx.accountId == accountId && toId != null && toId != accountId && toAmt != null) {
+                                accountDao.adjustBalance(toId, -toAmt, now)
+                            } else if (toId == accountId && tx.accountId != accountId) {
+                                accountDao.adjustBalance(tx.accountId, tx.accountAmountMicros, now)
+                            }
+                        }
+                    }
+
+                    if (linkedIds.isNotEmpty()) {
+                        for (tx in allTxs) {
+                            if (tx.id in linkedIds) continue
+                            val clearRefund = tx.refundOfTxId != null && tx.refundOfTxId in linkedIds
+                            val clearReimb = tx.reimbursedTxId != null && tx.reimbursedTxId in linkedIds
+                            if (clearRefund || clearReimb) {
+                                transactionDao.update(
+                                    tx.copy(
+                                        refundOfTxId = if (clearRefund) null else tx.refundOfTxId,
+                                        reimbursedTxId = if (clearReimb) null else tx.reimbursedTxId,
+                                        reimburseStatus = if (clearReimb) ReimburseStatus.PENDING else tx.reimburseStatus,
+                                        updatedAt = now
+                                    )
+                                )
+                            }
+                        }
+                        for (tx in linkedTxs) {
+                            transactionDao.deleteById(tx.id)
+                        }
+                    }
+
+                    for (rule in recurringRuleDao.getAll()) {
+                        if (rule.accountId == accountId || rule.toAccountId == accountId) {
+                            recurringRuleDao.deleteById(rule.id)
+                        }
+                    }
+
+                    installmentPlanDao?.getAll()?.forEach { plan ->
+                        if (plan.accountId == accountId) {
+                            installmentPlanDao.deleteById(plan.id)
+                        }
+                    }
+
+                    debtRecordDao?.getAll()?.forEach { debt ->
+                        if (debt.accountId == accountId) {
+                            debtRecordDao.update(debt.copy(accountId = null, updatedAt = now))
+                        }
+                    }
+                }
+
+                accountAliasDao?.deleteByAccountId(accountId)
+                accountDao.deleteById(accountId)
+            }
+
+            updateSettings { cur ->
+                if (accountId in cur.hiddenAssetAccountIds || !cur.initialAccountsSeeded) {
+                    cur.copy(
+                        hiddenAssetAccountIds = cur.hiddenAssetAccountIds - accountId,
+                        initialAccountsSeeded = true
+                    )
+                } else {
+                    cur
+                }
+            }
+            Result.success(Unit)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
     }
 
     override suspend fun calibrateAccountBalance(

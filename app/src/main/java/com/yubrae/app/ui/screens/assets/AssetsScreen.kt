@@ -41,6 +41,7 @@ import androidx.compose.material.icons.rounded.Archive
 import androidx.compose.material.icons.rounded.ArrowDownward
 import androidx.compose.material.icons.rounded.ArrowDropDown
 import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.ExpandLess
 import androidx.compose.material.icons.rounded.ExpandMore
@@ -50,6 +51,7 @@ import androidx.compose.material.icons.rounded.Unarchive
 import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
@@ -58,6 +60,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -140,6 +143,8 @@ fun AssetsScreen(
     onOpenHiddenAssets: () -> Unit = {}
 ) {
     val uiState by viewModel.assetsUiState.collectAsStateWithLifecycle()
+    val allAccounts by viewModel.allAccounts.collectAsStateWithLifecycle()
+    val allTransactions by viewModel.allTransactions.collectAsStateWithLifecycle()
     val settings by viewModel.settings.collectAsStateWithLifecycle()
     val privacyMasked = LocalPrivacyMasked.current
     val hasDetailCallback = onOpenAccountDetail !== DefaultOpenAccountDetail
@@ -152,6 +157,7 @@ fun AssetsScreen(
     var editingAccount by remember { mutableStateOf<AccountEntity?>(null) }
     var createInitialGroup by remember { mutableStateOf<String?>(null) }
     var calibrateTarget by remember { mutableStateOf<AccountEntity?>(null) }
+    var deleteTarget by remember { mutableStateOf<AccountEntity?>(null) }
     var showDisplayCurrencyMenu by remember { mutableStateOf(false) }
     var showNetWorthMoreMenu by remember { mutableStateOf(false) }
     var showMoreDisplayCurrencies by remember { mutableStateOf(false) }
@@ -612,6 +618,14 @@ fun AssetsScreen(
                         viewModel.archiveAccount(acc.id, !acc.archived)
                     }
                 )
+                AccountActionRow(
+                    icon = Icons.Rounded.Delete,
+                    label = "删除账户",
+                    onClick = {
+                        actionAccount = null
+                        deleteTarget = acc
+                    }
+                )
             }
         }
     }
@@ -646,6 +660,27 @@ fun AssetsScreen(
                 }
             },
             onDismiss = { calibrateTarget = null }
+        )
+    }
+
+    // 删除账户确认/迁移对话框
+    deleteTarget?.let { acc ->
+        val linkedCount = remember(allTransactions, acc.id) {
+            allTransactions.count { it.accountId == acc.id || it.toAccountId == acc.id }
+        }
+        val targets = remember(allAccounts, acc.id) {
+            allAccounts.filter { !it.archived && it.id != acc.id }
+        }
+        DeleteAccountConfirmDialog(
+            account = acc,
+            linkedTxCount = linkedCount,
+            availableTargets = targets,
+            onConfirmDelete = { migrateToId ->
+                viewModel.deleteAccount(acc.id, migrateToId) {
+                    deleteTarget = null
+                }
+            },
+            onDismiss = { deleteTarget = null }
         )
     }
 
@@ -1528,6 +1563,196 @@ internal fun CalibrateBalanceDialog(
             )
             errorMsg?.let {
                 Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+            }
+        }
+    }
+}
+
+@Composable
+internal fun DeleteAccountConfirmDialog(
+    account: AccountEntity,
+    linkedTxCount: Int,
+    availableTargets: List<AccountEntity>,
+    onConfirmDelete: (migrateToAccountId: Long?) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val semantic = KairoTheme.semantic
+    val privacyMasked = LocalPrivacyMasked.current
+    var migrateMode by remember(account.id, linkedTxCount, availableTargets.size) {
+        mutableStateOf(linkedTxCount > 0 && availableTargets.isNotEmpty())
+    }
+    var selectedTargetId by remember(account.id, availableTargets) {
+        mutableLongStateOf(availableTargets.firstOrNull()?.id ?: 0L)
+    }
+
+    YubraeDialog(
+        onDismissRequest = onDismiss,
+        title = if (linkedTxCount == 0) "删除账户「${account.name}」？" else "删除或迁移「${account.name}」",
+        subtitle = "${AccountGroup.labelZh(account.groupType)} · ${account.currencyCode}" +
+            if (linkedTxCount > 0) " · 关联 $linkedTxCount 笔账单" else "",
+        icon = Icons.Rounded.Delete,
+        confirmButton = {
+            val canConfirm = !migrateMode || selectedTargetId > 0L
+            Button(
+                onClick = {
+                    val target = if (linkedTxCount > 0 && migrateMode && selectedTargetId > 0L) {
+                        selectedTargetId
+                    } else {
+                        null
+                    }
+                    onConfirmDelete(target)
+                },
+                enabled = canConfirm,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = semantic.expense,
+                    contentColor = Color.White
+                ),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Text(if (linkedTxCount > 0 && migrateMode) "迁移并删除" else "确认删除")
+            }
+        },
+        dismissButton = {
+            TextButton(
+                onClick = onDismiss,
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Text("取消")
+            }
+        }
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            if (linkedTxCount == 0) {
+                Text(
+                    text = "当前账户余额：${
+                        formatPrivacyAmount(
+                            privacyMasked,
+                            MoneyAmount.format(account.balanceMicros, account.currencyCode, showCurrencyCode = true)
+                        )
+                    }。暂无关联账单，删除后将移除该账户及识别别名，重启也不会自动重建。",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else {
+                Text(
+                    text = "该账户共有 $linkedTxCount 笔历史关联账单，请选择处理方式：",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                if (availableTargets.isNotEmpty()) {
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.surfaceContainerLow,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(12.dp))
+                            .clickable { migrateMode = true }
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            RadioButton(
+                                selected = migrateMode,
+                                onClick = { migrateMode = true }
+                            )
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "迁移账单与余额到其他账户后删除",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.Medium
+                                )
+                                Text(
+                                    text = "保留全部流水、周期、分期与借贷记录",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+
+                    if (migrateMode) {
+                        Column(
+                            modifier = Modifier.padding(start = 8.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            availableTargets.forEach { target ->
+                                val selected = target.id == selectedTargetId
+                                Surface(
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = if (selected) {
+                                        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f)
+                                    } else {
+                                        MaterialTheme.colorScheme.surfaceContainerLowest
+                                    },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .clickable { selectedTargetId = target.id }
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                    ) {
+                                        RadioButton(
+                                            selected = selected,
+                                            onClick = { selectedTargetId = target.id }
+                                        )
+                                        CartoonAccountIcon(
+                                            iconKey = target.icon,
+                                            accountName = target.name,
+                                            colorHex = target.colorHex,
+                                            size = 28.dp
+                                        )
+                                        Text(
+                                            text = "${target.name} (${target.currencyCode})",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Surface(
+                    shape = RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerLow,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .clickable { migrateMode = false }
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        RadioButton(
+                            selected = !migrateMode,
+                            onClick = { migrateMode = false }
+                        )
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "直接删除账户及关联 $linkedTxCount 笔账单",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Medium,
+                                color = semantic.expense
+                            )
+                            Text(
+                                text = "自动回滚跨账户转账对方余额并清理别名",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
             }
         }
     }

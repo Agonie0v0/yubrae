@@ -13,6 +13,7 @@ public struct AssetsView: View {
     @State private var showHiddenAccounts = false
     @State private var accountEditContext: AccountEditContext?
     @State private var calibratingAccount: AccountDto?
+    @State private var deletingAccount: AccountDto?
     @State private var showHiddenManagerSheet = false
     @State private var showAddDebtSheet = false
     @State private var settlingDebt: DebtRecordDto?
@@ -118,6 +119,12 @@ public struct AssetsView: View {
             .sheet(item: $calibratingAccount) { acc in
                 BalanceCalibrationSheet(store: store, account: acc)
                     .yubraeSheetStyle(palette: palette)
+            }
+            .sheet(item: $deletingAccount) { acc in
+                DeleteAccountConfirmSheet(store: store, account: acc) {
+                    deletingAccount = nil
+                }
+                .yubraeSheetStyle(palette: palette)
             }
             .sheet(isPresented: $showHiddenManagerSheet) {
                 HiddenAssetsManagerSheet(store: store)
@@ -499,6 +506,11 @@ public struct AssetsView: View {
             } label: {
                 Label("归档账户", systemImage: "archivebox")
             }
+            Button(role: .destructive) {
+                deletingAccount = acc
+            } label: {
+                Label("删除账户", systemImage: "trash")
+            }
         }
     }
 
@@ -516,8 +528,14 @@ public struct AssetsView: View {
                                 store.archiveAccount(id: acc.id, archived: false)
                                 store.toastMessage = "已恢复账户「\(acc.name)」"
                             }
+                            .buttonStyle(.borderless)
                             .font(.caption.weight(.semibold))
                             .foregroundColor(palette.primary)
+                            Button("删除", role: .destructive) {
+                                deletingAccount = acc
+                            }
+                            .buttonStyle(.borderless)
+                            .font(.caption.weight(.semibold))
                         }
                     }
                 }
@@ -724,21 +742,14 @@ private struct AccountEditorSheet: View {
                         .yubraeSheetStyle(palette: palette)
                 }
             }
-        }
-        .yubraeConfirmDialog(
-            isPresented: $showDeleteConfirm,
-            palette: palette,
-            icon: "trash.fill",
-            title: "确认删除「\(editingAccount?.name ?? "该账户")」？",
-            message: "删除账户不会清除历史账单记录，但将移除该账户的余额统计。",
-            confirmTitle: "删除",
-            cancelTitle: "取消",
-            isDestructive: true
-        ) {
-            if let existing = editingAccount {
-                store.deleteAccount(id: existing.id)
-                store.toastMessage = "已删除账户「\(existing.name)」"
-                dismiss()
+            .sheet(isPresented: $showDeleteConfirm) {
+                if let existing = editingAccount {
+                    DeleteAccountConfirmSheet(store: store, account: existing) {
+                        showDeleteConfirm = false
+                        dismiss()
+                    }
+                    .yubraeSheetStyle(palette: palette)
+                }
             }
         }
     }
@@ -1145,5 +1156,97 @@ private struct SettleReimburseSheet: View {
                 }
             }
         }
+    }
+}
+
+private struct DeleteAccountConfirmSheet: View {
+    @ObservedObject var store: LedgerStore
+    let account: AccountDto
+    let onDeleted: () -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var migrateTargetId: Int64 = 0
+    @State private var initialized = false
+
+    private var linkedCount: Int {
+        store.transactions.filter { $0.accountId == account.id || $0.toAccountId == account.id }.count
+    }
+
+    private var migrateTargets: [AccountDto] {
+        store.activeAccounts.filter { $0.id != account.id }
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(account.name)
+                            .font(.headline)
+                        Text(CurrencyCatalog.find(account.currencyCode).nameZh + " · " + account.currencyCode)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+
+                if linkedCount == 0 {
+                    Section(footer: Text("当前账户暂无关联账单，删除后将清理识别别名，重启也不会自动重建。")) {
+                        Text("当前余额：\(MoneyAmount.format(account.balanceMicros, currencyCode: account.currencyCode, showCurrencyCode: true))")
+                            .foregroundColor(.secondary)
+                    }
+                } else {
+                    Section(
+                        header: Text("该账户存在 \(linkedCount) 笔关联账单"),
+                        footer: Text(migrateTargetId > 0
+                            ? "将把该账户的历史账单、余额及周期/分期/借贷关联迁移到目标账户后再删除。"
+                            : "将删除该账户及全部关联账单，并自动回滚跨账户转账对方账户的余额。")
+                    ) {
+                        Picker("处理方式", selection: $migrateTargetId) {
+                            Text("直接删除账户及关联账单").tag(Int64(0))
+                            ForEach(migrateTargets) { target in
+                                Text("迁移至「\(target.name) (\(target.currencyCode))」").tag(target.id)
+                            }
+                        }
+                    }
+                }
+
+                Section {
+                    Button(
+                        linkedCount > 0 && migrateTargetId > 0
+                            ? "迁移并删除「\(account.name)」"
+                            : "确认删除「\(account.name)」",
+                        role: .destructive
+                    ) {
+                        do {
+                            let target: Int64? = (linkedCount > 0 && migrateTargetId > 0) ? migrateTargetId : nil
+                            try store.deleteAccount(id: account.id, migrateToAccountId: target)
+                            store.toastMessage = target != nil
+                                ? "已迁移账单并删除账户「\(account.name)」"
+                                : "已删除账户「\(account.name)」"
+                            onDeleted()
+                            dismiss()
+                        } catch {
+                            store.lastErrorMessage = error.localizedDescription
+                        }
+                    }
+                }
+            }
+            .navigationTitle("删除账户")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("取消") { dismiss() }
+                }
+            }
+            .onAppear {
+                if !initialized {
+                    initialized = true
+                    if linkedCount > 0, let firstTarget = migrateTargets.first {
+                        migrateTargetId = firstTarget.id
+                    }
+                }
+            }
+        }
+        .presentationDetents([.medium])
     }
 }

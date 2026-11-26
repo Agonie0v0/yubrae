@@ -934,9 +934,15 @@ private fun AccountDetailHost(
     val assetsUiState by viewModel.assetsUiState.collectAsStateWithLifecycle()
 
     val targetAccount = allAccounts.firstOrNull { it.id == accountId }
+    var seenTargetAccount by remember(accountId) { mutableStateOf(false) }
+    LaunchedEffect(targetAccount != null) {
+        if (targetAccount != null) {
+            seenTargetAccount = true
+        }
+    }
     if (targetAccount == null) {
-        LaunchedEffect(accountId, allAccounts.size) {
-            if (allAccounts.isNotEmpty()) {
+        LaunchedEffect(accountId, seenTargetAccount, allAccounts.size) {
+            if (seenTargetAccount || allAccounts.isNotEmpty()) {
                 onBack()
             }
         }
@@ -945,6 +951,7 @@ private fun AccountDetailHost(
 
     AccountDetailScreen(
         account = targetAccount,
+        allAccounts = allAccounts,
         transactions = allTransactions,
         categories = categories,
         installments = installments,
@@ -959,6 +966,11 @@ private fun AccountDetailHost(
         onEditAccount = { updated -> viewModel.saveAccount(updated) },
         onToggleArchive = { archived ->
             viewModel.archiveAccount(targetAccount.id, archived)
+        },
+        onDeleteAccount = { migrateToAccountId ->
+            viewModel.deleteAccount(targetAccount.id, migrateToAccountId) {
+                onBack()
+            }
         },
         onEditTransaction = onEditTransaction,
         onSaveInstallment = { plan -> viewModel.saveInstallment(plan) },

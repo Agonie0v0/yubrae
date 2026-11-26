@@ -1,3 +1,4 @@
+import AppIntents
 import SwiftUI
 
 public struct MineView: View {
@@ -97,6 +98,16 @@ public struct MineView: View {
                 }
 
                 Section("自动化与智能记账") {
+                    Button {
+                        ShortcutsDeepLinkHelper.openShortcuts(createNew: true) { msg in
+                            store.toastMessage = msg
+                        }
+                    } label: {
+                        settingRow(icon: "arrow.up.forward.app.fill", color: 0xFF2563EB, title: "直达「快捷指令」添加动作", subtitle: "直接打开 Apple 快捷指令创建或关联余白记账")
+                    }
+                    if #available(iOS 17.0, *) {
+                        ShortcutsLink()
+                    }
                     NavigationLink {
                         ShortcutsAutomationGuideView(store: store)
                     } label: {

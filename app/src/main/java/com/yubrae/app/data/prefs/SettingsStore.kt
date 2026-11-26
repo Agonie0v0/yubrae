@@ -99,7 +99,8 @@ data class AppSettings(
     val jsOcrFallbackEnabled: Boolean = true,
     val jsCategoryFallbackEnabled: Boolean = true,
     val cloudRuleManifestUrl: String = "",
-    val lastRuleSyncMillis: Long = 0L
+    val lastRuleSyncMillis: Long = 0L,
+    val initialAccountsSeeded: Boolean = false
 )
 
 class SettingsStore(private val context: Context) {
@@ -150,6 +151,7 @@ class SettingsStore(private val context: Context) {
         val JS_CATEGORY_FALLBACK_ENABLED = booleanPreferencesKey("js_category_fallback_enabled")
         val CLOUD_RULE_MANIFEST_URL = stringPreferencesKey("cloud_rule_manifest_url")
         val LAST_RULE_SYNC = longPreferencesKey("last_rule_sync")
+        val INITIAL_ACCOUNTS_SEEDED = booleanPreferencesKey("initial_accounts_seeded")
     }
 
     val settingsFlow: Flow<AppSettings> = context.kairoDataStore.data.map { prefs ->
@@ -214,7 +216,8 @@ class SettingsStore(private val context: Context) {
             jsOcrFallbackEnabled = prefs[Keys.JS_OCR_FALLBACK_ENABLED] ?: true,
             jsCategoryFallbackEnabled = prefs[Keys.JS_CATEGORY_FALLBACK_ENABLED] ?: true,
             cloudRuleManifestUrl = prefs[Keys.CLOUD_RULE_MANIFEST_URL] ?: "",
-            lastRuleSyncMillis = prefs[Keys.LAST_RULE_SYNC] ?: 0L
+            lastRuleSyncMillis = prefs[Keys.LAST_RULE_SYNC] ?: 0L,
+            initialAccountsSeeded = prefs[Keys.INITIAL_ACCOUNTS_SEEDED] ?: false
         )
     }
 
@@ -273,7 +276,12 @@ class SettingsStore(private val context: Context) {
             prefs[Keys.JS_CATEGORY_FALLBACK_ENABLED] = settings.jsCategoryFallbackEnabled
             prefs[Keys.CLOUD_RULE_MANIFEST_URL] = settings.cloudRuleManifestUrl
             prefs[Keys.LAST_RULE_SYNC] = settings.lastRuleSyncMillis
+            prefs[Keys.INITIAL_ACCOUNTS_SEEDED] = settings.initialAccountsSeeded
         }
+    }
+
+    suspend fun markInitialAccountsSeeded() {
+        context.kairoDataStore.edit { it[Keys.INITIAL_ACCOUNTS_SEEDED] = true }
     }
 
     suspend fun markRateSynced(epochMillis: Long = System.currentTimeMillis()) {

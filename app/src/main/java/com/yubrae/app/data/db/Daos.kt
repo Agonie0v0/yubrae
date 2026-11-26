@@ -198,6 +198,9 @@ interface AccountAliasDao {
     @Query("DELETE FROM account_aliases WHERE id = :id")
     suspend fun deleteById(id: Long)
 
+    @Query("DELETE FROM account_aliases WHERE account_id = :accountId")
+    suspend fun deleteByAccountId(accountId: Long)
+
     @Query("DELETE FROM account_aliases")
     suspend fun clearAll()
 }

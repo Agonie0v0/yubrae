@@ -163,8 +163,31 @@ public enum SmartTextBillParser {
     private static let connectorSplitRegex = try! NSRegularExpression(
         pattern: #"(?:然后|接着|随后|另外|还有|以及|并且|(?<=\s|[0-9元块美元欧镑币])又|又(?=买|花|付|吃|喝|收|转|充|退|订|打|看))"#
     )
-    private static let colloquialYuanJiaoRegex = try! NSRegularExpression(pattern: #"(\d+)块(\d{1,2})(?![0-9.])"#)
-    private static let colloquialYuanOnlyRegex = try! NSRegularExpression(pattern: #"(\d+)块(?![0-9.])"#)
+    private static let arabicYuanJiaoRegex = try! NSRegularExpression(pattern: #"(\d+)块(\d)(\d)?(?:[毛角]钱?|钱)?(?![0-9.])"#)
+    private static let arabicYuanOnlyRegex = try! NSRegularExpression(pattern: #"(\d+(?:\.\d+)?)块钱?(?![0-9.])"#)
+    private static let cnDigits = "零〇一壹二两俩贰三叁四肆五伍六陆七柒八捌九玖"
+    private static let cnNumBody = "[\(cnDigits)十拾百佰千仟万萬半]+(?:点[\(cnDigits)半]+)?"
+    private static let cnFxRegex = try! NSRegularExpression(
+        pattern: "(\(cnNumBody))(美元|美金|港币|港元|欧元|日元|英镑|韩元|新台币|台币|泰铢|加元|澳元|新币|瑞士法郎)"
+    )
+    private static let cnYuanFracRegex = try! NSRegularExpression(
+        pattern: "(花了|花费|消费了?|付款|支付了?|一共|共|合计|收了|收到|入账|发了|转了|充了|充值了?|扣了|交了|给了)?(\(cnNumBody))(块|元|圆)(半|零[\(cnDigits)]分?|([\(cnDigits)])(?:[毛角](?:([\(cnDigits)])分?)?)?)(钱)?(?=$|[\\s,，.。!！?？;；、)）多左右整了呢吧啊])"
+    )
+    private static let cnYuanRegex = try! NSRegularExpression(
+        pattern: "(花了|花费|消费了?|付款|支付了?|一共|共|合计|收了|收到|入账|发了|转了|充了|充值了?|扣了|交了|给了)?(\(cnNumBody))(块钱|块|元钱?|圆钱?)"
+    )
+    private static let cnBarelyKuaiAfterRegex = try! NSRegularExpression(
+        pattern: "^(?:多|左右|整|以内|吧|啊|呢|了|的)?(?=$|[\\s,，.。!！?？;；、)）])"
+    )
+    private static let cnSmallRmbRegex = try! NSRegularExpression(
+        pattern: "(?!九毛九)([\(cnDigits)])([毛角分])(?:([\(cnDigits)])分?)?钱?"
+    )
+    private static let verbAnchoredCnRegex = try! NSRegularExpression(
+        pattern: "(花了|花费|消费了?|付款|支付了?|一共|共|合计|收了|收到|入账|发了|转了|充了|充值了?|扣了|交了|给了)(\(cnNumBody))"
+    )
+    private static let nonMoneyClassifierAfterRegex = try! NSRegularExpression(
+        pattern: "^(?:[个只条件张杯瓶碗盘份盒包袋斤两克次遍趟天日周月年时分秒号楼层线路岁倍成折%点块元圆毛角分])"
+    )
     private static let explicitDateRegex = try! NSRegularExpression(pattern: #"\d{4}[-/.年]\d{1,2}[-/.月]\d{1,2}日?|\d{1,2}[-/.月]\d{1,2}日"#)
     private static let explicitClockRegex = try! NSRegularExpression(pattern: #"(?<!\d)(\d{1,2}):(\d{2})(?::\d{2})?(?!\d)"#)
     private static let cardLast4Regex = try! NSRegularExpression(
@@ -188,8 +211,8 @@ public enum SmartTextBillParser {
     private static let paymentAccountNoiseRegex = try! NSRegularExpression(
         pattern: #"(?:用|通过|使用|从)?\s*(?:微信零钱|微信支付|微信|支付宝|花呗|余额宝|公交卡|交通卡|储蓄卡|借记卡|信用卡|全币种信用卡|美元账户|欧元账户|英镑账户|现金)\s*(?:付款|支付|扣款|消费|入账|收款)?"#
     )
-    private static let leadingActionRegex = try! NSRegularExpression(pattern: #"^(?:花了|花费|消费了|消费|支出|付款|支付|买了|买|收到|入账|发了)\s*"#)
-    private static let trailingActionRegex = try! NSRegularExpression(pattern: #"\s*(?:花了|花费|付款|支付|元|块)$"#)
+    private static let leadingActionRegex = try! NSRegularExpression(pattern: #"^\s*(?:花了|花费|消费了|消费|支出|付款|支付|买了|买|收到|入账|发了)\s*"#)
+    private static let trailingActionRegex = try! NSRegularExpression(pattern: #"\s*(?:花了|花费|消费了|消费|付款|支付|块钱|元|块|钱)\s*$"#)
     private static let whitespaceRunRegex = try! NSRegularExpression(pattern: #"\s+"#)
 
     private static let strongIncomePhrases = ["转账收到", "收到转账", "收到的转账", "收到红包", "转入我", "received transfer"]
@@ -265,10 +288,253 @@ public enum SmartTextBillParser {
         return out
     }
 
-    private static func normalizeColloquialChineseMoney(_ text: String) -> String {
-        var s = replaceRegex(colloquialYuanJiaoRegex, in: text, withTemplate: "$1.$2元")
-        s = replaceRegex(colloquialYuanOnlyRegex, in: s, withTemplate: "$1元")
+    static func normalizeColloquialChineseMoney(_ text: String) -> String {
+        var s = replaceRegexMatches(arabicYuanJiaoRegex, in: text) { match, ns in
+            let yuan = captureGroup(match, at: 1, in: ns)
+            let jiao = captureGroup(match, at: 2, in: ns)
+            let fen = captureGroup(match, at: 3, in: ns)
+            return "\(yuan).\(jiao)\(fen)元"
+        }
+        s = replaceRegexMatches(arabicYuanOnlyRegex, in: s) { match, ns in
+            let yuan = captureGroup(match, at: 1, in: ns)
+            return "\(yuan)元"
+        }
+        s = normalizeChineseNumeralsToMoney(s)
         return s
+    }
+
+    private static func normalizeChineseNumeralsToMoney(_ text: String) -> String {
+        var s = text
+
+        s = replaceRegexMatches(cnFxRegex, in: s) { match, ns in
+            let full = ns.substring(with: match.range)
+            if isProtectedNonMoneyToken(full) { return nil }
+            let cnPart = captureGroup(match, at: 1, in: ns)
+            let unit = captureGroup(match, at: 2, in: ns)
+            guard let num = parseChineseNumber(cnPart) else { return nil }
+            return "\(formatAmountNumber(num))\(unit)"
+        }
+
+        s = replaceRegexMatches(cnYuanFracRegex, in: s) { match, ns in
+            let prefix = captureGroup(match, at: 1, in: ns)
+            let cnPart = captureGroup(match, at: 2, in: ns)
+            let unitWord = captureGroup(match, at: 3, in: ns)
+            let fracToken = captureGroup(match, at: 4, in: ns)
+            let jiaoStr = captureGroup(match, at: 5, in: ns)
+            let fenStr = captureGroup(match, at: 6, in: ns)
+            let suffix = captureGroup(match, at: 7, in: ns)
+            if isProtectedNonMoneyToken(cnPart + unitWord) { return nil }
+            guard let yuanNum = parseChineseNumber(cnPart) else { return nil }
+
+            let total: Double
+            if fracToken == "半" {
+                total = yuanNum + 0.5
+            } else if fracToken.hasPrefix("零"), fracToken.count >= 2, let lastChar = fracToken.last,
+                      let fenDigit = parseChineseSingleDigit(String(lastChar)) {
+                total = yuanNum + Double(fenDigit) / 100.0
+            } else if let jiao = parseChineseSingleDigit(jiaoStr) {
+                let fen = fenStr.isEmpty ? 0 : (parseChineseSingleDigit(fenStr) ?? 0)
+                total = yuanNum + Double(jiao) / 10.0 + Double(fen) / 100.0
+            } else {
+                return nil
+            }
+            return "\(prefix)\(formatAmountNumber(total))元\(suffix)"
+        }
+
+        s = replaceRegexMatches(cnYuanRegex, in: s) { match, ns in
+            let verb = captureGroup(match, at: 1, in: ns)
+            let cnPart = captureGroup(match, at: 2, in: ns)
+            let unitPart = captureGroup(match, at: 3, in: ns)
+            if isProtectedNonMoneyToken(cnPart + unitPart) { return nil }
+            if unitPart == "块" && verb.isEmpty {
+                let afterLoc = match.range.location + match.range.length
+                let after = afterLoc < ns.length ? ns.substring(from: afterLoc) : ""
+                let afterRange = NSRange(location: 0, length: (after as NSString).length)
+                let boundaryOk = after.isEmpty || cnBarelyKuaiAfterRegex.firstMatch(in: after, range: afterRange) != nil
+                if !boundaryOk { return nil }
+                if cnPart == "半" { return nil }
+            }
+            guard let num = parseChineseNumber(cnPart) else { return nil }
+            return "\(verb)\(formatAmountNumber(num))元"
+        }
+
+        s = replaceRegexMatches(cnSmallRmbRegex, in: s) { match, ns in
+            let full = ns.substring(with: match.range)
+            if isProtectedNonMoneyToken(full) || full == "九毛九" { return nil }
+            guard let mainDigit = parseChineseSingleDigit(captureGroup(match, at: 1, in: ns)) else { return nil }
+            let unit = captureGroup(match, at: 2, in: ns)
+            let subStr = captureGroup(match, at: 3, in: ns)
+            let subDigit = subStr.isEmpty ? 0 : (parseChineseSingleDigit(subStr) ?? 0)
+            let amount: Double
+            switch unit {
+            case "毛", "角":
+                amount = Double(mainDigit) / 10.0 + Double(subDigit) / 100.0
+            case "分":
+                amount = Double(mainDigit) / 100.0
+            default:
+                return nil
+            }
+            return "\(formatAmountNumber(amount))元"
+        }
+
+        s = replaceRegexMatches(verbAnchoredCnRegex, in: s) { match, ns in
+            let verb = captureGroup(match, at: 1, in: ns)
+            let cnPart = captureGroup(match, at: 2, in: ns)
+            let afterLoc = match.range.location + match.range.length
+            let after = afterLoc < ns.length ? ns.substring(from: afterLoc) : ""
+            if !after.isEmpty {
+                let afterRange = NSRange(location: 0, length: (after as NSString).length)
+                if nonMoneyClassifierAfterRegex.firstMatch(in: after, range: afterRange) != nil {
+                    return nil
+                }
+            }
+            if cnPart == "半" { return nil }
+            guard let num = parseChineseNumber(cnPart) else { return nil }
+            return "\(verb)\(formatAmountNumber(num))元"
+        }
+
+        return s
+    }
+
+    private static func captureGroup(_ match: NSTextCheckingResult, at index: Int, in ns: NSString) -> String {
+        guard index < match.numberOfRanges else { return "" }
+        let range = match.range(at: index)
+        guard range.location != NSNotFound else { return "" }
+        return ns.substring(with: range)
+    }
+
+    private static func replaceRegexMatches(
+        _ regex: NSRegularExpression,
+        in text: String,
+        transform: (NSTextCheckingResult, NSString) -> String?
+    ) -> String {
+        let mutable = NSMutableString(string: text)
+        let snapshot = mutable as NSString
+        let matches = regex.matches(in: text, range: NSRange(location: 0, length: snapshot.length))
+        for match in matches.reversed() {
+            if let replacement = transform(match, snapshot) {
+                mutable.replaceCharacters(in: match.range, with: replacement)
+            }
+        }
+        return mutable as String
+    }
+
+    private static func isProtectedNonMoneyToken(_ token: String) -> Bool {
+        token == "九毛九" || token.contains("星期") || token.contains("号") || token.contains("线")
+    }
+
+    private static func formatAmountNumber(_ value: Double) -> String {
+        let rounded = (value * 100.0).rounded() / 100.0
+        let intVal = Int64(rounded)
+        if abs(rounded - Double(intVal)) < 1e-6 {
+            return String(intVal)
+        }
+        var formatted = String(format: "%.2f", rounded)
+        while formatted.hasSuffix("0") {
+            formatted.removeLast()
+        }
+        if formatted.hasSuffix(".") {
+            formatted.removeLast()
+        }
+        return formatted
+    }
+
+    private static func parseChineseSingleDigit(_ ch: String) -> Int? {
+        switch ch {
+        case "零", "〇": return 0
+        case "一", "壹": return 1
+        case "二", "两", "俩", "贰": return 2
+        case "三", "叁": return 3
+        case "四", "肆": return 4
+        case "五", "伍": return 5
+        case "六", "陆": return 6
+        case "七", "柒": return 7
+        case "八", "捌": return 8
+        case "九", "玖": return 9
+        default: return nil
+        }
+    }
+
+    private static func parseChineseNumber(_ raw: String) -> Double? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return nil }
+        if trimmed == "半" { return 0.5 }
+        let parts = trimmed.split(separator: "点", omittingEmptySubsequences: false).map(String.init)
+        if parts.count > 2 { return nil }
+        guard let intVal = parseChineseInteger(parts[0]) else { return nil }
+        if parts.count == 1 { return Double(intVal) }
+        let fracStr = parts[1]
+        if fracStr.isEmpty { return nil }
+        if fracStr == "半" { return Double(intVal) + 0.5 }
+        var frac = 0.0
+        var scale = 0.1
+        for c in fracStr {
+            guard let d = parseChineseSingleDigit(String(c)) else { return nil }
+            frac += Double(d) * scale
+            scale *= 0.1
+        }
+        return Double(intVal) + frac
+    }
+
+    private static func parseChineseInteger(_ raw: String) -> Int64? {
+        if raw.isEmpty { return nil }
+        if raw == "零" || raw == "〇" { return 0 }
+        var total: Int64 = 0
+        var section: Int64 = 0
+        var current: Int64 = -1
+        var lastUnit: Int64 = 0
+        var sawZero = false
+
+        for c in raw {
+            let s = String(c)
+            if let d = parseChineseSingleDigit(s) {
+                if d == 0 {
+                    sawZero = true
+                    current = -1
+                } else {
+                    if current > 0 { return nil }
+                    current = Int64(d)
+                }
+                continue
+            }
+            switch c {
+            case "十", "拾":
+                let v = current <= 0 ? 1 : current
+                section += v * 10
+                current = -1
+                lastUnit = 10
+                sawZero = false
+            case "百", "佰":
+                let v = current <= 0 ? 1 : current
+                section += v * 100
+                current = -1
+                lastUnit = 100
+                sawZero = false
+            case "千", "仟":
+                let v = current <= 0 ? 1 : current
+                section += v * 1000
+                current = -1
+                lastUnit = 1000
+                sawZero = false
+            case "万", "萬":
+                if current > 0 { section += current }
+                total += (section == 0 ? 1 : section) * 10000
+                section = 0
+                current = -1
+                lastUnit = 10000
+                sawZero = false
+            default:
+                return nil
+            }
+        }
+        if current > 0 {
+            if !sawZero && lastUnit >= 100 {
+                section += current * (lastUnit / 10)
+            } else {
+                section += current
+            }
+        }
+        return total + section
     }
 
     private static func detectDayOffset(_ clause: String) -> Int? {
@@ -581,6 +847,8 @@ public enum SmartTextBillParser {
         s = replaceRegex(relativeDateRegex, in: s, withTemplate: " ")
         s = replaceRegex(timePeriodRegex, in: s, withTemplate: " ")
         s = replaceRegex(paymentAccountNoiseRegex, in: s, withTemplate: " ")
+        s = replaceRegex(whitespaceRunRegex, in: s, withTemplate: " ")
+        s = s.trimmingCharacters(in: CharacterSet(charactersIn: " ，,。；;：:"))
         s = replaceRegex(leadingActionRegex, in: s, withTemplate: "")
         s = replaceRegex(trailingActionRegex, in: s, withTemplate: "")
         s = replaceRegex(whitespaceRunRegex, in: s, withTemplate: " ")

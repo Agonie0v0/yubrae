@@ -554,7 +554,12 @@ object DefaultSeedData {
         )
     )
 
-    suspend fun ensureSeeded(db: KairoDatabase) {
+    suspend fun ensureSeeded(
+        db: KairoDatabase,
+        settingsStore: com.yubrae.app.data.prefs.SettingsStore? = null
+    ) {
+        val settings = settingsStore?.getSnapshot()
+        val shouldSeedInitialAccounts = !(settings?.initialAccountsSeeded ?: false)
         ensureSeeded(
             ledgerDao = db.ledgerDao(),
             categoryDao = db.categoryDao(),
@@ -562,8 +567,13 @@ object DefaultSeedData {
             accountDao = db.accountDao(),
             accountAliasDao = db.accountAliasDao(),
             exchangeRateDao = db.exchangeRateDao(),
-            parseRuleDao = db.parseRuleDao()
+            parseRuleDao = db.parseRuleDao(),
+            seedInitialAccounts = shouldSeedInitialAccounts,
+            seedTransitCardIfMissing = shouldSeedInitialAccounts
         )
+        if (shouldSeedInitialAccounts) {
+            settingsStore?.markInitialAccountsSeeded()
+        }
     }
 
     suspend fun ensureSeeded(
@@ -573,12 +583,19 @@ object DefaultSeedData {
         accountDao: AccountDao,
         accountAliasDao: AccountAliasDao,
         exchangeRateDao: ExchangeRateDao,
-        parseRuleDao: ParseRuleDao
+        parseRuleDao: ParseRuleDao,
+        seedInitialAccounts: Boolean = true,
+        seedTransitCardIfMissing: Boolean = true
     ) {
         ensureDefaultLedger(ledgerDao)
         ensurePresetCategories(categoryDao)
         ensurePresetTags(tagDao)
-        ensureAccountsAndTransitCard(accountDao, accountAliasDao)
+        ensureAccountsAndTransitCard(
+            accountDao = accountDao,
+            aliasDao = accountAliasDao,
+            seedInitialDefaults = seedInitialAccounts,
+            seedTransitCardIfMissing = seedTransitCardIfMissing
+        )
         ensureFallbackRates(exchangeRateDao)
         ensurePresetParseRules(parseRuleDao)
     }
@@ -686,16 +703,28 @@ object DefaultSeedData {
         return toInsert.size
     }
 
-    suspend fun ensureAccountsAndTransitCard(db: KairoDatabase) {
-        ensureAccountsAndTransitCard(db.accountDao(), db.accountAliasDao())
+    suspend fun ensureAccountsAndTransitCard(
+        db: KairoDatabase,
+        seedInitialDefaults: Boolean = true,
+        seedTransitCardIfMissing: Boolean = true
+    ) {
+        ensureAccountsAndTransitCard(
+            accountDao = db.accountDao(),
+            aliasDao = db.accountAliasDao(),
+            seedInitialDefaults = seedInitialDefaults,
+            seedTransitCardIfMissing = seedTransitCardIfMissing
+        )
     }
 
     suspend fun ensureAccountsAndTransitCard(
         accountDao: AccountDao,
-        aliasDao: AccountAliasDao
+        aliasDao: AccountAliasDao,
+        seedInitialDefaults: Boolean = true,
+        seedTransitCardIfMissing: Boolean = true
     ) {
         val existingAccounts = accountDao.getAll()
         if (existingAccounts.isEmpty()) {
+            if (!seedInitialDefaults) return
             val wechatId = accountDao.insert(
                 AccountEntity(
                     name = "微信零钱",
@@ -817,7 +846,11 @@ object DefaultSeedData {
                 account.name.contains(keyword, ignoreCase = true)
             }
         }
-        val transitAccountId = transitAccount?.id ?: accountDao.insert(createDefaultTransitCardAccount())
+        val transitAccountId = transitAccount?.id ?: if (seedTransitCardIfMissing) {
+            accountDao.insert(createDefaultTransitCardAccount())
+        } else {
+            return
+        }
         ensureMissingTransitAliases(transitAccountId, aliasDao)
     }
 

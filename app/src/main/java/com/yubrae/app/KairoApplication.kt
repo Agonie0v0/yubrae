@@ -31,7 +31,7 @@ class KairoApplication : Application() {
         WorkScheduler.schedulePeriodicWork(this)
 
         appScope.launch {
-            DefaultSeedData.ensureSeeded(container.database)
+            DefaultSeedData.ensureSeeded(container.database, container.settingsStore)
             runCatching { KairoWidgetUpdater.updateAll(this@KairoApplication) }
         }
 

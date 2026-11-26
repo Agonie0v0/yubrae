@@ -1010,6 +1010,24 @@ class KairoMainViewModel(
         }
     }
 
+    fun deleteAccount(
+        accountId: Long,
+        migrateToAccountId: Long? = null,
+        onDone: () -> Unit = {}
+    ) {
+        viewModelScope.launch {
+            val res = withContext(Dispatchers.IO) {
+                ledgerService.deleteAccount(accountId, migrateToAccountId)
+            }
+            res.onSuccess {
+                showMessage(if (migrateToAccountId != null) "已迁移账单并删除账户" else "账户已删除")
+                onDone()
+            }.onFailure { err ->
+                showMessage("删除账户失败：${err.message ?: "未知错误"}")
+            }
+        }
+    }
+
     fun calibrateAccountBalance(accountId: Long, targetBalanceMicros: Long, note: String, onDone: () -> Unit = {}) {
         viewModelScope.launch {
             withContext(Dispatchers.IO) {

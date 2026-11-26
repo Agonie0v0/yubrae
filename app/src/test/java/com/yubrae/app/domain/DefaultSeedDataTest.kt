@@ -334,4 +334,60 @@ class DefaultSeedDataTest {
         assertTrue(tagDao.getAll().all { it.icon.isNotBlank() })
         assertEquals("delivery_dining", tagDao.getAll().first { it.name == "外卖" }.icon)
     }
+
+    @Test
+    fun ensureSeeded_doesNotResurrectDeletedDefaultAccountsOrTransitCard() = runTest {
+        val ledgerDao = FakeLedgerDao()
+        val categoryDao = FakeCategoryDao()
+        val tagDao = FakeTagDao()
+        val accountDao = FakeAccountDao()
+        val accountAliasDao = FakeAccountAliasDao()
+        val exchangeRateDao = FakeExchangeRateDao()
+        val parseRuleDao = FakeParseRuleDao()
+
+        // 首次初始化生成默认账户与公交卡
+        DefaultSeedData.ensureSeeded(
+            ledgerDao = ledgerDao,
+            categoryDao = categoryDao,
+            tagDao = tagDao,
+            accountDao = accountDao,
+            accountAliasDao = accountAliasDao,
+            exchangeRateDao = exchangeRateDao,
+            parseRuleDao = parseRuleDao,
+            seedInitialAccounts = true,
+            seedTransitCardIfMissing = true
+        )
+        assertEquals(9, accountDao.getAll().size)
+
+        // 删除公交卡后，若标记已初始化，冷启动绝不复活公交卡
+        val transit = accountDao.getAll().first { it.name == "公交卡" }
+        accountDao.deleteById(transit.id)
+        DefaultSeedData.ensureSeeded(
+            ledgerDao = ledgerDao,
+            categoryDao = categoryDao,
+            tagDao = tagDao,
+            accountDao = accountDao,
+            accountAliasDao = accountAliasDao,
+            exchangeRateDao = exchangeRateDao,
+            parseRuleDao = parseRuleDao,
+            seedInitialAccounts = false,
+            seedTransitCardIfMissing = false
+        )
+        assertFalse(accountDao.getAll().any { it.name == "公交卡" })
+
+        // 清空全部默认账户后，再次冷启动也绝不复活任何默认账户
+        accountDao.clearAll()
+        DefaultSeedData.ensureSeeded(
+            ledgerDao = ledgerDao,
+            categoryDao = categoryDao,
+            tagDao = tagDao,
+            accountDao = accountDao,
+            accountAliasDao = accountAliasDao,
+            exchangeRateDao = exchangeRateDao,
+            parseRuleDao = parseRuleDao,
+            seedInitialAccounts = false,
+            seedTransitCardIfMissing = false
+        )
+        assertTrue(accountDao.getAll().isEmpty())
+    }
 }

@@ -323,6 +323,11 @@ internal class FakeAccountAliasDao : AccountAliasDao {
         emit()
     }
 
+    override suspend fun deleteByAccountId(accountId: Long) {
+        items.removeAll { it.accountId == accountId }
+        emit()
+    }
+
     override suspend fun clearAll() {
         items.clear()
         emit()
@@ -556,6 +561,7 @@ internal class FakeLedgerService(
 
     override suspend fun saveAccount(account: AccountEntity): Long = accountDao.insert(account)
     override suspend fun archiveAccount(accountId: Long, archived: Boolean) {}
+    override suspend fun deleteAccount(accountId: Long, migrateToAccountId: Long?): Result<Unit> = Result.success(Unit)
     override suspend fun calibrateAccountBalance(accountId: Long, targetBalanceMicros: Long, note: String): Result<TransactionEntity> =
         Result.failure(UnsupportedOperationException())
     override suspend fun saveCategory(category: CategoryEntity): Long = categoryDao.insert(category)

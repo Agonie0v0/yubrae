@@ -123,6 +123,7 @@ private data class DailyBalancePoint(
 @Composable
 fun AccountDetailScreen(
     account: AccountEntity,
+    allAccounts: List<AccountEntity> = emptyList(),
     transactions: List<TransactionEntity>,
     categories: List<CategoryEntity>,
     installments: List<InstallmentPlanEntity>,
@@ -134,6 +135,7 @@ fun AccountDetailScreen(
     onCalibrateBalance: (Long, String) -> Unit,
     onEditAccount: (AccountEntity) -> Unit,
     onToggleArchive: (Boolean) -> Unit,
+    onDeleteAccount: (Long?) -> Unit = {},
     onEditTransaction: (TransactionEntity) -> Unit,
     onSaveInstallment: (InstallmentPlanEntity) -> Unit,
     onRecordInstallmentPeriod: (Long) -> Unit,
@@ -149,6 +151,7 @@ fun AccountDetailScreen(
     var showTopMenu by remember { mutableStateOf(false) }
     var showEditDialog by remember { mutableStateOf(false) }
     var showCalibrateDialog by remember { mutableStateOf(false) }
+    var showDeleteDialog by remember { mutableStateOf(false) }
     var showAddInstallmentDialog by remember { mutableStateOf(false) }
     var deleteInstallmentTarget by remember { mutableStateOf<InstallmentPlanEntity?>(null) }
 
@@ -272,6 +275,25 @@ fun AccountDetailScreen(
                                 onClick = {
                                     showTopMenu = false
                                     onToggleArchive(!account.archived)
+                                }
+                            )
+                            DropdownMenuItem(
+                                leadingIcon = {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Delete,
+                                        contentDescription = null,
+                                        tint = KairoTheme.semantic.expense
+                                    )
+                                },
+                                text = {
+                                    Text(
+                                        text = "删除账户",
+                                        color = KairoTheme.semantic.expense
+                                    )
+                                },
+                                onClick = {
+                                    showTopMenu = false
+                                    showDeleteDialog = true
                                 }
                             )
                         }
@@ -446,6 +468,22 @@ fun AccountDetailScreen(
                 deleteInstallmentTarget = null
             },
             onDismiss = { deleteInstallmentTarget = null }
+        )
+    }
+
+    if (showDeleteDialog) {
+        val availableTargets = remember(allAccounts, account.id) {
+            allAccounts.filter { !it.archived && it.id != account.id }
+        }
+        DeleteAccountConfirmDialog(
+            account = account,
+            linkedTxCount = accountTransactions.size,
+            availableTargets = availableTargets,
+            onConfirmDelete = { migrateToId ->
+                showDeleteDialog = false
+                onDeleteAccount(migrateToId)
+            },
+            onDismiss = { showDeleteDialog = false }
         )
     }
 }
