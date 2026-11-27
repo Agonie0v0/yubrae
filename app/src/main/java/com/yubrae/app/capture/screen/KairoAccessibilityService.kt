@@ -859,9 +859,9 @@ class KairoAccessibilityService : AccessibilityService() {
 
     companion object {
         private const val TAG = "KairoA11y"
-        private val WINDOW_STATE_RETRY_DELAYS = longArrayOf(200L, 450L, 800L, 1200L, 1800L)
-        private val CONTENT_OR_SCROLL_RETRY_DELAYS = longArrayOf(180L, 550L)
-        private const val TRAILING_RESCAN_DELAY_MS = 300L
+        private val WINDOW_STATE_RETRY_DELAYS = longArrayOf(60L, 220L, 500L, 900L, 1500L)
+        private val CONTENT_OR_SCROLL_RETRY_DELAYS = longArrayOf(60L, 260L, 650L)
+        private const val TRAILING_RESCAN_DELAY_MS = 180L
         private const val MAX_TREE_NODES = 2500
         private const val MAX_TREE_DEPTH = 48
         private const val MAX_LRU_ENTRIES = 200

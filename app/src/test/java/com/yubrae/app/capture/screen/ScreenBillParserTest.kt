@@ -2473,4 +2473,342 @@ class ScreenBillParserTest {
         assertFalse(KairoAccessibilityService.isWindowClassCandidate("android.widget.Toast"))
         assertFalse(KairoAccessibilityService.isWindowClassCandidate("android.widget.PopupWindow"))
     }
+
+    @Test
+    fun parsesAlipayTransientPaySuccessOverlayWithoutDoneButtonAndBlocksCheckout() = runTest {
+        val fullAccDao = FakeAccountDao()
+        val fullAliasDao = FakeAccountAliasDao()
+        val fullCatDao = FakeCategoryDao()
+        DefaultSeedData.ensureAccountsAndTransitCard(fullAccDao, fullAliasDao)
+        val mybankId = fullAccDao.insert(
+            AccountEntity(
+                name = "支付宝·网商银行",
+                groupType = com.yubrae.app.data.db.AccountGroup.DEBIT,
+                currencyCode = "CNY"
+            )
+        )
+        DefaultSeedData.ensurePresetCategories(fullCatDao)
+        val fullAccounts = fullAccDao.getAll()
+        val fullAliases = fullAliasDao.getEnabled()
+        val fullCategories = fullCatDao.getAll()
+
+        // 1. 支付宝极速付款成功瞬态弹层（无“完成”按钮，仅“付款成功 + ¥12.66 + 淘宝闪购 + 网商银行”）
+        val transientOverlay = ScreenSnapshot(
+            packageName = "com.eg.android.AlipayGphone",
+            className = "com.alipay.android.msp.ui.views.MspContainerActivity",
+            texts = listOf("付款成功", "¥12.66", "淘宝闪购", "网商银行")
+        )
+        val outcome = parser.parse(transientOverlay, fullAliases, fullAccounts, fullCategories)
+        assertEquals(ScreenPageKind.PAY_SUCCESS, outcome.pageKind)
+        assertFalse(outcome.shouldFallbackToLlm)
+        val draft = outcome.draft
+        assertNotNull(draft)
+        assertEquals(TransactionType.EXPENSE, draft!!.type)
+        assertEquals(MoneyAmount.parseToMicros("12.66"), draft.origAmountMicros)
+        assertEquals("CNY", draft.origCurrency)
+        assertEquals("淘宝闪购", draft.merchant)
+        assertEquals(mybankId, draft.accountId)
+
+        // 2. 拆分节点形式的支付宝瞬态付款成功弹层同样识别
+        val splitTransient = ScreenSnapshot(
+            packageName = "com.eg.android.AlipayGphone",
+            className = "",
+            texts = listOf("支付成功", "¥", "12", ".66", "淘宝闪购")
+        )
+        val splitOutcome = parser.parse(splitTransient, fullAliases, fullAccounts, fullCategories)
+        assertEquals(ScreenPageKind.PAY_SUCCESS, splitOutcome.pageKind)
+        assertEquals(MoneyAmount.parseToMicros("12.66"), splitOutcome.draft!!.origAmountMicros)
+
+        // 3. 含收银台待付款标记（即使有付款成功促销文案）绝不误触
+        val prepayWithPromo = ScreenSnapshot(
+            packageName = "com.eg.android.AlipayGphone",
+            className = "com.alipay.android.msp.ui.views.MspContainerActivity",
+            texts = listOf("付款成功", "¥12.66", "确认付款", "立即支付")
+        )
+        val prepayOutcome = parser.parse(prepayWithPromo, fullAliases, fullAccounts, fullCategories)
+        assertEquals(ScreenPageKind.UNKNOWN, prepayOutcome.pageKind)
+        assertNull(prepayOutcome.draft)
+
+        // 4. 仅含优惠/余额金额行（无有效独立正金额行）且无完成按钮不误触
+        val discountOnly = ScreenSnapshot(
+            packageName = "com.eg.android.AlipayGphone",
+            className = "",
+            texts = listOf("付款成功", "已优惠¥5.00", "卡内余额 100.00元", "-¥2.00")
+        )
+        val discountOnlyOutcome = parser.parse(discountOnly, fullAliases, fullAccounts, fullCategories)
+        assertEquals(ScreenPageKind.UNKNOWN, discountOnlyOutcome.pageKind)
+        assertNull(discountOnlyOutcome.draft)
+    }
+
+    @Test
+    fun parsesTaobaoPaySuccessWithBottomGuessYouLikeRecommendationFeedUnpolluted() = runTest {
+        val fullAccDao = FakeAccountDao()
+        val fullAliasDao = FakeAccountAliasDao()
+        val fullCatDao = FakeCategoryDao()
+        DefaultSeedData.ensureAccountsAndTransitCard(fullAccDao, fullAliasDao)
+        DefaultSeedData.ensurePresetCategories(fullCatDao)
+        val fullAccounts = fullAccDao.getAll()
+        val fullAliases = fullAliasDao.getEnabled()
+        val fullCategories = fullCatDao.getAll()
+
+        val taobaoPaySuccessWithFeed = ScreenSnapshot(
+            packageName = "com.taobao.taobao",
+            className = "com.taobao.pay.PaySuccessActivity",
+            texts = listOf(
+                "支付成功",
+                "淘宝闪购",
+                "书亦烧仙草(蔡家店)",
+                "¥12.66",
+                "查看订单",
+                "返回首页",
+                "猜你喜欢",
+                "推荐爆款猫粮2kg",
+                "¥39.90",
+                "加入购物车",
+                "立即抢购",
+                "领券购买"
+            )
+        )
+        val outcome = parser.parse(taobaoPaySuccessWithFeed, fullAliases, fullAccounts, fullCategories)
+        assertEquals(ScreenPageKind.PAY_SUCCESS, outcome.pageKind)
+        val draft = outcome.draft
+        assertNotNull(draft)
+        assertEquals(TransactionType.EXPENSE, draft!!.type)
+        assertEquals(MoneyAmount.parseToMicros("12.66"), draft.origAmountMicros)
+        assertEquals("书亦烧仙草(蔡家店)", draft.merchant)
+        assertEquals("外卖", draft.categoryName)
+        assertFalse(draft.note.contains("猫粮"))
+
+        // 极简淘宝支付成功页（无店名、带“为您推荐”和加购按钮）
+        val minimalTaobaoPaySuccess = ScreenSnapshot(
+            packageName = "com.taobao.taobao",
+            className = "com.taobao.pay.PaySuccessActivity",
+            texts = listOf(
+                "付款成功",
+                "¥28.50",
+                "继续逛逛",
+                "为您推荐",
+                "网红保温杯",
+                "¥99.00",
+                "加入购物车"
+            )
+        )
+        val minimalOutcome = parser.parse(minimalTaobaoPaySuccess, fullAliases, fullAccounts, fullCategories)
+        assertEquals(ScreenPageKind.PAY_SUCCESS, minimalOutcome.pageKind)
+        assertNotNull(minimalOutcome.draft)
+        assertEquals(MoneyAmount.parseToMicros("28.50"), minimalOutcome.draft!!.origAmountMicros)
+        assertFalse(minimalOutcome.draft!!.merchant.contains("保温杯"))
+    }
+
+    @Test
+    fun parsesTaobaoFlashSaleTakeoutProgressAndOrderPagesWithRealStoreAndTakeoutCategory() = runTest {
+        val fullAccDao = FakeAccountDao()
+        val fullAliasDao = FakeAccountAliasDao()
+        val fullCatDao = FakeCategoryDao()
+        DefaultSeedData.ensureAccountsAndTransitCard(fullAccDao, fullAliasDao)
+        DefaultSeedData.ensurePresetCategories(fullCatDao)
+        val fullAccounts = fullAccDao.getAll()
+        val fullAliases = fullAliasDao.getEnabled()
+        val fullCategories = fullCatDao.getAll()
+
+        // 1. 淘宝闪购外卖进度页（等待商家接单 + 预计21:28送达 + 实付 + 底部猜你喜欢）
+        val waitingMerchantSnapshot = ScreenSnapshot(
+            packageName = "com.taobao.taobao",
+            className = "com.taobao.order.detail.OrderDetailActivity",
+            texts = listOf(
+                "淘宝闪购",
+                "等待商家接单",
+                "预计21:28送达",
+                "催单",
+                "修改地址",
+                "取消订单",
+                "联系商家",
+                "联系骑士",
+                "打赏骑士",
+                "书亦烧仙草(蔡家店)",
+                "烧仙草大杯 x1",
+                "¥15.00",
+                "打包费 ¥1.00",
+                "配送费 ¥2.00",
+                "实付 ¥12.66",
+                "猜你喜欢",
+                "蜜雪冰城(观音桥店)",
+                "¥39.90",
+                "加入购物车"
+            )
+        )
+        val out1 = parser.parse(waitingMerchantSnapshot, fullAliases, fullAccounts, fullCategories)
+        assertEquals(ScreenPageKind.ORDER_DETAIL, out1.pageKind)
+        val draft1 = out1.draft
+        assertNotNull(draft1)
+        assertEquals(TransactionType.EXPENSE, draft1!!.type)
+        assertEquals(MoneyAmount.parseToMicros("12.66"), draft1.origAmountMicros)
+        assertEquals("书亦烧仙草(蔡家店)", draft1.merchant)
+        assertEquals("外卖", draft1.categoryName)
+        assertTrue(draft1.note.contains("烧仙草大杯"))
+
+        // 2. 骑士到店 + 无显式“实付”仅“小计 ¥12.66” + 底部“附近好店”推荐流
+        val riderArrivedSubtotalSnapshot = ScreenSnapshot(
+            packageName = "com.taobao.taobao",
+            className = "com.taobao.order.detail.OrderDetailActivity",
+            texts = listOf(
+                "淘宝闪购",
+                "骑士到店",
+                "预计21:28送达",
+                "书亦烧仙草(蔡家店) >",
+                "杨枝甘露 x1",
+                "¥16.00",
+                "打包费 ¥1.00",
+                "商家优惠 -¥4.34",
+                "小计 ¥12.66",
+                "附近好店",
+                "肯德基(蔡家店)",
+                "¥49.00",
+                "立即购买"
+            )
+        )
+        val out2 = parser.parse(riderArrivedSubtotalSnapshot, fullAliases, fullAccounts, fullCategories)
+        assertEquals(ScreenPageKind.ORDER_DETAIL, out2.pageKind)
+        val draft2 = out2.draft
+        assertNotNull(draft2)
+        assertEquals(MoneyAmount.parseToMicros("12.66"), draft2!!.origAmountMicros)
+        assertEquals("书亦烧仙草(蔡家店)", draft2.merchant)
+        assertEquals("外卖", draft2.categoryName)
+
+        // 3. 共支付 / 已支付 / 已付 写法 + 商家备餐中
+        val paidVariantSnapshot = ScreenSnapshot(
+            packageName = "com.taobao.taobao",
+            className = "com.taobao.order.detail.OrderDetailActivity",
+            texts = listOf(
+                "淘宝闪购",
+                "商家备餐中",
+                "订单进度",
+                "书亦烧仙草(蔡家店)",
+                "共支付 ¥12.66",
+                "联系商家"
+            )
+        )
+        val out3 = parser.parse(paidVariantSnapshot, fullAliases, fullAccounts, fullCategories)
+        assertEquals(ScreenPageKind.ORDER_DETAIL, out3.pageKind)
+        assertEquals(MoneyAmount.parseToMicros("12.66"), out3.draft!!.origAmountMicros)
+        assertEquals("书亦烧仙草(蔡家店)", out3.draft!!.merchant)
+        assertEquals("外卖", out3.draft!!.categoryName)
+
+        // 3b. 顶部纯状态行“已支付”位于门店之上时不触发元数据边界提前截断，且下方“已付 ¥12.66”正常解析
+        val topStatusPaidOrder = ScreenSnapshot(
+            packageName = "com.taobao.taobao",
+            className = "com.taobao.order.detail.OrderDetailActivity",
+            texts = listOf(
+                "淘宝闪购",
+                "已支付",
+                "预计21:28送达",
+                "书亦烧仙草(蔡家店) >",
+                "烧仙草大杯 x1",
+                "已付 ¥12.66",
+                "联系商家"
+            )
+        )
+        val out3b = parser.parse(topStatusPaidOrder, fullAliases, fullAccounts, fullCategories)
+        assertEquals(ScreenPageKind.ORDER_DETAIL, out3b.pageKind)
+        assertEquals(MoneyAmount.parseToMicros("12.66"), out3b.draft!!.origAmountMicros)
+        assertEquals("书亦烧仙草(蔡家店)", out3b.draft!!.merchant)
+        assertEquals("外卖", out3b.draft!!.categoryName)
+
+        // 4. 核验“当前状态 -> 已支付”不会被误判为金额标签吞并下一行
+        val statusPaidBill = ScreenSnapshot(
+            packageName = "com.eg.android.AlipayGphone",
+            className = "BillDetailActivity",
+            texts = listOf(
+                "账单详情",
+                "瑞幸咖啡",
+                "-19.90",
+                "当前状态", "已支付",
+                "创建时间", "2026-11-27 10:00:00",
+                "付款方式", "花呗",
+                "订单号", "2026112700019900"
+            )
+        )
+        val out4 = parser.parse(statusPaidBill, fullAliases, fullAccounts, fullCategories)
+        assertEquals(ScreenPageKind.BILL_DETAIL, out4.pageKind)
+        assertEquals(MoneyAmount.parseToMicros("19.90"), out4.draft!!.origAmountMicros)
+        assertEquals("瑞幸咖啡", out4.draft!!.merchant)
+    }
+
+    @Test
+    fun preservesStrictNonMisfireGuardsForTaobaoBrowseCartUnpaidListAlipayPromoAndChat() = runTest {
+        val fullAccDao = FakeAccountDao()
+        val fullAliasDao = FakeAccountAliasDao()
+        val fullCatDao = FakeCategoryDao()
+        DefaultSeedData.ensureAccountsAndTransitCard(fullAccDao, fullAliasDao)
+        DefaultSeedData.ensurePresetCategories(fullCatDao)
+        val fullAccounts = fullAccDao.getAll()
+        val fullAliases = fullAliasDao.getEnabled()
+        val fullCategories = fullCatDao.getAll()
+
+        // 1. 淘宝商品详情页（正文区含加入购物车/立即购买）不误触
+        val taobaoProduct = ScreenSnapshot(
+            packageName = "com.taobao.taobao",
+            className = "ProductDetailActivity",
+            texts = listOf("书亦烧仙草团购券", "¥12.66", "预计21:28送达", "加入购物车", "立即购买", "猜你喜欢")
+        )
+        assertEquals(ScreenPageKind.UNKNOWN, parser.parse(taobaoProduct, fullAliases, fullAccounts, fullCategories).pageKind)
+
+        // 2. 淘宝购物车（含小计/合计与去结算）不误触
+        val taobaoCart = ScreenSnapshot(
+            packageName = "com.taobao.taobao",
+            className = "CartActivity",
+            texts = listOf("购物车", "书亦烧仙草(蔡家店)", "小计 ¥12.66", "合计 ¥12.66", "去结算")
+        )
+        assertEquals(ScreenPageKind.UNKNOWN, parser.parse(taobaoCart, fullAliases, fullAccounts, fullCategories).pageKind)
+
+        // 3. 淘宝待付款订单页不误触
+        val taobaoUnpaid = ScreenSnapshot(
+            packageName = "com.taobao.taobao",
+            className = "OrderDetailActivity",
+            texts = listOf("订单详情", "待付款", "等待买家付款", "书亦烧仙草(蔡家店)", "实付 ¥12.66", "去付款")
+        )
+        assertEquals(ScreenPageKind.UNKNOWN, parser.parse(taobaoUnpaid, fullAliases, fullAccounts, fullCategories).pageKind)
+
+        // 4. 淘宝全部订单列表页不误触
+        val taobaoOrderList = ScreenSnapshot(
+            packageName = "com.taobao.taobao",
+            className = "OrderListActivity",
+            texts = listOf(
+                "全部订单",
+                "等待商家接单", "书亦烧仙草(蔡家店)", "实付 ¥12.66", "再来一单",
+                "已送达", "蜜雪冰城(观音桥店)", "实付 ¥9.90", "再来一单",
+                "猜你喜欢"
+            )
+        )
+        assertEquals(ScreenPageKind.UNKNOWN, parser.parse(taobaoOrderList, fullAliases, fullAccounts, fullCategories).pageKind)
+
+        // 5. 支付宝支付成功页底部含“淘宝闪购可叠加立减”广告，不劫持分类或标签
+        val alipayPromoAd = ScreenSnapshot(
+            packageName = "com.eg.android.AlipayGphone",
+            className = "com.alipay.android.msp.ui.views.MspContainerActivity",
+            texts = listOf(
+                "支付成功",
+                "张记小铺",
+                "¥12.00",
+                "摇一摇有优惠",
+                "淘宝闪购可叠加立减",
+                "完成"
+            )
+        )
+        val promoOutcome = parser.parse(alipayPromoAd, fullAliases, fullAccounts, fullCategories)
+        assertEquals(ScreenPageKind.PAY_SUCCESS, promoOutcome.pageKind)
+        assertEquals("张记小铺", promoOutcome.draft!!.merchant)
+        assertEquals("其他支出", promoOutcome.draft!!.categoryName)
+        assertEquals("", promoOutcome.draft!!.tags)
+
+        // 6. 支付宝聊天/服务号通知流即便含“付款成功”+“¥12.66”仍严格拦截
+        val alipayServiceFeed = ScreenSnapshot(
+            packageName = "com.eg.android.AlipayGphone",
+            className = "",
+            texts = listOf("账单助手", "动账提醒", "付款成功", "¥12.66", "查看账单详情")
+        )
+        val feedOutcome = parser.parse(alipayServiceFeed, fullAliases, fullAccounts, fullCategories)
+        assertEquals(ScreenPageKind.UNKNOWN, feedOutcome.pageKind)
+        assertNull(feedOutcome.draft)
+    }
 }

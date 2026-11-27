@@ -628,7 +628,7 @@ class CaptureOrchestrator(
                 }
             }
 
-            // 2. 历史账单详情页（距当前捕获超过 2 分钟）：检查前后 120s 内同金额/币种交易防重
+            // 2. 历史账单详情页（距当前捕获超过 2 分钟）：检查前后 120s 内同金额/币种交易防重（若来自电商/外卖订单页则优先跨应用融合补全账户与单号）
             val isHistoricalBillDetail = screenPageKind == ScreenPageKind.BILL_DETAIL &&
                 abs(capturedAtMillis - finalDraft.timestamp) > HISTORICAL_BILL_THRESHOLD_MILLIS
             if (isHistoricalBillDetail) {
@@ -642,6 +642,52 @@ class CaptureOrchestrator(
                         tx.origAmountMicros == finalDraft.origAmountMicros
                 }
                 if (existingHistoricalTx != null) {
+                    val histLogs = rawCaptureLogDao.getSince(finalDraft.timestamp - HISTORICAL_DEDUP_WINDOW_MILLIS - 60_000L)
+                    val histLogsByTxId = histLogs
+                        .filter { it.linkedTransactionId != null && it.id != logId }
+                        .associateBy { it.linkedTransactionId!! }
+                    val histDedupMatch = deduplicator.findMatchAndMerge(
+                        incomingDraft = finalDraft,
+                        incomingChannel = channel,
+                        incomingSourcePackage = sourcePackage,
+                        incomingRawText = rawText,
+                        recentTransactions = listOf(existingHistoricalTx),
+                        recentLogsByTxId = histLogsByTxId,
+                        accountsById = accountsById,
+                        categoriesById = categoriesById,
+                        customWindowMillis = HISTORICAL_DEDUP_WINDOW_MILLIS,
+                        allowPlatformShellMerge = true
+                    )
+                    if (histDedupMatch != null) {
+                        val enrichedRequest = enrichMergedRequest(
+                            base = histDedupMatch.mergedRequest,
+                            incomingDraft = finalDraft,
+                            orderNo = effectiveOrderNo,
+                            accountsById = accountsById
+                        )
+                        val mergeResult = ledgerService.saveTransaction(enrichedRequest)
+                        if (mergeResult.isSuccess) {
+                            val updatedTx = mergeResult.getOrThrow()
+                            rawCaptureLogDao.update(
+                                initialLog.copy(
+                                    id = logId,
+                                    parseStatus = ParseStatus.MERGED_DEDUP,
+                                    parserUsed = finalDraft.parserUsed,
+                                    extractedJson = draftJson,
+                                    linkedTransactionId = updatedTx.id,
+                                    errorMessage = ""
+                                )
+                            )
+                            return@withLock CaptureHandleResult(
+                                logId = logId,
+                                status = ParseStatus.MERGED_DEDUP,
+                                transactionId = updatedTx.id,
+                                mergedIntoExisting = true,
+                                draft = finalDraft,
+                                message = histDedupMatch.reason
+                            )
+                        }
+                    }
                     val dedupMsg = "历史账单已存在相同金额/币种记录（交易 #${existingHistoricalTx.id}），跳过重复补记"
                     rawCaptureLogDao.update(
                         initialLog.copy(
@@ -666,16 +712,13 @@ class CaptureOrchestrator(
 
             val isOrderDetail = screenPageKind == ScreenPageKind.ORDER_DETAIL
             val isPaySuccess = screenPageKind == ScreenPageKind.PAY_SUCCESS
+            val isBillDetail = screenPageKind == ScreenPageKind.BILL_DETAIL
             val dedupWindowMillis = when {
                 isOrderDetail -> CaptureDeduplicator.ORDER_DETAIL_WINDOW_MILLIS
-                isPaySuccess -> PAY_SUCCESS_DEDUP_WINDOW_MILLIS
+                isPaySuccess || isBillDetail -> PAY_SUCCESS_DEDUP_WINDOW_MILLIS
                 else -> CaptureDeduplicator.DEFAULT_WINDOW_MILLIS
             }
-            val queryWindowMillis = if (screenPageKind == ScreenPageKind.BILL_DETAIL && !isHistoricalBillDetail) {
-                maxOf(dedupWindowMillis, PAY_SUCCESS_DEDUP_WINDOW_MILLIS)
-            } else {
-                dedupWindowMillis
-            }
+            val queryWindowMillis = dedupWindowMillis
             val primaryStart = finalDraft.timestamp - queryWindowMillis
             val primaryEnd = finalDraft.timestamp + queryWindowMillis
             val primaryTxs = transactionDao.getBetween(primaryStart, primaryEnd)
@@ -747,7 +790,7 @@ class CaptureOrchestrator(
                 }
             }
 
-            // 3. 跨渠道去重与信息融合（普通渠道 60s，支付成功页 120s，电商/外卖订单详情 10 分钟窗口）
+            // 3. 跨渠道去重与信息融合（普通渠道 60s，支付成功页/账单详情 120s，电商/外卖订单详情 10 分钟窗口）
             val dedupMatch = deduplicator.findMatchAndMerge(
                 incomingDraft = finalDraft,
                 incomingChannel = channel,
@@ -758,7 +801,7 @@ class CaptureOrchestrator(
                 accountsById = accountsById,
                 categoriesById = categoriesById,
                 customWindowMillis = dedupWindowMillis,
-                allowPlatformShellMerge = isOrderDetail
+                allowPlatformShellMerge = isOrderDetail || isBillDetail
             ) ?: if (isOrderDetail && abs(capturedAtMillis - finalDraft.timestamp) > 60_000L) {
                 deduplicator.findMatchAndMerge(
                     incomingDraft = finalDraft.copy(timestamp = capturedAtMillis),
@@ -1455,7 +1498,9 @@ class CaptureOrchestrator(
                     incomingNormMerchant.isBlank() ||
                     existingNormMerchant == incomingNormMerchant ||
                     existingNormMerchant.contains(incomingNormMerchant) ||
-                    incomingNormMerchant.contains(existingNormMerchant)
+                    incomingNormMerchant.contains(existingNormMerchant) ||
+                    CaptureDeduplicator.isGenericPlatformMerchant(existingNormMerchant) ||
+                    CaptureDeduplicator.isGenericPlatformMerchant(incomingNormMerchant)
             }
             .minByOrNull { abs(it.timestamp - finalDraft.timestamp) }
     }
@@ -1468,10 +1513,19 @@ class CaptureOrchestrator(
         allowRichEnrichment: Boolean
     ): Long {
         val updatedNote = appendOrderNoIfMissing(existing.note, orderNo)
+        val existingAccName = accountsById[existing.accountId]?.name.orEmpty().trim()
+        val incomingAccName = incomingDraft.accountId?.let { accountsById[it]?.name.orEmpty().trim() }.orEmpty()
+        val existingHasCardHint = CARD_LAST4_NOTE_REGEX.containsMatchIn(existing.note)
         val newAccountId = if (allowRichEnrichment &&
-            incomingDraft.accountHint.isNotBlank() &&
             incomingDraft.accountId != null &&
-            !existing.note.contains(incomingDraft.accountHint)
+            incomingDraft.accountId != existing.accountId &&
+            (
+                (incomingDraft.accountHint.isNotBlank() && !existing.note.contains(incomingDraft.accountHint)) ||
+                    (!existingHasCardHint &&
+                        existingAccName in GENERIC_WALLET_ACCOUNT_NAMES &&
+                        incomingAccName.isNotBlank() &&
+                        incomingAccName !in GENERIC_WALLET_ACCOUNT_NAMES)
+                )
         ) {
             incomingDraft.accountId
         } else {
@@ -1541,6 +1595,11 @@ class CaptureOrchestrator(
         val incomingTrimmed = incomingMerchant.trim()
         if (existingTrimmed.isBlank() && incomingTrimmed.isNotBlank()) return incomingTrimmed
         if (incomingTrimmed.isBlank()) return existingTrimmed
+        if (CaptureDeduplicator.isGenericPlatformMerchant(existingTrimmed) &&
+            !CaptureDeduplicator.isGenericPlatformMerchant(incomingTrimmed)
+        ) {
+            return incomingTrimmed
+        }
         if (hasMaskedMerchantSuffix(existingTrimmed) && !hasMaskedMerchantSuffix(incomingTrimmed)) {
             val normExisting = normalizeMerchantForMatch(existingTrimmed)
             val normIncoming = normalizeMerchantForMatch(incomingTrimmed)
@@ -1685,10 +1744,16 @@ class CaptureOrchestrator(
 
         private val FALLBACK_CATEGORY_NAMES = setOf("其他支出", "其他收入")
 
+        private val GENERIC_WALLET_ACCOUNT_NAMES = setOf(
+            "支付宝", "微信零钱", "微信", "微信支付"
+        )
+
+        private val CARD_LAST4_NOTE_REGEX = Regex("(?:尾号|末四位|[(（])\\s*\\d{4}")
+
         private val GENERIC_MERCHANT_MEMORY_EXCLUSIONS = setOf(
             "微信支付", "微信红包", "微信转账", "支付宝", "财付通", "银联", "云闪付",
             "网上消费", "银联消费", "快捷支付", "消费", "刷卡消费", "扫码付款", "二维码收款",
-            "淘宝", "淘宝网", "天猫", "京东", "京东商城", "拼多多", "美团", "美团外卖", "饿了么", "抖音", "抖音商城",
+            "淘宝", "淘宝网", "淘宝闪购", "天猫", "京东", "京东商城", "拼多多", "美团", "美团外卖", "饿了么", "抖音", "抖音商城",
             "拼多多平台商户", "淘宝平台商户", "天猫平台商户", "京东平台商户", "美团平台商户",
             "北京三快在线", "三快在线", "上海拉扎斯", "拉扎斯", "合众易宝", "网银在线", "抖音支付",
             "公交卡", "交通卡", "小米钱包", "华为钱包", "荣耀钱包", "oppo钱包", "vivo钱包"

@@ -190,7 +190,7 @@ class PeriodPickerHelperTest {
             )
         )
         assertTrue(withForeign.contains("外币明细（原币种）："))
-        assertTrue(withForeign.contains("USD：支 $150.00 / 收 $250.00"))
-        assertTrue(withForeign.contains("JPY：支 JP¥800"))
+        assertTrue(withForeign.contains("USD：支 $\u2009150.00 / 收 $\u2009250.00"))
+        assertTrue(withForeign.contains("JPY：支 JP¥\u2009800"))
     }
 }

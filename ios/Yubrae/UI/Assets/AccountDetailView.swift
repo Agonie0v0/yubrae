@@ -1625,7 +1625,7 @@ public struct AccountDetailView: View {
                 ),
                 isMasked: masked
             )
-            rowBadges.append(AccountRowMicroBadge(id: "refunded", text: "退\(refStr)", color: palette.incomeColor))
+            rowBadges.append(AccountRowMicroBadge(id: "refunded", text: "退\(MoneyAmount.symbolGap)\(refStr)", color: palette.incomeColor))
         }
         if tx.type == TransactionType.INCOME && tx.refundOfTxId != nil {
             rowBadges.append(AccountRowMicroBadge(id: "refund", text: "退款", color: palette.incomeColor))
@@ -1643,7 +1643,7 @@ public struct AccountDetailView: View {
                 ),
                 isMasked: masked
             )
-            rowBadges.append(AccountRowMicroBadge(id: "discount", text: "惠\(discStr)", color: palette.incomeColor))
+            rowBadges.append(AccountRowMicroBadge(id: "discount", text: "惠\(MoneyAmount.symbolGap)\(discStr)", color: palette.incomeColor))
         }
         if tx.feeAmountMicros > 0 {
             let feeStr = YubraeTheme.masked(
@@ -1655,7 +1655,7 @@ public struct AccountDetailView: View {
                 ),
                 isMasked: masked
             )
-            rowBadges.append(AccountRowMicroBadge(id: "fee", text: "费\(feeStr)", color: palette.warningColor))
+            rowBadges.append(AccountRowMicroBadge(id: "fee", text: "费\(MoneyAmount.symbolGap)\(feeStr)", color: palette.warningColor))
         }
         let visibleBadges = Array(rowBadges.prefix(2))
 
@@ -1664,33 +1664,18 @@ public struct AccountDetailView: View {
             .contains { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
         let inlineTags = Array(TagTextCodec.parse(tx.tags).prefix(2))
 
-        let excludedCandidates: [String?] = [
-            primaryTitle,
-            cat?.name,
-            parentCat?.name,
-            fromAcc?.name,
-            toAcc?.name,
-            acc.name
-        ]
-        let excludedMetaNames: Set<String> = Set(
-            excludedCandidates
-                .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
-                .filter { !$0.isEmpty }
+        let line2MetaText = YubraeTheme.buildListRowMetaText(
+            merchant: tx.merchant,
+            rawNote: tx.note,
+            excludedNames: [
+                primaryTitle,
+                cat?.name,
+                parentCat?.name,
+                fromAcc?.name,
+                toAcc?.name,
+                acc.name
+            ]
         )
-        let trimmedMerchant = tx.merchant.trimmingCharacters(in: .whitespacesAndNewlines)
-        let cleanedNote = YubraeTheme.cleanListRowNote(tx.note).trimmingCharacters(in: .whitespacesAndNewlines)
-        let keepMerchant = !trimmedMerchant.isEmpty && !excludedMetaNames.contains(trimmedMerchant.lowercased())
-        let keepNote = !cleanedNote.isEmpty && !excludedMetaNames.contains(cleanedNote.lowercased())
-        let line2MetaText: String = {
-            if keepMerchant && keepNote {
-                if cleanedNote.localizedCaseInsensitiveContains(trimmedMerchant) { return cleanedNote }
-                if trimmedMerchant.localizedCaseInsensitiveContains(cleanedNote) { return trimmedMerchant }
-                return "\(trimmedMerchant) · \(cleanedNote)"
-            }
-            if keepMerchant { return trimmedMerchant }
-            if keepNote { return cleanedNote }
-            return ""
-        }()
 
         let deltaColor: Color
         if delta > 0 {

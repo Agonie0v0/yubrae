@@ -918,6 +918,9 @@ object KairoFormats {
     private val yearMonthDayZhFormatter = DateTimeFormatter.ofPattern("yyyy年M月d日")
     private val noteSegmentSplitRegex = Regex("""\s+·\s+|\s*\|\s*|\r?\n|[；;]""")
     private val noteClauseSplitRegex = Regex("""[，。！!·]|,(?!\d{3}(?:\D|$))""")
+    private val zeroWidthCharsRegex = Regex("""[\u200B-\u200D\uFEFF\u2060]""")
+    private val unicodeSpaceCharsRegex = Regex("""[\u00A0\u1680\u2000-\u200A\u202F\u205F\u3000]""")
+    private val inlineWhitespaceRunRegex = Regex("""[ \t\r\n\u2028\u2029]+""")
     private val structuredNoteMetadataRegex = Regex(
         """^(?:地址|创建用户|创建人|记账人|优惠|优惠金额|报销账户|报销金额|报销明细|报销说明|报销状态|多币种|退款|退款金额|退款明细|退款说明|其他|其它|附件\d*|交易单号|商户单号|流水号|交易订单号|商家订单号)\s*[:：].*$"""
     )
@@ -1008,11 +1011,24 @@ object KairoFormats {
             else -> ""
         }
         val numberStr = MoneyAmount.formatPlain(absVal, info.minorDigits, grouping = true)
+        val signPrefix = if (sign.isNotEmpty()) "$sign${MoneyAmount.SIGN_GAP}" else ""
         return if (info.symbol.isBlank() || info.symbol.equals(info.code, ignoreCase = true)) {
-            "$sign$numberStr ${info.code}"
+            "$signPrefix$numberStr ${info.code}"
         } else {
-            "$sign${info.symbol}$numberStr"
+            "$signPrefix${info.symbol}${MoneyAmount.SYMBOL_GAP}$numberStr"
         }
+    }
+
+    /**
+     * 清洗不可见零宽字符与全角/不换行 Unicode 空白，避免列表行残留空白段与空点。
+     */
+    internal fun sanitizeInlineText(raw: String): String {
+        if (raw.isEmpty()) return ""
+        return raw
+            .replace(zeroWidthCharsRegex, "")
+            .replace(unicodeSpaceCharsRegex, " ")
+            .replace(inlineWhitespaceRunRegex, " ")
+            .trim()
     }
 
     private fun isNoiseNoteClause(text: String): Boolean =
@@ -1028,10 +1044,18 @@ object KairoFormats {
      * 仅用于列表行展示的备注清洗：过滤账单导入结构化元数据与自动通知/刷卡废话片段，绝不改写数据库原值。
      */
     fun cleanListRowNote(rawNote: String): String {
-        if (rawNote.isBlank()) return ""
-        val kept = noteSegmentSplitRegex.split(rawNote)
+        if (rawNote.isEmpty()) return ""
+        val normalizedNote = rawNote
+            .replace(zeroWidthCharsRegex, "")
+            .replace(unicodeSpaceCharsRegex, " ")
+        if (normalizedNote.isBlank()) return ""
+        val kept = noteSegmentSplitRegex.split(normalizedNote)
             .asSequence()
-            .map { it.trim().trim('·').trim() }
+            .map { segment ->
+                segment
+                    .replace(inlineWhitespaceRunRegex, " ")
+                    .trim { it == '·' || it.isWhitespace() }
+            }
             .mapNotNull { segment ->
                 if (isNoiseNoteClause(segment)) {
                     null
@@ -1040,7 +1064,9 @@ object KairoFormats {
                     if (rawClauses.size <= 1) {
                         segment
                     } else {
-                        val nonEmptyClauses = rawClauses.map { it.trim() }.filter { it.isNotEmpty() }
+                        val nonEmptyClauses = rawClauses
+                            .map { it.replace(inlineWhitespaceRunRegex, " ").trim() }
+                            .filter { it.isNotEmpty() }
                         val keptClauses = nonEmptyClauses.filterNot { isNoiseNoteClause(it) }
                         when {
                             keptClauses.isEmpty() -> null

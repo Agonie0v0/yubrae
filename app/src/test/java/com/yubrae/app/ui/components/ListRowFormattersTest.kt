@@ -4,7 +4,9 @@ import com.yubrae.app.data.db.ExchangeRateEntity
 import com.yubrae.app.data.db.TransactionEntity
 import com.yubrae.app.data.db.TransactionStatus
 import com.yubrae.app.data.db.TransactionType
+import com.yubrae.app.ui.screens.transactions.buildCompactRowDetail
 import com.yubrae.app.ui.screens.transactions.buildHeaderMetaFootnote
+import com.yubrae.app.ui.screens.transactions.formatRefundNetExpenseAmount
 import com.yubrae.app.ui.viewmodel.computeRefundedAmountByOrigTxId
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -35,6 +37,79 @@ class ListRowFormattersTest {
         assertEquals("和朋友聚餐，人均80", KairoFormats.cleanListRowNote("和朋友聚餐，人均80"))
         assertEquals("周末大采购！买了咖啡。", KairoFormats.cleanListRowNote("周末大采购！买了咖啡。"))
         assertEquals("午饭打包", KairoFormats.cleanListRowNote("午饭打包 · 优惠金额：2.00元 · 支付成功"))
+    }
+
+    @Test
+    fun cleanListRowNote_stripsUnicodeInvisibleAndFullWidthWhitespace() {
+        assertEquals("", KairoFormats.cleanListRowNote("\u00A0\u00A0\u3000\u200B\uFEFF"))
+        assertEquals("信用卡还款", KairoFormats.cleanListRowNote("\u00A0\u3000 · 信用卡还款"))
+        assertEquals("信用卡还款", KairoFormats.cleanListRowNote("信用卡还款 · \u00A0\u3000 · \u200B\uFEFF"))
+        assertEquals("瑞幸 咖啡", KairoFormats.cleanListRowNote("\uFEFF\u00A0瑞幸\u3000咖啡\u200B"))
+        assertEquals("重庆畅通卡", KairoFormats.cleanListRowNote("重庆畅通卡\u00A0·\u00A0刷卡完成，交易金额：1.80元"))
+    }
+
+    @Test
+    fun buildCompactRowDetail_eliminatesInvisibleWhitespaceBlankDots() {
+        assertEquals(
+            "信用卡还款",
+            buildCompactRowDetail(
+                merchant = "\u00A0\u00A0\u00A0",
+                rawNote = "信用卡还款",
+                line1Title = "招商储蓄卡 → 招商信用卡",
+                categoryName = null,
+                parentCategoryName = null,
+                accountName = "招商储蓄卡",
+                toAccountName = "招商信用卡"
+            )
+        )
+        assertEquals(
+            "信用卡还款",
+            buildCompactRowDetail(
+                merchant = "\u3000\u3000",
+                rawNote = "\u200B信用卡还款\uFEFF",
+                line1Title = "还款",
+                categoryName = "还款",
+                parentCategoryName = null,
+                accountName = "银行卡",
+                toAccountName = null
+            )
+        )
+        assertEquals(
+            "",
+            buildCompactRowDetail(
+                merchant = "\u00A0\u3000\u200B",
+                rawNote = "\u00A0\u3000\uFEFF",
+                line1Title = "餐饮",
+                categoryName = "餐饮",
+                parentCategoryName = null,
+                accountName = "零钱",
+                toAccountName = null
+            )
+        )
+        assertEquals(
+            "招商银行 · 信用卡还款",
+            buildCompactRowDetail(
+                merchant = "\u00A0招商银行\u3000",
+                rawNote = "\u00A0信用卡还款\u200B",
+                line1Title = "转账",
+                categoryName = null,
+                parentCategoryName = null,
+                accountName = "零钱",
+                toAccountName = "信用卡"
+            )
+        )
+        assertEquals(
+            "信用卡还款",
+            buildCompactRowDetail(
+                merchant = " \u00A0·\u3000 ",
+                rawNote = "信用卡还款",
+                line1Title = "转账",
+                categoryName = null,
+                parentCategoryName = null,
+                accountName = "零钱",
+                toAccountName = "信用卡"
+            )
+        )
     }
 
     @Test
@@ -72,33 +147,36 @@ class ListRowFormattersTest {
 
     @Test
     fun formatPlainSignedAmount_alwaysIncludesCurrencySymbolOrCode() {
-        assertEquals("-¥1.80", KairoFormats.formatPlainSignedAmount(-18_000L, "CNY", "CNY"))
-        assertEquals("+¥106.00", KairoFormats.formatPlainSignedAmount(1_060_000L, "CNY", "CNY"))
-        assertEquals("¥50.00", KairoFormats.formatPlainSignedAmount(500_000L, "CNY", "CNY", showSign = false))
-        assertEquals("¥1,280.50", KairoFormats.formatPlainSignedAmount(12_805_000L, "CNY", "CNY", showSign = false))
-        assertEquals("¥0.00", KairoFormats.formatPlainSignedAmount(0L, "CNY", "CNY", showSign = true))
-        assertEquals("-¥0.00", "-${KairoFormats.formatPlainSignedAmount(0L, "CNY", "CNY", showSign = false)}")
-        assertEquals("-¥1.80", KairoFormats.formatPlainSignedAmount(-18_000L, "cny", "CNY"))
+        assertEquals("-\u00A0¥\u20091.80", KairoFormats.formatPlainSignedAmount(-18_000L, "CNY", "CNY"))
+        assertEquals("+\u00A0¥\u2009106.00", KairoFormats.formatPlainSignedAmount(1_060_000L, "CNY", "CNY"))
+        assertEquals("¥\u200950.00", KairoFormats.formatPlainSignedAmount(500_000L, "CNY", "CNY", showSign = false))
+        assertEquals("¥\u20091,280.50", KairoFormats.formatPlainSignedAmount(12_805_000L, "CNY", "CNY", showSign = false))
+        assertEquals("¥\u20090.00", KairoFormats.formatPlainSignedAmount(0L, "CNY", "CNY", showSign = true))
+        assertEquals("-\u00A0¥\u20090.00", formatRefundNetExpenseAmount(0L, "CNY", "CNY"))
+        assertEquals("-\u00A00.00 CHF", formatRefundNetExpenseAmount(0L, "CHF", "CNY"))
+        assertEquals("-\u00A0¥\u200912.66", formatRefundNetExpenseAmount(126_600L, "CNY", "CNY"))
+        assertEquals("-\u00A0¥\u20091.80", KairoFormats.formatPlainSignedAmount(-18_000L, "cny", "CNY"))
 
-        assertEquals("-$53.16", KairoFormats.formatPlainSignedAmount(-531_600L, "USD", "CNY"))
-        assertEquals("+$12.00", KairoFormats.formatPlainSignedAmount(120_000L, "USD", "CNY"))
-        assertEquals("$12.00", KairoFormats.formatPlainSignedAmount(120_000L, "USD", "CNY", showSign = false))
-        assertEquals("-€25.00", KairoFormats.formatPlainSignedAmount(-250_000L, "EUR", "CNY"))
-        assertEquals("-JP¥1,200", KairoFormats.formatPlainSignedAmount(-12_000_000L, "JPY", "CNY"))
-        assertEquals("-12.00 CHF", KairoFormats.formatPlainSignedAmount(-120_000L, "CHF", "CNY"))
-        assertEquals("+50.00 THB", KairoFormats.formatPlainSignedAmount(500_000L, "THB", "CNY"))
+        assertEquals("-\u00A0$\u200953.16", KairoFormats.formatPlainSignedAmount(-531_600L, "USD", "CNY"))
+        assertEquals("+\u00A0$\u200912.00", KairoFormats.formatPlainSignedAmount(120_000L, "USD", "CNY"))
+        assertEquals("$\u200912.00", KairoFormats.formatPlainSignedAmount(120_000L, "USD", "CNY", showSign = false))
+        assertEquals("-\u00A0€\u200925.00", KairoFormats.formatPlainSignedAmount(-250_000L, "EUR", "CNY"))
+        assertEquals("-\u00A0JP¥\u20091,200", KairoFormats.formatPlainSignedAmount(-12_000_000L, "JPY", "CNY"))
+        assertEquals("-\u00A012.00 CHF", KairoFormats.formatPlainSignedAmount(-120_000L, "CHF", "CNY"))
+        assertEquals("12.00 CHF", KairoFormats.formatPlainSignedAmount(120_000L, "CHF", "CNY", showSign = false))
+        assertEquals("+\u00A050.00 THB", KairoFormats.formatPlainSignedAmount(500_000L, "THB", "CNY"))
 
-        assertEquals("-$10.00", KairoFormats.formatPlainSignedAmount(-100_000L, "USD", "USD"))
-        assertEquals("+$10.00", KairoFormats.formatPlainSignedAmount(100_000L, "USD", "USD"))
-        assertEquals("$0.00", KairoFormats.formatPlainSignedAmount(0L, "USD", "USD", showSign = true))
-        assertEquals("-12.00 CHF", KairoFormats.formatPlainSignedAmount(-120_000L, "CHF", "CHF"))
-        assertEquals("-¥10.00", KairoFormats.formatPlainSignedAmount(-100_000L, "CNY", "USD"))
+        assertEquals("-\u00A0$\u200910.00", KairoFormats.formatPlainSignedAmount(-100_000L, "USD", "USD"))
+        assertEquals("+\u00A0$\u200910.00", KairoFormats.formatPlainSignedAmount(100_000L, "USD", "USD"))
+        assertEquals("$\u20090.00", KairoFormats.formatPlainSignedAmount(0L, "USD", "USD", showSign = true))
+        assertEquals("-\u00A012.00 CHF", KairoFormats.formatPlainSignedAmount(-120_000L, "CHF", "CHF"))
+        assertEquals("-\u00A0¥\u200910.00", KairoFormats.formatPlainSignedAmount(-100_000L, "CNY", "USD"))
     }
 
     @Test
     fun buildHeaderMetaFootnote_restoresForeignCurrencySymbolsWithoutDuplicatingCode() {
         assertEquals(
-            "USD -$53.16 · EUR -€25.00 · CHF -12.00 · 省 ¥5.00 · 费 ¥1.20",
+            "USD -\u00A0$\u200953.16 · EUR -\u00A0€\u200925.00 · CHF -\u00A012.00 · 省 ¥\u20095.00 · 费 ¥\u20091.20",
             buildHeaderMetaFootnote(
                 foreignCurrencySummaries = listOf(
                     Triple("USD", 531_600L, 0L),
@@ -112,7 +190,7 @@ class ListRowFormattersTest {
             )
         )
         assertEquals(
-            "USD -$53.16 / +$12.00 · JPY +JP¥1,200 · THB +50.00",
+            "USD -\u00A0$\u200953.16 / +\u00A0$\u200912.00 · JPY +\u00A0JP¥\u20091,200 · THB +\u00A050.00",
             buildHeaderMetaFootnote(
                 foreignCurrencySummaries = listOf(
                     Triple("USD", 531_600L, 120_000L),

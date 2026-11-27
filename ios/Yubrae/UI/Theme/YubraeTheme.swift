@@ -235,15 +235,66 @@ public enum YubraeTheme {
         )
     }()
 
+    /// 清洗展示字段中的零宽字符（`\u{200B}` / `\u{2060}` / `\u{FEFF}`）及不可见 Unicode 空白符（`\u{00A0}` / `\u{3000}` / `\u{2009}` / `\u{200A}` / `\u{202F}`），
+    /// 避免在列表行副标题拼接时产生看不见的空段与空点间隔。
+    public static func sanitizeDisplayField(_ raw: String) -> String {
+        guard !raw.isEmpty else { return "" }
+        var normalized = raw
+        for zeroWidth in ["\u{200B}", "\u{2060}", "\u{FEFF}"] {
+            if normalized.contains(zeroWidth) {
+                normalized = normalized.replacingOccurrences(of: zeroWidth, with: "")
+            }
+        }
+        for unicodeSpace in ["\u{00A0}", "\u{3000}", "\u{2009}", "\u{200A}", "\u{202F}"] {
+            if normalized.contains(unicodeSpace) {
+                normalized = normalized.replacingOccurrences(of: unicodeSpace, with: " ")
+            }
+        }
+        return normalized.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// 列表行第二行副标题拼接（商户 + 清洗后备注），自动剔除不可见空白符及与主标题/分类/账户重复的文案。
+    public static func buildListRowMetaText(
+        merchant rawMerchant: String,
+        rawNote: String,
+        excludedNames: [String?]
+    ) -> String {
+        let excluded: Set<String> = Set(
+            excludedNames.compactMap { name -> String? in
+                guard let name else { return nil }
+                let cleaned = sanitizeDisplayField(name).lowercased()
+                return cleaned.isEmpty ? nil : cleaned
+            }
+        )
+
+        let merchant = sanitizeDisplayField(rawMerchant)
+        let cleanedNote = cleanListRowNote(rawNote)
+
+        let keepMerchant = !merchant.isEmpty && !excluded.contains(merchant.lowercased())
+        let keepNote = !cleanedNote.isEmpty && !excluded.contains(cleanedNote.lowercased())
+
+        if keepMerchant && keepNote {
+            if cleanedNote.localizedCaseInsensitiveContains(merchant) {
+                return cleanedNote
+            }
+            if merchant.localizedCaseInsensitiveContains(cleanedNote) {
+                return merchant
+            }
+            return "\(merchant) · \(cleanedNote)"
+        }
+        if keepMerchant { return merchant }
+        if keepNote { return cleanedNote }
+        return ""
+    }
+
     /// 仅用于列表行展示的备注清洗：过滤账单导入结构化元数据与自动通知机器废话，绝不改写持久化原值。
     public static func cleanListRowNote(_ rawNote: String) -> String {
-        let trimmedRaw = rawNote.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedRaw = sanitizeDisplayField(rawNote)
         guard !trimmedRaw.isEmpty else { return "" }
 
         var keptSegments: [String] = []
         for rawSegment in split(trimmedRaw, using: noteSegmentSplitRegex) {
-            let segment = rawSegment
-                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let segment = sanitizeDisplayField(rawSegment)
                 .trimmingCharacters(in: noteDotTrimCharacterSet)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             guard !segment.isEmpty,
@@ -253,7 +304,7 @@ public enum YubraeTheme {
             }
 
             let clauses = split(segment, using: noteClauseSplitRegex)
-                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .map { sanitizeDisplayField($0) }
             if clauses.count > 1 {
                 let hasNoiseClause = clauses.contains { clause in
                     !clause.isEmpty && (notePlaceholderValues.contains(clause) || isNoiseNoteClause(clause))
@@ -314,7 +365,9 @@ public enum YubraeTheme {
         return (dateText: dateText, subText: subText)
     }
 
-    /// 全币种清晰带符号金额格式：所有币种（含主币种）均保留清晰货币符号（如 `-¥1.80` / `+¥106.00` / `¥50.00` / `¥1,280.50` / `¥0.00` / `-$53.16` / `+$12.00` / `-JP¥1,200` / `-12.00 CHF`）。
+    /// 全币种清晰带符号金额格式：所有币种（含主币种）均保留清晰货币符号，
+    /// 正负号与货币符号/数字间插入不换行空格 `\u{00A0}`，前置货币符号与数字间插入窄空格 `\u{2009}`
+    /// （如 `-\u{00A0}¥\u{2009}1.80` / `+\u{00A0}¥\u{2009}106.00` / `¥\u{2009}50.00` / `¥\u{2009}0.00` / `-\u{00A0}$\u{2009}53.16` / `-\u{00A0}JP¥\u{2009}1,200` / `-\u{00A0}12.00 CHF`）。
     public static func formatPlainSignedAmount(
         _ micros: Int64,
         currencyCode: String,
@@ -332,13 +385,14 @@ public enum YubraeTheme {
         } else {
             sign = ""
         }
+        let signPart = sign.isEmpty ? "" : "\(sign)\(MoneyAmount.signGap)"
         let absMicros: Int64 = micros == Int64.min ? Int64.max : abs(micros)
         let numberStr = MoneyAmount.formatPlain(absMicros, minorDigits: info.minorDigits, grouping: true)
         let trimmedSymbol = info.symbol.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmedSymbol.isEmpty || trimmedSymbol.caseInsensitiveCompare(info.code) == .orderedSame {
-            return "\(sign)\(numberStr) \(info.code)"
+            return "\(signPart)\(numberStr) \(info.code)"
         }
-        return "\(sign)\(trimmedSymbol)\(numberStr)"
+        return "\(signPart)\(trimmedSymbol)\(MoneyAmount.symbolGap)\(numberStr)"
     }
 
     private static func isNoiseNoteClause(_ text: String) -> Bool {

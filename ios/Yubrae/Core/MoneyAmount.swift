@@ -140,6 +140,10 @@ public enum CurrencyCatalog {
 public enum MoneyAmount {
     public static let amountScale: Int64 = 10_000
     public static let rateScale: Int64 = 1_000_000
+    /// 正负号（`-` / `+`）与货币符号（或后置代码数字）之间的不换行空格（U+00A0）。
+    public static let signGap = "\u{00A0}"
+    /// 前置货币符号与数字之间的窄空格 Thin Space（U+2009）。
+    public static let symbolGap = "\u{2009}"
 
     private static let decimalAmountScale = Decimal(amountScale)
     private static let decimalRateScale = Decimal(rateScale)
@@ -152,7 +156,12 @@ public enum MoneyAmount {
     /// 将字符串金额转为定点数 Int64（乘以 `amountScale = 10_000`），非法输入返回 `nil`。
     public static func parseToMicros(_ raw: String) -> Int64? {
         var cleaned = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        for token in [",", "，", "¥", "￥", "$", "€", "£", "₩"] {
+        for token in [
+            ",", "，",
+            "JP¥", "HK$", "NT$", "S$", "A$", "C$",
+            "¥", "￥", "$", "€", "£", "₩",
+            "\u{00A0}", "\u{2007}", "\u{2008}", "\u{2009}", "\u{200A}", "\u{202F}", "\u{3000}", "\u{200B}", "\u{FEFF}"
+        ] {
             cleaned = cleaned.replacingOccurrences(of: token, with: "")
         }
         cleaned = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -240,7 +249,7 @@ public enum MoneyAmount {
         return formatter.string(from: NSDecimalNumber(decimal: value)) ?? "0"
     }
 
-    /// 格式化带币种符号的展示金额，如 `¥128.50`、`-$15.00 USD`。
+    /// 格式化带币种符号的展示金额，如 `¥\u{2009}128.50`、`-\u{00A0}$\u{2009}15.00 USD`。
     public static func format(
         _ amountMicros: Int64,
         currencyCode: String,
@@ -259,8 +268,11 @@ public enum MoneyAmount {
         }
         let absMicros: Int64 = amountMicros == Int64.min ? Int64.max : abs(amountMicros)
         let numberStr = formatPlain(absMicros, minorDigits: info.minorDigits, grouping: grouping)
+        let signPart = sign.isEmpty ? "" : "\(sign)\(signGap)"
+        let trimmedSymbol = info.symbol.trimmingCharacters(in: .whitespacesAndNewlines)
+        let symbolPart = trimmedSymbol.isEmpty ? "" : "\(trimmedSymbol)\(symbolGap)"
         let suffix = (showCurrencyCode && info.code != CurrencyCatalog.defaultBaseCurrency) ? " \(info.code)" : ""
-        return "\(sign)\(info.symbol)\(numberStr)\(suffix)"
+        return "\(signPart)\(symbolPart)\(numberStr)\(suffix)"
     }
 
     /// 格式化汇率字符串（至少保留 2 位小数，最多 `decimals` 位小数）。

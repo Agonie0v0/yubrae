@@ -14,21 +14,37 @@ import java.util.Locale
 object MoneyAmount {
     const val AMOUNT_SCALE: Long = 10_000L
     const val RATE_SCALE: Long = 1_000_000L
+    /** 正负号与货币符号/后置代码数字之间的不换行空格（与 iOS 端一致）。 */
+    const val SIGN_GAP: String = "\u00A0"
+    /** 前置货币符号与数字之间的窄空格 Thin Space（与 iOS 端一致）。 */
+    const val SYMBOL_GAP: String = "\u2009"
 
     private val BD_AMOUNT_SCALE = BigDecimal(AMOUNT_SCALE)
     private val BD_RATE_SCALE = BigDecimal(RATE_SCALE)
+    private val EXTRA_WHITESPACE_REGEX = Regex("[\u00A0\u2007\u2008\u2009\u200A\u200B\u202F\u3000\uFEFF]")
+    private val SIGN_LEADING_SPACE_REGEX = Regex("^([+-])\\s+")
 
     /** 将字符串金额转为微元 Long，非法输入返回 null。 */
     fun parseToMicros(raw: String): Long? {
-        val cleaned = raw.trim()
+        val cleaned = raw
+            .replace(EXTRA_WHITESPACE_REGEX, "")
+            .trim()
             .replace(",", "")
             .replace("，", "")
+            .replace("JP¥", "")
+            .replace("HK$", "")
+            .replace("NT$", "")
+            .replace("S$", "")
+            .replace("A$", "")
+            .replace("C$", "")
             .replace("¥", "")
             .replace("￥", "")
             .replace("$", "")
             .replace("€", "")
             .replace("£", "")
+            .replace("₩", "")
             .trim()
+            .replace(SIGN_LEADING_SPACE_REGEX, "$1")
         if (cleaned.isEmpty()) return null
         return try {
             BigDecimal(cleaned)
@@ -123,7 +139,7 @@ object MoneyAmount {
         return df.format(bd)
     }
 
-    /** 格式化带币种符号的展示金额，如 ¥128.50、-$15.00 USD。 */
+    /** 格式化带币种符号的展示金额，如 ¥ 128.50、- $ 15.00 USD。 */
     fun format(
         amountMicros: Long,
         currencyCode: String,
@@ -138,13 +154,15 @@ object MoneyAmount {
             showSign && amountMicros > 0L -> "+"
             else -> ""
         }
+        val signPart = if (sign.isNotEmpty()) "$sign$SIGN_GAP" else ""
+        val symbolPart = if (info.symbol.isNotBlank()) "${info.symbol}$SYMBOL_GAP" else ""
         val numberStr = formatPlain(absVal, info.minorDigits, grouping)
         val suffix = if (showCurrencyCode && info.code != CurrencyCatalog.DEFAULT_BASE_CURRENCY) {
             " ${info.code}"
         } else {
             ""
         }
-        return "$sign${info.symbol}$numberStr$suffix"
+        return "$signPart$symbolPart$numberStr$suffix"
     }
 
     fun formatRate(rateMicros: Long, decimals: Int = 4): String {

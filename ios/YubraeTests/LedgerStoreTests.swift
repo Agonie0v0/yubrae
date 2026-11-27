@@ -1825,64 +1825,119 @@ final class LedgerStoreTests: XCTestCase {
         XCTAssertEqual(YubraeTheme.cleanListRowNote("买咖啡，支付成功，交易金额：18.00元"), "买咖啡")
         XCTAssertEqual(YubraeTheme.cleanListRowNote("买奶茶！支付成功！消费金额：18.00元"), "买奶茶")
         XCTAssertEqual(YubraeTheme.cleanListRowNote("优惠: 2.00元 · 午饭打包 · 卡内余额: 66.35元"), "午饭打包")
+        // 4b. Unicode 不可见空白符（U+00A0/U+3000/U+200B/U+FEFF）清洗与副标题空点防护
+        XCTAssertEqual(YubraeTheme.cleanListRowNote("\u{00A0}\u{3000}\u{200B}\u{FEFF}"), "")
+        XCTAssertEqual(YubraeTheme.cleanListRowNote("\u{00A0} · \u{3000}\u{200B} · \u{FEFF}信用卡还款\u{00A0}"), "信用卡还款")
+        XCTAssertEqual(YubraeTheme.cleanListRowNote("地址:\u{00A0}北京市\u{00A0}·\u{3000}午饭打包\u{200B}"), "午饭打包")
+        XCTAssertEqual(
+            YubraeTheme.buildListRowMetaText(
+                merchant: "\u{00A0}\u{3000}\u{200B}\u{FEFF}",
+                rawNote: "信用卡还款",
+                excludedNames: ["转账"]
+            ),
+            "信用卡还款"
+        )
+        XCTAssertEqual(
+            YubraeTheme.buildListRowMetaText(
+                merchant: "\u{00A0}星巴克\u{200B}",
+                rawNote: "\u{3000}\u{FEFF}",
+                excludedNames: ["餐饮美食"]
+            ),
+            "星巴克"
+        )
+        XCTAssertEqual(
+            YubraeTheme.buildListRowMetaText(
+                merchant: "\u{00A0}星巴克\u{200B}",
+                rawNote: "\u{3000}拿铁\u{FEFF}",
+                excludedNames: ["咖啡茶饮"]
+            ),
+            "星巴克 · 拿铁"
+        )
 
-        // 5. YubraeTheme.formatPlainSignedAmount：全币种（含主币种）保留清晰货币符号，字母代码币种后置代码不重复
+        // 5. YubraeTheme.formatPlainSignedAmount & MoneyAmount.format/parseToMicros：
+        //    正负号后插 U+00A0、前置货币符号后插 U+2009，字母代码币种后置代码不重复，且可无损回解析
         XCTAssertEqual(
             YubraeTheme.formatPlainSignedAmount(-18_000, currencyCode: "CNY", baseCurrency: "CNY"),
-            "-¥1.80"
+            "-\u{00A0}¥\u{2009}1.80"
         )
         XCTAssertEqual(
             YubraeTheme.formatPlainSignedAmount(1_060_000, currencyCode: "cny", baseCurrency: "CNY"),
-            "+¥106.00"
+            "+\u{00A0}¥\u{2009}106.00"
         )
         XCTAssertEqual(
             YubraeTheme.formatPlainSignedAmount(500_000, currencyCode: "CNY", baseCurrency: "CNY", showSign: false),
-            "¥50.00"
+            "¥\u{2009}50.00"
         )
         XCTAssertEqual(
             YubraeTheme.formatPlainSignedAmount(12_805_000, currencyCode: "CNY", baseCurrency: "CNY", showSign: false),
-            "¥1,280.50"
+            "¥\u{2009}1,280.50"
         )
         XCTAssertEqual(
             YubraeTheme.formatPlainSignedAmount(0, currencyCode: "CNY", baseCurrency: "CNY", showSign: true),
-            "¥0.00"
+            "¥\u{2009}0.00"
         )
         XCTAssertEqual(
             YubraeTheme.formatPlainSignedAmount(-531_600, currencyCode: "USD", baseCurrency: "CNY"),
-            "-$53.16"
+            "-\u{00A0}$\u{2009}53.16"
         )
         XCTAssertEqual(
             YubraeTheme.formatPlainSignedAmount(120_000, currencyCode: "USD", baseCurrency: "CNY"),
-            "+$12.00"
+            "+\u{00A0}$\u{2009}12.00"
         )
         XCTAssertEqual(
             YubraeTheme.formatPlainSignedAmount(120_000, currencyCode: "USD", baseCurrency: "CNY", showSign: false),
-            "$12.00"
+            "$\u{2009}12.00"
         )
         XCTAssertEqual(
             YubraeTheme.formatPlainSignedAmount(-12_000_000, currencyCode: "JPY", baseCurrency: "CNY"),
-            "-JP¥1,200"
+            "-\u{00A0}JP¥\u{2009}1,200"
         )
         XCTAssertEqual(
             YubraeTheme.formatPlainSignedAmount(-12_000_000, currencyCode: "JPY", baseCurrency: "JPY"),
-            "-JP¥1,200"
+            "-\u{00A0}JP¥\u{2009}1,200"
         )
         XCTAssertEqual(
             YubraeTheme.formatPlainSignedAmount(-120_000, currencyCode: "CHF", baseCurrency: "CNY"),
-            "-12.00 CHF"
+            "-\u{00A0}12.00 CHF"
         )
         XCTAssertEqual(
             YubraeTheme.formatPlainSignedAmount(-120_000, currencyCode: "CHF", baseCurrency: "CHF"),
-            "-12.00 CHF"
+            "-\u{00A0}12.00 CHF"
+        )
+        XCTAssertEqual(
+            YubraeTheme.formatPlainSignedAmount(120_000, currencyCode: "CHF", baseCurrency: "CNY", showSign: false),
+            "12.00 CHF"
         )
         XCTAssertEqual(
             YubraeTheme.formatPlainSignedAmount(500_000, currencyCode: "THB", baseCurrency: "CNY"),
-            "+50.00 THB"
+            "+\u{00A0}50.00 THB"
         )
         XCTAssertEqual(
-            "-\(YubraeTheme.formatPlainSignedAmount(0, currencyCode: "CNY", baseCurrency: "CNY", showSign: false))",
-            "-¥0.00"
+            "-\(MoneyAmount.signGap)\(YubraeTheme.formatPlainSignedAmount(0, currencyCode: "CNY", baseCurrency: "CNY", showSign: false))",
+            "-\u{00A0}¥\u{2009}0.00"
         )
+        XCTAssertEqual(
+            "-\(MoneyAmount.signGap)\(YubraeTheme.formatPlainSignedAmount(0, currencyCode: "CHF", baseCurrency: "CNY", showSign: false))",
+            "-\u{00A0}0.00 CHF"
+        )
+
+        // 5b. MoneyAmount.format、formatPlain（纯数字不变）及 parseToMicros 带间距无损回解析
+        XCTAssertEqual(MoneyAmount.formatPlain(51_676_500, minorDigits: 2, grouping: false), "5167.65")
+        XCTAssertEqual(MoneyAmount.formatPlain(51_676_500, minorDigits: 2, grouping: true), "5,167.65")
+        XCTAssertEqual(MoneyAmount.format(51_676_500, currencyCode: "CNY"), "¥\u{2009}5,167.65")
+        XCTAssertEqual(MoneyAmount.format(-126_600, currencyCode: "CNY"), "-\u{00A0}¥\u{2009}12.66")
+        XCTAssertEqual(MoneyAmount.format(5_633_500, currencyCode: "CNY", showSign: true), "+\u{00A0}¥\u{2009}563.35")
+        XCTAssertEqual(MoneyAmount.format(0, currencyCode: "CNY", showSign: true), "¥\u{2009}0.00")
+        XCTAssertEqual(MoneyAmount.format(-150_000, currencyCode: "USD", showCurrencyCode: true), "-\u{00A0}$\u{2009}15.00 USD")
+        XCTAssertEqual(MoneyAmount.format(-12_000_000, currencyCode: "JPY"), "-\u{00A0}JP¥\u{2009}1,200")
+        XCTAssertEqual(MoneyAmount.parseToMicros(MoneyAmount.format(-126_600, currencyCode: "CNY")), -126_600)
+        XCTAssertEqual(MoneyAmount.parseToMicros(MoneyAmount.format(5_633_500, currencyCode: "CNY", showSign: true)), 5_633_500)
+        XCTAssertEqual(MoneyAmount.parseToMicros(MoneyAmount.format(51_676_500, currencyCode: "CNY")), 51_676_500)
+        XCTAssertEqual(MoneyAmount.parseToMicros(MoneyAmount.format(-12_000_000, currencyCode: "JPY")), -12_000_000)
+        XCTAssertEqual(MoneyAmount.parseToMicros(MoneyAmount.format(250_000, currencyCode: "HKD", showSign: true)), 250_000)
+        XCTAssertEqual(MoneyAmount.parseToMicros("-\u{00A0}$\u{2009}53.16"), -531_600)
+        XCTAssertEqual(MoneyAmount.parseToMicros("\u{FEFF}\u{3000}12\u{202F}345.67\u{200A}\u{200B}"), 123_456_700)
+        XCTAssertNil(MoneyAmount.parseToMicros("\u{00A0}\u{3000}\u{200B}\u{FEFF}"))
 
         // 6. YubraeTheme.formatDayHeaderParts：今天 / 昨天 / 同年周几 / 跨年日期
         var cal = Calendar(identifier: .gregorian)

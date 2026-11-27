@@ -60,7 +60,7 @@ internal struct TransactionRowView: View {
                 ),
                 isMasked: isMasked
             )
-            badges.append(RowMicroBadge(id: "refunded", text: "退\(refStr)", color: palette.incomeColor))
+            badges.append(RowMicroBadge(id: "refunded", text: "退\(MoneyAmount.symbolGap)\(refStr)", color: palette.incomeColor))
         }
         if tx.type == TransactionType.INCOME && tx.refundOfTxId != nil {
             badges.append(RowMicroBadge(id: "refund", text: "退款", color: palette.incomeColor))
@@ -78,7 +78,7 @@ internal struct TransactionRowView: View {
                 ),
                 isMasked: isMasked
             )
-            badges.append(RowMicroBadge(id: "discount", text: "惠\(discStr)", color: palette.incomeColor))
+            badges.append(RowMicroBadge(id: "discount", text: "惠\(MoneyAmount.symbolGap)\(discStr)", color: palette.incomeColor))
         }
         if tx.feeAmountMicros > 0 {
             let feeStr = YubraeTheme.masked(
@@ -90,7 +90,7 @@ internal struct TransactionRowView: View {
                 ),
                 isMasked: isMasked
             )
-            badges.append(RowMicroBadge(id: "fee", text: "费\(feeStr)", color: palette.warningColor))
+            badges.append(RowMicroBadge(id: "fee", text: "费\(MoneyAmount.symbolGap)\(feeStr)", color: palette.warningColor))
         }
 
         return Array(badges.prefix(2))
@@ -107,37 +107,17 @@ internal struct TransactionRowView: View {
     }
 
     private var line2MetaText: String {
-        let excludedCandidates: [String?] = [
-            line1Title,
-            category?.name,
-            parentCategory?.name,
-            account?.name,
-            toAccount?.name
-        ]
-        let excluded: Set<String> = Set(
-            excludedCandidates
-                .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
-                .filter { !$0.isEmpty }
+        YubraeTheme.buildListRowMetaText(
+            merchant: tx.merchant,
+            rawNote: tx.note,
+            excludedNames: [
+                line1Title,
+                category?.name,
+                parentCategory?.name,
+                account?.name,
+                toAccount?.name
+            ]
         )
-
-        let merchant = tx.merchant.trimmingCharacters(in: .whitespacesAndNewlines)
-        let cleanedNote = YubraeTheme.cleanListRowNote(tx.note).trimmingCharacters(in: .whitespacesAndNewlines)
-
-        let keepMerchant = !merchant.isEmpty && !excluded.contains(merchant.lowercased())
-        let keepNote = !cleanedNote.isEmpty && !excluded.contains(cleanedNote.lowercased())
-
-        if keepMerchant && keepNote {
-            if cleanedNote.localizedCaseInsensitiveContains(merchant) {
-                return cleanedNote
-            }
-            if merchant.localizedCaseInsensitiveContains(cleanedNote) {
-                return merchant
-            }
-            return "\(merchant) · \(cleanedNote)"
-        }
-        if keepMerchant { return merchant }
-        if keepNote { return cleanedNote }
-        return ""
     }
 
     private var isRefundedExpense: Bool {
@@ -267,7 +247,7 @@ internal struct TransactionRowView: View {
                     baseCurrency: baseCurrency,
                     showSign: true
                 )
-                : "-\(YubraeTheme.formatPlainSignedAmount(0, currencyCode: tx.origCurrency, baseCurrency: baseCurrency, showSign: false))"
+                : "-\(MoneyAmount.signGap)\(YubraeTheme.formatPlainSignedAmount(0, currencyCode: tx.origCurrency, baseCurrency: baseCurrency, showSign: false))"
 
             HStack(alignment: .firstTextBaseline, spacing: 4) {
                 Text(YubraeTheme.masked(origRaw, isMasked: isMasked))

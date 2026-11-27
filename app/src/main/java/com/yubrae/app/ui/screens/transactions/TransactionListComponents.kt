@@ -435,13 +435,14 @@ internal fun buildHeaderMetaFootnote(
                 val symbolPrefix = if (info.symbol.isBlank() || info.symbol.equals(info.code, ignoreCase = true)) {
                     ""
                 } else {
-                    info.symbol
+                    "${info.symbol}${MoneyAmount.SYMBOL_GAP}"
                 }
+                val signGap = MoneyAmount.SIGN_GAP
                 val text = when {
                     exp > 0L && inc > 0L ->
-                        "$code -$symbolPrefix${MoneyAmount.formatPlain(exp, digits, true)} / +$symbolPrefix${MoneyAmount.formatPlain(inc, digits, true)}"
-                    exp > 0L -> "$code -$symbolPrefix${MoneyAmount.formatPlain(exp, digits, true)}"
-                    else -> "$code +$symbolPrefix${MoneyAmount.formatPlain(inc, digits, true)}"
+                        "$code -$signGap$symbolPrefix${MoneyAmount.formatPlain(exp, digits, true)} / +$signGap$symbolPrefix${MoneyAmount.formatPlain(inc, digits, true)}"
+                    exp > 0L -> "$code -$signGap$symbolPrefix${MoneyAmount.formatPlain(exp, digits, true)}"
+                    else -> "$code +$signGap$symbolPrefix${MoneyAmount.formatPlain(inc, digits, true)}"
                 }
                 add(text)
             }
@@ -834,21 +835,21 @@ internal fun TransactionRowItem(
                 privacyMasked,
                 KairoFormats.formatPlainSignedAmount(refundedMicros, tx.origCurrency, baseCurrency, showSign = false)
             )
-            add(RowMicroBadgeSpec("退$amt", semantic.warningContainer.copy(alpha = 0.76f), semantic.warning))
+            add(RowMicroBadgeSpec("退${MoneyAmount.SYMBOL_GAP}$amt", semantic.warningContainer.copy(alpha = 0.76f), semantic.warning))
         }
         if (tx.discountAmountMicros > 0L && size < 2) {
             val amt = formatPrivacyAmount(
                 privacyMasked,
                 KairoFormats.formatPlainSignedAmount(tx.discountAmountMicros, tx.origCurrency, baseCurrency, showSign = false)
             )
-            add(RowMicroBadgeSpec("惠$amt", semantic.incomeContainer.copy(alpha = 0.76f), semantic.income))
+            add(RowMicroBadgeSpec("惠${MoneyAmount.SYMBOL_GAP}$amt", semantic.incomeContainer.copy(alpha = 0.76f), semantic.income))
         }
         if (tx.feeAmountMicros > 0L && size < 2) {
             val amt = formatPrivacyAmount(
                 privacyMasked,
                 KairoFormats.formatPlainSignedAmount(tx.feeAmountMicros, tx.origCurrency, baseCurrency, showSign = false)
             )
-            add(RowMicroBadgeSpec("费$amt", semantic.warningContainer.copy(alpha = 0.76f), semantic.warning))
+            add(RowMicroBadgeSpec("费${MoneyAmount.SYMBOL_GAP}$amt", semantic.warningContainer.copy(alpha = 0.76f), semantic.warning))
         }
         if (tx.status == TransactionStatus.PENDING && size < 2) {
             add(RowMicroBadgeSpec("待确认", semantic.warningContainer.copy(alpha = 0.76f), semantic.warning))
@@ -1045,11 +1046,7 @@ internal fun TransactionRowItem(
                         KairoFormats.formatPlainSignedAmount(origAbsMicros, tx.origCurrency, baseCurrency, showSign = false)
                     }
                     val netText = remember(netMicros, tx.origCurrency, baseCurrency) {
-                        if (netMicros == 0L) {
-                            "-${KairoFormats.formatPlainSignedAmount(0L, tx.origCurrency, baseCurrency, showSign = false)}"
-                        } else {
-                            KairoFormats.formatPlainSignedAmount(-netMicros, tx.origCurrency, baseCurrency, showSign = false)
-                        }
+                        formatRefundNetExpenseAmount(netMicros, tx.origCurrency, baseCurrency)
                     }
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
@@ -1170,7 +1167,17 @@ internal fun TransactionRowItem(
     }
 }
 
-private fun buildCompactRowDetail(
+internal fun formatRefundNetExpenseAmount(
+    netMicros: Long,
+    currencyCode: String,
+    baseCurrency: String
+): String = if (netMicros <= 0L) {
+    "-${MoneyAmount.SIGN_GAP}${KairoFormats.formatPlainSignedAmount(0L, currencyCode, baseCurrency, showSign = false)}"
+} else {
+    KairoFormats.formatPlainSignedAmount(-netMicros, currencyCode, baseCurrency, showSign = false)
+}
+
+internal fun buildCompactRowDetail(
     merchant: String,
     rawNote: String,
     line1Title: String,
@@ -1180,14 +1187,18 @@ private fun buildCompactRowDetail(
     toAccountName: String?
 ): String {
     val redundant = buildSet {
-        add(line1Title.trim().lowercase())
-        categoryName?.trim()?.lowercase()?.takeIf { it.isNotEmpty() }?.let { add(it) }
-        parentCategoryName?.trim()?.lowercase()?.takeIf { it.isNotEmpty() }?.let { add(it) }
-        accountName?.trim()?.lowercase()?.takeIf { it.isNotEmpty() }?.let { add(it) }
-        toAccountName?.trim()?.lowercase()?.takeIf { it.isNotEmpty() }?.let { add(it) }
+        KairoFormats.sanitizeInlineText(line1Title).lowercase().takeIf { it.isNotEmpty() }?.let { add(it) }
+        categoryName?.let { KairoFormats.sanitizeInlineText(it).lowercase() }?.takeIf { it.isNotEmpty() }?.let { add(it) }
+        parentCategoryName?.let { KairoFormats.sanitizeInlineText(it).lowercase() }?.takeIf { it.isNotEmpty() }?.let { add(it) }
+        accountName?.let { KairoFormats.sanitizeInlineText(it).lowercase() }?.takeIf { it.isNotEmpty() }?.let { add(it) }
+        toAccountName?.let { KairoFormats.sanitizeInlineText(it).lowercase() }?.takeIf { it.isNotEmpty() }?.let { add(it) }
     }
-    val merchantClean = merchant.trim().takeIf { it.isNotEmpty() && it.lowercase() !in redundant }
-    val noteClean = KairoFormats.cleanListRowNote(rawNote).takeIf { it.isNotEmpty() && it.lowercase() !in redundant }
+    val merchantClean = KairoFormats.sanitizeInlineText(merchant)
+        .trim { it == '·' || it.isWhitespace() }
+        .takeIf { it.isNotEmpty() && it.lowercase() !in redundant }
+    val noteClean = KairoFormats.sanitizeInlineText(KairoFormats.cleanListRowNote(rawNote))
+        .trim { it == '·' || it.isWhitespace() }
+        .takeIf { it.isNotEmpty() && it.lowercase() !in redundant }
     return when {
         merchantClean != null && noteClean != null -> {
             when {
@@ -1352,8 +1363,9 @@ internal fun PendingInboxBanner(
                         val cat = tx.categoryId?.let { categoryMap[it] }
                         val parentCat = cat?.parentId?.let { categoryMap[it] }
                         val acc = accountMap[tx.accountId]
+                        val merchantClean = KairoFormats.sanitizeInlineText(tx.merchant)
                         val title = when {
-                            tx.merchant.isNotBlank() -> tx.merchant
+                            merchantClean.isNotEmpty() -> merchantClean
                             cat != null && parentCat != null -> "${parentCat.name}-${cat.name}"
                             cat != null -> cat.name
                             else -> KairoFormats.transactionTypeLabel(tx.type)
@@ -1362,7 +1374,7 @@ internal fun PendingInboxBanner(
                         val subLine = remember(tx.timestamp, acc?.name, cleanNote) {
                             buildList {
                                 add(KairoFormats.formatDateTime(tx.timestamp))
-                                acc?.name?.takeIf { it.isNotBlank() }?.let { add(it) }
+                                acc?.name?.let { KairoFormats.sanitizeInlineText(it) }?.takeIf { it.isNotEmpty() }?.let { add(it) }
                                 cleanNote.takeIf { it.isNotEmpty() }?.let { add(it) }
                             }.joinToString(" · ")
                         }

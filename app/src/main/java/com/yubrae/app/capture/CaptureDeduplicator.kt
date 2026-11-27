@@ -120,7 +120,7 @@ class CaptureDeduplicator(
         incomingRawText: String,
         allowPlatformShellMerge: Boolean
     ): Boolean {
-        if (hasConflictingOrderNo(existing, existingLog, incomingDraft)) {
+        if (hasConflictingOrderNo(existing, existingLog, incomingDraft, incomingSourcePackage)) {
             return false
         }
 
@@ -141,7 +141,7 @@ class CaptureDeduplicator(
             return true
         }
 
-        // 同渠道同包名：1）通知正文高度一致（系统重复回调同一通知）；2）同包名支付成功页重复刷新（如底部广告加载导致 rawText 变化）
+        // 同渠道同包名：1）通知正文高度一致（系统重复回调同一通知）；2）同包名支付成功页重复刷新；3）同包名支付成功页紧接跳转订单详情页升级
         val existingRaw = existingLog?.let { "${it.title}\n${it.content}".trim() }.orEmpty()
         if (existingRaw.isNotBlank() && existingRaw == incomingRawText.trim()) {
             return true
@@ -149,7 +149,41 @@ class CaptureDeduplicator(
         if (isSamePackagePaySuccessRefresh(existing, existingLog, incomingDraft, incomingChannel, incomingSourcePackage)) {
             return true
         }
+        if (isSamePackagePaySuccessOrderUpgrade(existing, existingLog, incomingDraft, incomingChannel, incomingSourcePackage)) {
+            return true
+        }
         return false
+    }
+
+    private fun isSamePackagePaySuccessOrderUpgrade(
+        existing: TransactionEntity,
+        existingLog: RawCaptureLogEntity?,
+        incomingDraft: ParsedBillDraft,
+        incomingChannel: String,
+        incomingSourcePackage: String
+    ): Boolean {
+        if (!incomingChannel.equals(CaptureChannel.SCREEN, ignoreCase = true)) return false
+        if (!existing.sourceType.equals(CaptureChannel.SCREEN, ignoreCase = true)) return false
+        val existingPkg = existingLog?.sourcePackage.orEmpty()
+        if (existingPkg.isNotBlank() &&
+            incomingSourcePackage.isNotBlank() &&
+            !existingPkg.equals(incomingSourcePackage, ignoreCase = true)
+        ) {
+            return false
+        }
+        if (abs(existing.timestamp - incomingDraft.timestamp) > SAME_PACKAGE_ORDER_UPGRADE_WINDOW_MILLIS) {
+            return false
+        }
+        val existingIsPaySuccess = existingLog?.title?.contains("支付成功") == true ||
+            existingLog?.parserUsed == "SCREEN_PAY_SUCCESS"
+        val existingIsOrderDetail = existingLog?.title?.contains("订单详情") == true ||
+            existingLog?.parserUsed == "SCREEN_ORDER_DETAIL"
+        val incomingIsPaySuccess = incomingDraft.parserUsed == "SCREEN_PAY_SUCCESS"
+        val incomingIsOrderDetail = incomingDraft.parserUsed == "SCREEN_ORDER_DETAIL"
+        val isUpgradePair = (existingIsPaySuccess && incomingIsOrderDetail) ||
+            (existingIsOrderDetail && incomingIsPaySuccess)
+        if (!isUpgradePair) return false
+        return isMerchantCompatible(existing, incomingDraft, allowPlatformShellMerge = true)
     }
 
     private fun isSamePackagePaySuccessRefresh(
@@ -178,7 +212,8 @@ class CaptureDeduplicator(
     private fun hasConflictingOrderNo(
         existing: TransactionEntity,
         existingLog: RawCaptureLogEntity?,
-        incomingDraft: ParsedBillDraft
+        incomingDraft: ParsedBillDraft,
+        incomingSourcePackage: String
     ): Boolean {
         val incomingOrderNo = incomingDraft.externalOrderNo.trim()
         if (incomingOrderNo.isBlank()) return false
@@ -186,7 +221,32 @@ class CaptureDeduplicator(
             tx = existing,
             logs = listOfNotNull(existingLog)
         )
-        return existingOrderNo.isNotBlank() && !existingOrderNo.equals(incomingOrderNo, ignoreCase = true)
+        if (existingOrderNo.isBlank() || existingOrderNo.equals(incomingOrderNo, ignoreCase = true)) {
+            return false
+        }
+
+        // 电商/外卖订单号与支付宝/微信支付流水号分属不同单号体系，跨应用融合时不视为单号冲突
+        val existingPkg = existingLog?.sourcePackage.orEmpty().lowercase(Locale.ROOT)
+        val incomingPkg = incomingSourcePackage.trim().lowercase(Locale.ROOT)
+        val existingIsOrderApp = existingPkg in NON_PAYMENT_ORDER_PACKAGES ||
+            existingLog?.parserUsed == "SCREEN_ORDER_DETAIL"
+        val incomingIsOrderApp = incomingPkg in NON_PAYMENT_ORDER_PACKAGES ||
+            incomingDraft.parserUsed == "SCREEN_ORDER_DETAIL"
+        val existingIsPaymentApp = existingPkg in PAYMENT_WALLET_PACKAGES
+        val incomingIsPaymentApp = incomingPkg in PAYMENT_WALLET_PACKAGES
+        if (existingIsOrderApp && incomingIsPaymentApp) {
+            return false
+        }
+        if (incomingIsOrderApp && existingIsPaymentApp) {
+            val existingLogOwnsOrderNo = existingLog != null && (
+                extractOrderNoFromJson(existingLog.extractedJson).equals(existingOrderNo, ignoreCase = true) ||
+                    existingLog.content.contains(existingOrderNo, ignoreCase = true)
+                )
+            if (existingLogOwnsOrderNo) {
+                return false
+            }
+        }
+        return true
     }
 
     private fun isAmountMatching(
@@ -235,10 +295,29 @@ class CaptureDeduplicator(
             incomingSourcePackage = incomingSourcePackage
         )
 
-        // 若新采集报文带有明确卡尾号（如银行短信 尾号6688），升级路由到真实银行卡账户
+        // 若新采集报文带有明确卡尾号（如银行短信 尾号6688），或原交易来自非支付电商/外卖页而新采集来自支付渠道，升级路由到真实资金账户
+        val existingPkg = existingLog?.sourcePackage.orEmpty().lowercase(Locale.ROOT)
+        val incomingPkg = incomingSourcePackage.trim().lowercase(Locale.ROOT)
+        val existingIsNonPaymentOrderApp = existingPkg in NON_PAYMENT_ORDER_PACKAGES &&
+            existing.sourceType.equals(CaptureChannel.SCREEN, ignoreCase = true)
+        val incomingIsPaymentSource = incomingPkg.isNotBlank() &&
+            incomingPkg !in NON_PAYMENT_ORDER_PACKAGES
+        val existingAccName = accountsById[existing.accountId]?.name.orEmpty().trim()
+        val incomingAccName = incomingDraft.accountId?.let { accountsById[it]?.name.orEmpty().trim() }.orEmpty()
+        val incomingHasBetterAccount = incomingDraft.accountId != null &&
+            incomingDraft.accountId != existing.accountId &&
+            !existingHasCardHint &&
+            (
+                incomingDraft.accountHint.isNotBlank() ||
+                    (existingIsNonPaymentOrderApp && incomingIsPaymentSource) ||
+                    (incomingIsPaymentSource &&
+                        existingAccName in GENERIC_WALLET_ACCOUNT_NAMES &&
+                        incomingAccName.isNotBlank() &&
+                        incomingAccName !in GENERIC_WALLET_ACCOUNT_NAMES)
+                )
+
         val finalAccountId = when {
-            incomingDraft.accountHint.isNotBlank() && incomingDraft.accountId != null && !existingHasCardHint ->
-                incomingDraft.accountId
+            incomingHasBetterAccount -> incomingDraft.accountId!!
             existing.accountId > 0L -> existing.accountId
             else -> incomingDraft.accountId ?: existing.accountId
         }
@@ -452,6 +531,7 @@ class CaptureDeduplicator(
     companion object {
         const val DEFAULT_WINDOW_MILLIS = 60_000L
         const val ORDER_DETAIL_WINDOW_MILLIS = 600_000L
+        private const val SAME_PACKAGE_ORDER_UPGRADE_WINDOW_MILLIS = 120_000L
         const val DEFAULT_FX_TOLERANCE_BPS = 500 // 5.00%
         private const val SAME_CURRENCY_TOLERANCE_MICROS = 100L // 0.01 元容差
         private const val MIN_FX_TOLERANCE_MICROS = 1_000L // 0.10 元最低容差
@@ -460,14 +540,42 @@ class CaptureDeduplicator(
         private val NOTE_PART_SPLIT_REGEX = Regex("\\s*(?:·|\\|)\\s*")
         private val CONCRETE_STORE_SUFFIX_REGEX = Regex("(?:旗舰店|专卖店|专营店|官方店|自营店|大药房|便利店|门店|店[)）]?)$")
 
+        private val NON_PAYMENT_ORDER_PACKAGES = setOf(
+            "com.xunmeng.pinduoduo",
+            "com.taobao.taobao",
+            "com.tmall.wireless",
+            "com.jingdong.app.mall",
+            "com.sankuai.meituan",
+            "com.sankuai.meituan.takeoutnew",
+            "me.ele",
+            "com.ss.android.ugc.aweme"
+        )
+
+        private val PAYMENT_WALLET_PACKAGES = setOf(
+            "com.eg.android.alipaygphone",
+            "com.tencent.mm",
+            "com.unionpay"
+        )
+
+        private val GENERIC_WALLET_ACCOUNT_NAMES = setOf(
+            "支付宝", "微信零钱", "微信", "微信支付"
+        )
+
         private val GENERIC_MERCHANTS = setOf(
             "微信支付", "支付宝", "网上消费", "银联消费", "快捷支付", "消费", "刷卡消费",
             "拼多多平台商户", "淘宝平台商户", "天猫平台商户", "京东平台商户", "美团平台商户",
             "北京三快在线", "三快在线", "上海拉扎斯", "拉扎斯", "财付通",
             "上海寻梦信息技术", "寻梦信息技术", "浙江淘宝网络", "浙江天猫技术", "北京京东世纪信息",
             "合众易宝", "网银在线", "抖音支付",
+            "淘宝闪购", "美团外卖",
             "拼多多", "淘宝", "天猫", "京东", "美团", "饿了么", "抖音商城"
         )
+
+        internal fun isGenericPlatformMerchant(raw: String): Boolean {
+            val norm = normalizeMerchantForMatch(raw)
+            if (norm.isBlank()) return false
+            return GENERIC_MERCHANTS.any { norm.contains(it, ignoreCase = true) }
+        }
 
         private val PLATFORM_MATCH_TAGS = setOf(
             "拼多多", "淘宝", "天猫", "京东", "美团", "外卖", "网购"
