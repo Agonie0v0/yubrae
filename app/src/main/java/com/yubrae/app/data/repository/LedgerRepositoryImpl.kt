@@ -689,10 +689,12 @@ class LedgerRepositoryImpl(
 
     override suspend fun computeNetWorth(displayCurrency: String): NetWorthSummary {
         val accounts = accountDao.getAll()
+        val debts = debtRecordDao?.getAll().orEmpty()
         return LedgerAnalytics.computeNetWorth(
             accounts = accounts,
             displayCurrency = displayCurrency,
-            fetchRate = { from, to -> exchangeRateProvider.getRate(from, to).rateMicros }
+            fetchRate = { from, to -> exchangeRateProvider.getRate(from, to).rateMicros },
+            debts = debts
         )
     }
 
@@ -1029,11 +1031,26 @@ class LedgerRepositoryImpl(
         val dao = debtRecordDao ?: return 0L
         return runInTransaction {
             val now = clockMillisProvider()
-            val exists = debt.id > 0L && dao.getById(debt.id) != null
-            val savedId = if (!exists) {
+            val existing = if (debt.id > 0L) dao.getById(debt.id) else null
+            val normalizedAmount = debt.amountMicros.coerceAtLeast(0L)
+            val clampedSettled = debt.settledAmountMicros.coerceIn(0L, normalizedAmount)
+            val normalizedStatus = if (clampedSettled >= normalizedAmount && normalizedAmount > 0L) {
+                DebtStatus.SETTLED
+            } else {
+                DebtStatus.OPEN
+            }
+            val savedId = if (existing == null) {
                 val created = if (debt.createdAt > 0L) debt.createdAt else now
-                val id = dao.insert(debt.copy(createdAt = created, updatedAt = now))
-                if (syncAccountBalance && debt.accountId != null && debt.amountMicros > 0L) {
+                val id = dao.insert(
+                    debt.copy(
+                        amountMicros = normalizedAmount,
+                        settledAmountMicros = clampedSettled,
+                        status = normalizedStatus,
+                        createdAt = created,
+                        updatedAt = now
+                    )
+                )
+                if (syncAccountBalance && debt.accountId != null && normalizedAmount > 0L) {
                     val account = accountDao.getById(debt.accountId)
                     if (account != null) {
                         val isBorrow = debt.direction == DebtDirection.BORROW
@@ -1041,7 +1058,7 @@ class LedgerRepositoryImpl(
                             RecordTransactionRequest(
                                 type = if (isBorrow) TransactionType.INCOME else TransactionType.EXPENSE,
                                 timestamp = now,
-                                origAmountMicros = debt.amountMicros,
+                                origAmountMicros = normalizedAmount,
                                 origCurrency = debt.currencyCode,
                                 accountId = account.id,
                                 merchant = debt.personName,
@@ -1054,7 +1071,16 @@ class LedgerRepositoryImpl(
                 }
                 id
             } else {
-                dao.update(debt.copy(updatedAt = now))
+                val preservedCreatedAt = if (debt.createdAt > 0L) debt.createdAt else existing.createdAt
+                dao.update(
+                    debt.copy(
+                        amountMicros = normalizedAmount,
+                        settledAmountMicros = clampedSettled,
+                        status = normalizedStatus,
+                        createdAt = preservedCreatedAt,
+                        updatedAt = now
+                    )
+                )
                 debt.id
             }
             savedId

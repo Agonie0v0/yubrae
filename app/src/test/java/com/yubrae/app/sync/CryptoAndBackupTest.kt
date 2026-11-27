@@ -7,6 +7,9 @@ import com.yubrae.app.data.db.AliasMatchType
 import com.yubrae.app.data.db.BudgetEntity
 import com.yubrae.app.data.db.CaptureChannel
 import com.yubrae.app.data.db.CategoryEntity
+import com.yubrae.app.data.db.DebtDirection
+import com.yubrae.app.data.db.DebtRecordEntity
+import com.yubrae.app.data.db.DebtStatus
 import com.yubrae.app.data.db.ExchangeRateEntity
 import com.yubrae.app.data.db.ParseRuleEntity
 import com.yubrae.app.data.db.ParseStatus
@@ -20,6 +23,7 @@ import com.yubrae.app.data.db.TransactionType
 import com.yubrae.app.data.prefs.AppSettings
 import com.yubrae.app.data.prefs.ThemeMode
 import com.yubrae.app.data.prefs.ThemeStyle
+import com.yubrae.app.domain.FakeDebtRecordDao
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -604,5 +608,104 @@ class CryptoAndBackupTest {
         assertEquals("", restoredAcc.note)
         assertTrue(db.settings.assetGroupOrder.isEmpty())
         assertTrue(db.settings.collapsedAssetGroups.isEmpty())
+    }
+
+    @Test
+    fun backupSerializer_roundTripsDebtIncludeInNetWorthAndLegacyDefaultsToFalse() = runTest {
+        val db = InMemorySyncDatabase()
+        val debtDao = FakeDebtRecordDao()
+        val serializer = BackupSerializer(
+            accountDao = db.accountDao,
+            transactionDao = db.transactionDao,
+            categoryDao = db.categoryDao,
+            exchangeRateDao = db.exchangeRateDao,
+            accountAliasDao = db.accountAliasDao,
+            parseRuleDao = db.parseRuleDao,
+            rawCaptureLogDao = db.rawCaptureLogDao,
+            budgetDao = db.budgetDao,
+            recurringRuleDao = db.recurringRuleDao,
+            readSettings = { db.settings },
+            writeSettings = { db.settings = it },
+            runInTransaction = { block -> block() },
+            debtRecordDao = debtDao,
+            tagDao = db.tagDao
+        )
+
+        val includedDebt = DebtRecordEntity(
+            id = 31L,
+            direction = DebtDirection.LEND,
+            personName = "Alice",
+            amountMicros = 5_000_000L,
+            settledAmountMicros = 1_000_000L,
+            currencyCode = "USD",
+            dueDateMillis = 1796000000000L,
+            note = "垫付机票",
+            status = DebtStatus.OPEN,
+            createdAt = 1795000000000L,
+            updatedAt = 1795200000000L,
+            includeInNetWorth = true
+        )
+        val excludedDebt = DebtRecordEntity(
+            id = 32L,
+            direction = DebtDirection.BORROW,
+            personName = "Bob",
+            amountMicros = 2_000_000L,
+            settledAmountMicros = 0L,
+            currencyCode = "CNY",
+            note = "不计入净资产",
+            status = DebtStatus.OPEN,
+            createdAt = 1795000000000L,
+            updatedAt = 1795100000000L,
+            includeInNetWorth = false
+        )
+        debtDao.insertAll(listOf(includedDebt, excludedDebt))
+
+        val exportedJson = serializer.exportToJson()
+        val decoded = serializer.decodeFromJson(exportedJson)
+        assertEquals(2, decoded.debts.size)
+        assertTrue(decoded.debts.first { it.id == 31L }.includeInNetWorth)
+        assertFalse(decoded.debts.first { it.id == 32L }.includeInNetWorth)
+
+        db.clearAllTables()
+        debtDao.clearAll()
+
+        serializer.restoreFromJson(exportedJson)
+        val restoredById = debtDao.getAll().associateBy { it.id }
+        assertEquals(includedDebt, restoredById[31L])
+        assertEquals(excludedDebt, restoredById[32L])
+        assertTrue(restoredById[31L]!!.includeInNetWorth)
+        assertFalse(restoredById[32L]!!.includeInNetWorth)
+
+        // 旧版备份缺少 includeInNetWorth 字段时必须平滑解码并默认 false
+        val legacyDebtJson = """
+            {
+              "formatVersion": 3,
+              "exportedAtMillis": 1795300000000,
+              "appName": "Yubrae",
+              "debts": [
+                {
+                  "id": 99,
+                  "direction": "LEND",
+                  "personName": "旧备份联系人",
+                  "amountMicros": 3000000,
+                  "settledAmountMicros": 500000,
+                  "currencyCode": "CNY",
+                  "note": "历史借出",
+                  "status": "OPEN",
+                  "createdAt": 1795000000000,
+                  "updatedAt": 1795000000000
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val legacyDecoded = serializer.decodeFromJson(legacyDebtJson)
+        assertFalse(legacyDecoded.debts.single().includeInNetWorth)
+
+        serializer.restoreFromJson(legacyDebtJson)
+        val restoredLegacyDebt = debtDao.getAll().single()
+        assertEquals(99L, restoredLegacyDebt.id)
+        assertEquals("旧备份联系人", restoredLegacyDebt.personName)
+        assertFalse(restoredLegacyDebt.includeInNetWorth)
     }
 }

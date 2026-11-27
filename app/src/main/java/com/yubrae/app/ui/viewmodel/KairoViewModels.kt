@@ -2,6 +2,7 @@ package com.yubrae.app.ui.viewmodel
 
 import android.content.Context
 import android.util.Base64
+import androidx.compose.runtime.Immutable
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -92,6 +93,7 @@ import java.time.YearMonth
 import java.time.ZoneId
 import kotlin.math.abs
 
+@Immutable
 data class TransactionFilters(
     val yearMonth: YearMonth = YearMonth.now(),
     val query: String = "",
@@ -106,6 +108,7 @@ data class TransactionFilters(
     val tagFilter: String? = null
 )
 
+@Immutable
 data class DayTransactionGroup(
     val date: LocalDate,
     val transactions: List<TransactionEntity>,
@@ -113,6 +116,7 @@ data class DayTransactionGroup(
     val dayIncomeBaseMicros: Long
 )
 
+@Immutable
 data class TransactionsUiState(
     val filters: TransactionFilters = TransactionFilters(),
     val baseCurrency: String = CurrencyCatalog.DEFAULT_BASE_CURRENCY,
@@ -158,6 +162,7 @@ internal fun matchesTransactionSearchQuery(
         (toAccountName?.lowercase()?.contains(queryLower) == true)
 }
 
+@Immutable
 data class AssetsUiState(
     val displayCurrency: String = CurrencyCatalog.DEFAULT_BASE_CURRENCY,
     val showArchived: Boolean = false,
@@ -177,7 +182,9 @@ data class AssetsUiState(
     val investProfitMicros: Long = 0L,
     val hiddenAccountIds: Set<Long> = emptySet(),
     val hiddenModules: Set<String> = emptySet(),
-    val isLoading: Boolean = false
+    val isLoading: Boolean = false,
+    val debtReceivableIncludedMicros: Long = 0L,
+    val debtPayableIncludedMicros: Long = 0L
 )
 
 private data class AssetsRawSources(
@@ -188,6 +195,7 @@ private data class AssetsRawSources(
     val settings: AppSettings
 )
 
+@Immutable
 data class StatsUiState(
     val selectedMonth: YearMonth = YearMonth.now(),
     val displayCurrency: String = CurrencyCatalog.DEFAULT_BASE_CURRENCY,
@@ -258,52 +266,52 @@ class KairoMainViewModel(
     val snackbarEvents: SharedFlow<String> = _snackbarEvents.asSharedFlow()
 
     val settings: StateFlow<AppSettings> = settingsStore.settingsFlow
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), AppSettings())
+        .stateIn(viewModelScope, SharingStarted.Lazily, AppSettings())
 
     val ledgers: StateFlow<List<LedgerEntity>> = ledgerService.observeLedgers()
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+        .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
     val debts: StateFlow<List<DebtRecordEntity>> = ledgerService.observeDebts()
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+        .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
     val installments: StateFlow<List<InstallmentPlanEntity>> = ledgerService.observeInstallments()
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+        .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
     val pendingReimburseCount: StateFlow<Int> = ledgerService.observeTransactions()
         .map { txs -> txs.count { it.reimburseStatus == ReimburseStatus.PENDING } }
         .distinctUntilChanged()
         .flowOn(Dispatchers.Default)
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
+        .stateIn(viewModelScope, SharingStarted.Lazily, 0)
 
     val openDebtCount: StateFlow<Int> = debts
         .map { list -> list.count { it.status == DebtStatus.OPEN } }
         .distinctUntilChanged()
         .flowOn(Dispatchers.Default)
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
+        .stateIn(viewModelScope, SharingStarted.Lazily, 0)
 
     val activeAccounts: StateFlow<List<AccountEntity>> = ledgerService.observeActiveAccounts()
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+        .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
     val allAccounts: StateFlow<List<AccountEntity>> = ledgerService.observeAllAccounts()
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+        .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
     val categories: StateFlow<List<CategoryEntity>> = ledgerService.observeCategories()
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+        .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
     val tags: StateFlow<List<TagEntity>> = ledgerService.observeTags()
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+        .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
     val allTransactions: StateFlow<List<TransactionEntity>> = ledgerService.observeTransactions()
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+        .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
     val pendingTransactions: StateFlow<List<TransactionEntity>> = ledgerService.observePendingTransactions()
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+        .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
     val pendingCount: StateFlow<Int> = ledgerService.observePendingCount()
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
+        .stateIn(viewModelScope, SharingStarted.Lazily, 0)
 
     val exchangeRates: StateFlow<List<ExchangeRateEntity>> = rateProvider.observeRates()
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+        .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
     val accountAliases: StateFlow<List<AccountAliasEntity>> = captureEngine.observeAccountAliases()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
@@ -315,7 +323,7 @@ class KairoMainViewModel(
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     val budgets: StateFlow<List<BudgetEntity>> = ledgerService.observeBudgets()
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+        .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
     val recurringRules: StateFlow<List<RecurringRuleEntity>> = ledgerService.observeRecurringRules()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
@@ -439,7 +447,7 @@ class KairoMainViewModel(
         )
     }
         .flowOn(Dispatchers.Default)
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), TransactionsUiState())
+        .stateIn(viewModelScope, SharingStarted.Lazily, TransactionsUiState())
 
     // Tab 2: Assets state
     private val _assetsDisplayCurrency = MutableStateFlow<String?>(null)
@@ -484,6 +492,8 @@ class KairoMainViewModel(
 
                 var debtPayable = 0L
                 var debtReceivable = 0L
+                var debtPayableIncluded = 0L
+                var debtReceivableIncluded = 0L
                 for (debt in sources.debts) {
                     if (debt.status != DebtStatus.OPEN) continue
                     val remaining = (debt.amountMicros - debt.settledAmountMicros).coerceAtLeast(0L)
@@ -493,8 +503,18 @@ class KairoMainViewModel(
                         resolveRateFromList(debt.currencyCode, displayCurrency, rates)
                     )
                     when (debt.direction) {
-                        DebtDirection.BORROW -> debtPayable += converted
-                        DebtDirection.LEND -> debtReceivable += converted
+                        DebtDirection.BORROW -> {
+                            debtPayable += converted
+                            if (debt.includeInNetWorth) {
+                                debtPayableIncluded += converted
+                            }
+                        }
+                        DebtDirection.LEND -> {
+                            debtReceivable += converted
+                            if (debt.includeInNetWorth) {
+                                debtReceivableIncluded += converted
+                            }
+                        }
                     }
                 }
 
@@ -535,13 +555,15 @@ class KairoMainViewModel(
                         investProfitMicros = investProfit,
                         hiddenAccountIds = sources.settings.hiddenAssetAccountIds,
                         hiddenModules = sources.settings.hiddenAssetModules,
-                        isLoading = false
+                        isLoading = false,
+                        debtReceivableIncludedMicros = debtReceivableIncluded,
+                        debtPayableIncludedMicros = debtPayableIncluded
                     )
                 )
             }
         }
         .flowOn(Dispatchers.Default)
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), AssetsUiState(isLoading = true))
+        .stateIn(viewModelScope, SharingStarted.Lazily, AssetsUiState(isLoading = true))
 
     // Tab 3: Stats state
     private val _statsMonth = MutableStateFlow(YearMonth.now())
@@ -678,7 +700,7 @@ class KairoMainViewModel(
         }
     }
         .flowOn(Dispatchers.Default)
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), StatsUiState(isLoading = true))
+        .stateIn(viewModelScope, SharingStarted.Lazily, StatsUiState(isLoading = true))
 
     private fun computeTagStats(
         transactions: List<TransactionEntity>,
@@ -1021,6 +1043,9 @@ class KairoMainViewModel(
             ?: captureEngine.observeCaptureLogs(500).first().firstOrNull { it.id == id }
 
     // --- Assets actions ---
+    fun countLinkedTransactionsForAccount(accountId: Long): Int =
+        allTransactions.value.count { it.accountId == accountId || it.toAccountId == accountId }
+
     fun setAssetsDisplayCurrency(currency: String) {
         _assetsDisplayCurrency.value = currency
     }
@@ -1429,7 +1454,7 @@ class KairoMainViewModel(
     fun saveDebt(debt: DebtRecordEntity, syncAccountBalance: Boolean) {
         viewModelScope.launch {
             withContext(Dispatchers.IO) { ledgerService.saveDebt(debt, syncAccountBalance) }
-            showMessage("已保存借贷往来「${debt.personName}」")
+            showMessage(if (debt.id > 0L) "已更新借贷往来「${debt.personName}」" else "已保存借贷往来「${debt.personName}」")
         }
     }
 

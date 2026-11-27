@@ -206,6 +206,10 @@ public final class LedgerStore: ObservableObject {
     private static let sourceManualRate = "MANUAL_RATE"
     private static let maxRecurringCatchupRuns = 24
 
+    private var cachedDataRevision: Int = 0
+    private var netWorthCache: [String: (revision: Int, summary: NetWorthSummary)] = [:]
+    private var includedDebtReceivableCache: [String: (revision: Int, totalMicros: Int64)] = [:]
+
     // MARK: - Initialization
 
     public init(
@@ -1271,7 +1275,17 @@ public final class LedgerStore: ObservableObject {
         var dto = debt
         dto.currencyCode = CurrencyCatalog.normalize(dto.currencyCode)
         dto.updatedAt = now
+        let maxSettled = max(0, dto.amountMicros)
+        dto.settledAmountMicros = min(max(0, dto.settledAmountMicros), maxSettled)
+        dto.status = (dto.settledAmountMicros >= dto.amountMicros && dto.amountMicros > 0)
+            ? DebtStatus.SETTLED
+            : DebtStatus.OPEN
+
         if dto.id > 0, let idx = debts.firstIndex(where: { $0.id == dto.id }) {
+            let existing = debts[idx]
+            if dto.createdAt <= 0 {
+                dto.createdAt = existing.createdAt
+            }
             debts[idx] = dto
         } else {
             dto.id = nextId(in: debts.map(\.id))
@@ -1421,6 +1435,10 @@ public final class LedgerStore: ObservableObject {
 
     public func computeNetWorth(displayCurrency: String? = nil) -> NetWorthSummary {
         let targetCurrency = CurrencyCatalog.normalize(displayCurrency ?? settings.baseCurrency)
+        if let cached = netWorthCache[targetCurrency], cached.revision == cachedDataRevision {
+            return cached.summary
+        }
+
         var rateCache: [String: Int64] = [:]
         var convertedBalances: [Int64: Int64] = [:]
         var totalAssets: Int64 = 0
@@ -1452,13 +1470,78 @@ public final class LedgerStore: ObservableObject {
             }
         }
 
-        return NetWorthSummary(
+        for debt in debts {
+            guard debt.status == DebtStatus.OPEN, debt.includeInNetWorth else { continue }
+            let remaining = max(0, debt.amountMicros - debt.settledAmountMicros)
+            guard remaining > 0 else { continue }
+            let debtCur = CurrencyCatalog.normalize(debt.currencyCode)
+            let converted: Int64
+            if debtCur == targetCurrency {
+                converted = remaining
+            } else {
+                let rate: Int64
+                if let cached = rateCache[debtCur] {
+                    rate = cached
+                } else {
+                    let fetched = getRate(from: debtCur, to: targetCurrency).rateMicros
+                    rateCache[debtCur] = fetched
+                    rate = fetched
+                }
+                converted = MoneyAmount.convert(amountMicros: remaining, rateMicros: rate)
+            }
+            if debt.direction == DebtDirection.LEND {
+                totalAssets += converted
+            } else if debt.direction == DebtDirection.BORROW {
+                totalLiabilities += converted
+            }
+        }
+
+        let summary = NetWorthSummary(
             displayCurrency: targetCurrency,
             totalAssetsMicros: totalAssets,
             totalLiabilitiesMicros: totalLiabilities,
             netWorthMicros: totalAssets - totalLiabilities,
             accountConvertedBalances: convertedBalances
         )
+        netWorthCache[targetCurrency] = (revision: cachedDataRevision, summary: summary)
+        return summary
+    }
+
+    public func computeIncludedDebtReceivableMicros(displayCurrency: String? = nil) -> Int64 {
+        let targetCurrency = CurrencyCatalog.normalize(displayCurrency ?? settings.baseCurrency)
+        if let cached = includedDebtReceivableCache[targetCurrency], cached.revision == cachedDataRevision {
+            return cached.totalMicros
+        }
+
+        var rateCache: [String: Int64] = [:]
+        var total: Int64 = 0
+
+        for debt in debts {
+            guard debt.status == DebtStatus.OPEN,
+                  debt.includeInNetWorth,
+                  debt.direction == DebtDirection.LEND else { continue }
+            let remaining = max(0, debt.amountMicros - debt.settledAmountMicros)
+            guard remaining > 0 else { continue }
+            let debtCur = CurrencyCatalog.normalize(debt.currencyCode)
+            let converted: Int64
+            if debtCur == targetCurrency {
+                converted = remaining
+            } else {
+                let rate: Int64
+                if let cached = rateCache[debtCur] {
+                    rate = cached
+                } else {
+                    let fetched = getRate(from: debtCur, to: targetCurrency).rateMicros
+                    rateCache[debtCur] = fetched
+                    rate = fetched
+                }
+                converted = MoneyAmount.convert(amountMicros: remaining, rateMicros: rate)
+            }
+            total += converted
+        }
+
+        includedDebtReceivableCache[targetCurrency] = (revision: cachedDataRevision, totalMicros: total)
+        return total
     }
 
     public func computeMonthlyTrend(
@@ -2530,6 +2613,7 @@ public final class LedgerStore: ObservableObject {
         guard let idx = accounts.firstIndex(where: { $0.id == id }) else { return }
         accounts[idx].balanceMicros += delta
         accounts[idx].updatedAt = now
+        invalidateNetWorthCache()
     }
 
     private func computeFrozenBaseMicros(_ tx: TransactionDto) -> Int64 {
@@ -2624,6 +2708,7 @@ public final class LedgerStore: ObservableObject {
                 )
             )
         }
+        invalidateNetWorthCache()
     }
 
     private func resolveAccount(hint: String?, currency: String, in pool: [AccountDto]) -> AccountDto? {
@@ -2737,7 +2822,14 @@ public final class LedgerStore: ObservableObject {
         (existingIds.max() ?? 0) + 1
     }
 
+    private func invalidateNetWorthCache() {
+        cachedDataRevision &+= 1
+        netWorthCache.removeAll(keepingCapacity: true)
+        includedDebtReceivableCache.removeAll(keepingCapacity: true)
+    }
+
     private func persist() {
+        invalidateNetWorthCache()
         try? FileManager.default.createDirectory(at: storageDirectory, withIntermediateDirectories: true)
         let snapshot = buildBackupSnapshot()
         if let data = try? JSONEncoder().encode(snapshot) {

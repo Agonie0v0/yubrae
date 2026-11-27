@@ -33,6 +33,7 @@ import androidx.compose.material.icons.rounded.CalendarMonth
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Handshake
 import androidx.compose.material.icons.rounded.Schedule
 import androidx.compose.material.icons.rounded.Warning
@@ -78,6 +79,7 @@ import com.yubrae.app.data.db.AccountEntity
 import com.yubrae.app.data.db.DebtDirection
 import com.yubrae.app.data.db.DebtRecordEntity
 import com.yubrae.app.data.db.DebtStatus
+import com.yubrae.app.data.db.ExchangeRateEntity
 import com.yubrae.app.ui.components.CompactHairlineDivider
 import com.yubrae.app.ui.components.ConfirmActionDialog
 import com.yubrae.app.ui.components.CurrencyPickerDialog
@@ -117,7 +119,8 @@ fun DebtCenterScreen(
     onBack: () -> Unit,
     onSaveDebt: (debt: DebtRecordEntity, syncAccountBalance: Boolean) -> Unit,
     onSettleDebt: (debtId: Long, settleAmountMicros: Long, accountId: Long?, note: String) -> Unit,
-    onDeleteDebt: (Long) -> Unit
+    onDeleteDebt: (Long) -> Unit,
+    rates: List<ExchangeRateEntity> = emptyList()
 ) {
     val privacyMasked = LocalPrivacyMasked.current
     val accountMap = remember(accounts) { accounts.associateBy { it.id } }
@@ -125,10 +128,11 @@ fun DebtCenterScreen(
     var selectedDirection by remember { mutableStateOf(DebtDirection.LEND) }
     var statusFilter by remember { mutableStateOf("ALL") } // "ALL" | OPEN | SETTLED
     var showAddDialog by remember { mutableStateOf(false) }
+    var editTarget by remember { mutableStateOf<DebtRecordEntity?>(null) }
     var settleTarget by remember { mutableStateOf<DebtRecordEntity?>(null) }
     var deleteTarget by remember { mutableStateOf<DebtRecordEntity?>(null) }
 
-    val (totalReceivableMicros, totalPayableMicros, openLendCount, openBorrowCount) = remember(debts, baseCurrency) {
+    val (totalReceivableMicros, totalPayableMicros, openLendCount, openBorrowCount) = remember(debts, baseCurrency, rates) {
         var receivable = 0L
         var payable = 0L
         var lendOpen = 0
@@ -136,7 +140,7 @@ fun DebtCenterScreen(
         debts.forEach { d ->
             if (d.status == DebtStatus.OPEN) {
                 val remaining = (d.amountMicros - d.settledAmountMicros).coerceAtLeast(0L)
-                val converted = convertToBaseApprox(remaining, d.currencyCode, baseCurrency)
+                val converted = convertToBaseWithRates(remaining, d.currencyCode, baseCurrency, rates)
                 if (d.direction == DebtDirection.LEND) {
                     receivable += converted
                     lendOpen++
@@ -196,7 +200,10 @@ fun DebtCenterScreen(
         },
         floatingActionButton = {
             ExtendedFloatingActionButton(
-                onClick = { showAddDialog = true },
+                onClick = {
+                    editTarget = null
+                    showAddDialog = true
+                },
                 containerColor = MaterialTheme.colorScheme.primary,
                 contentColor = MaterialTheme.colorScheme.onPrimary,
                 shape = CircleShape
@@ -294,7 +301,10 @@ fun DebtCenterScreen(
                             icon = Icons.Rounded.Handshake,
                             title = "暂无借贷记录",
                             actionLabel = "新增借贷",
-                            onAction = { showAddDialog = true }
+                            onAction = {
+                                editTarget = null
+                                showAddDialog = true
+                            }
                         )
                     }
                 }
@@ -305,7 +315,12 @@ fun DebtCenterScreen(
                         direction = selectedDirection,
                         accountMap = accountMap,
                         baseCurrency = baseCurrency,
+                        rates = rates,
                         privacyMasked = privacyMasked,
+                        onEditClick = {
+                            showAddDialog = false
+                            editTarget = it
+                        },
                         onSettleClick = { settleTarget = it },
                         onDeleteClick = { deleteTarget = it }
                     )
@@ -314,8 +329,9 @@ fun DebtCenterScreen(
         }
     }
 
-    if (showAddDialog) {
-        AddDebtDialog(
+    if (showAddDialog || editTarget != null) {
+        DebtEditorDialog(
+            existing = editTarget,
             initialDirection = selectedDirection,
             existingPersons = existingPersonNames,
             accounts = accounts,
@@ -325,8 +341,12 @@ fun DebtCenterScreen(
                 onSaveDebt(debt, syncBalance)
                 selectedDirection = debt.direction
                 showAddDialog = false
+                editTarget = null
             },
-            onDismiss = { showAddDialog = false }
+            onDismiss = {
+                showAddDialog = false
+                editTarget = null
+            }
         )
     }
 
@@ -537,7 +557,9 @@ private fun PersonDebtGroupCard(
     direction: String,
     accountMap: Map<Long, AccountEntity>,
     baseCurrency: String,
+    rates: List<ExchangeRateEntity>,
     privacyMasked: Boolean,
+    onEditClick: (DebtRecordEntity) -> Unit,
     onSettleClick: (DebtRecordEntity) -> Unit,
     onDeleteClick: (DebtRecordEntity) -> Unit
 ) {
@@ -553,7 +575,7 @@ private fun PersonDebtGroupCard(
     val distinctOpenCurrencies = remember(openRecords) {
         openRecords.map { it.currencyCode.trim().uppercase() }.distinct()
     }
-    val openSummaryText = remember(openRecords, distinctOpenCurrencies, baseCurrency, privacyMasked) {
+    val openSummaryText = remember(openRecords, distinctOpenCurrencies, baseCurrency, rates, privacyMasked) {
         when {
             openRecords.isEmpty() -> null
             distinctOpenCurrencies.size == 1 -> {
@@ -564,7 +586,7 @@ private fun PersonDebtGroupCard(
             else -> {
                 val sumBase = openRecords.sumOf {
                     val rem = (it.amountMicros - it.settledAmountMicros).coerceAtLeast(0L)
-                    convertToBaseApprox(rem, it.currencyCode, baseCurrency)
+                    convertToBaseWithRates(rem, it.currencyCode, baseCurrency, rates)
                 }
                 "约 " + formatPrivacyAmount(privacyMasked, MoneyAmount.format(sumBase, baseCurrency))
             }
@@ -663,6 +685,7 @@ private fun PersonDebtGroupCard(
                     debt = debt,
                     linkedAccount = debt.accountId?.let { accountMap[it] },
                     privacyMasked = privacyMasked,
+                    onEditClick = { onEditClick(debt) },
                     onSettleClick = { onSettleClick(debt) },
                     onDeleteClick = { onDeleteClick(debt) }
                 )
@@ -671,11 +694,13 @@ private fun PersonDebtGroupCard(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun DebtRecordRow(
     debt: DebtRecordEntity,
     linkedAccount: AccountEntity?,
     privacyMasked: Boolean,
+    onEditClick: () -> Unit,
     onSettleClick: () -> Unit,
     onDeleteClick: () -> Unit
 ) {
@@ -712,6 +737,7 @@ private fun DebtRecordRow(
     Column(
         modifier = Modifier
             .fillMaxWidth()
+            .clickable(onClick = onEditClick)
             .padding(horizontal = 12.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(5.dp)
     ) {
@@ -787,16 +813,32 @@ private fun DebtRecordRow(
             }
 
             Spacer(modifier = Modifier.width(6.dp))
-            IconButton(
-                onClick = onDeleteClick,
-                modifier = Modifier.size(28.dp)
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(2.dp)
             ) {
-                Icon(
-                    imageVector = Icons.Rounded.Delete,
-                    contentDescription = "删除借贷",
-                    tint = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.size(15.dp)
-                )
+                IconButton(
+                    onClick = onEditClick,
+                    modifier = Modifier.size(28.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Edit,
+                        contentDescription = "编辑借贷",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(15.dp)
+                    )
+                }
+                IconButton(
+                    onClick = onDeleteClick,
+                    modifier = Modifier.size(28.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.Delete,
+                        contentDescription = "删除借贷",
+                        tint = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.size(15.dp)
+                    )
+                }
             }
         }
 
@@ -835,7 +877,11 @@ private fun DebtRecordRow(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            Box(modifier = Modifier.weight(1f)) {
+            FlowRow(
+                modifier = Modifier.weight(1f),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
                 if (dueInfo != null) {
                     val (dueText, isOverdue, isSoon) = dueInfo
                     val badgeBg = when {
@@ -880,6 +926,23 @@ private fun DebtRecordRow(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
+                }
+
+                if (debt.includeInNetWorth) {
+                    Surface(
+                        shape = RoundedCornerShape(5.dp),
+                        color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.78f)
+                    ) {
+                        Text(
+                            text = "计入净资产",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            fontWeight = FontWeight.Medium,
+                            maxLines = 1,
+                            softWrap = false,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                        )
+                    }
                 }
             }
 
@@ -1055,7 +1118,8 @@ private fun SettleDebtDialog(
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
-private fun AddDebtDialog(
+private fun DebtEditorDialog(
+    existing: DebtRecordEntity?,
     initialDirection: String,
     existingPersons: List<String>,
     accounts: List<AccountEntity>,
@@ -1064,45 +1128,92 @@ private fun AddDebtDialog(
     onSave: (debt: DebtRecordEntity, syncAccountBalance: Boolean) -> Unit,
     onDismiss: () -> Unit
 ) {
-    val activeAccounts = remember(accounts) { accounts.filter { !it.archived } }
-    var direction by remember { mutableStateOf(initialDirection) }
-    var personName by remember { mutableStateOf("") }
-    var amountInput by remember { mutableStateOf("") }
-    var currencyCode by remember { mutableStateOf(baseCurrency) }
-    var dueDateMillis by remember { mutableStateOf<Long?>(null) }
-    var selectedAccountId by remember { mutableStateOf<Long?>(null) }
-    var syncAccountBalance by remember { mutableStateOf(true) }
-    var noteInput by remember { mutableStateOf("") }
+    val isEdit = existing != null
+    val initialCurrency = existing?.currencyCode ?: baseCurrency
+    val initialDigits = remember(initialCurrency) { CurrencyCatalog.find(initialCurrency).minorDigits }
+    val selectableAccounts = remember(accounts, existing?.accountId) {
+        accounts.filter { !it.archived || it.id == existing?.accountId }
+    }
+
+    var direction by remember(existing?.id) { mutableStateOf(existing?.direction ?: initialDirection) }
+    var personName by remember(existing?.id) { mutableStateOf(existing?.personName.orEmpty()) }
+    var amountInput by remember(existing?.id) {
+        mutableStateOf(
+            existing?.let { MoneyAmount.formatPlain(it.amountMicros, initialDigits, grouping = false) }.orEmpty()
+        )
+    }
+    var settledAmountInput by remember(existing?.id) {
+        mutableStateOf(
+            existing?.let { MoneyAmount.formatPlain(it.settledAmountMicros, initialDigits, grouping = false) }.orEmpty()
+        )
+    }
+    var currencyCode by remember(existing?.id) { mutableStateOf(initialCurrency) }
+    var dueDateMillis by remember(existing?.id) { mutableStateOf(existing?.dueDateMillis) }
+    var selectedAccountId by remember(existing?.id) { mutableStateOf(existing?.accountId) }
+    var syncAccountBalance by remember(existing?.id) { mutableStateOf(!isEdit) }
+    var includeInNetWorth by remember(existing?.id) { mutableStateOf(existing?.includeInNetWorth ?: false) }
+    var noteInput by remember(existing?.id) { mutableStateOf(existing?.note.orEmpty()) }
     var showDatePicker by remember { mutableStateOf(false) }
     var showMoreCurrencies by remember { mutableStateOf(false) }
     var errorMsg by remember { mutableStateOf<String?>(null) }
 
     YubraeDialog(
         onDismissRequest = onDismiss,
-        title = "新增借贷",
+        title = if (isEdit) "编辑借贷" else "新增借贷",
         icon = Icons.Rounded.Handshake,
         confirmButton = {
             Button(
                 onClick = {
                     val trimmedName = personName.trim()
                     val amountMicros = MoneyAmount.parseToMicros(amountInput)
+                    val parsedSettledMicros = if (!isEdit) {
+                        0L
+                    } else if (settledAmountInput.isBlank()) {
+                        0L
+                    } else {
+                        MoneyAmount.parseToMicros(settledAmountInput)
+                    }
                     when {
                         trimmedName.isEmpty() -> errorMsg = "请输入往来人姓名"
                         amountMicros == null || amountMicros <= 0L -> errorMsg = "请输入大于 0 的金额"
-                        else -> onSave(
-                            DebtRecordEntity(
-                                direction = direction,
-                                personName = trimmedName,
-                                amountMicros = amountMicros,
-                                settledAmountMicros = 0L,
-                                currencyCode = currencyCode,
-                                accountId = selectedAccountId,
-                                dueDateMillis = dueDateMillis,
-                                note = noteInput.trim(),
-                                status = DebtStatus.OPEN
-                            ),
-                            selectedAccountId != null && syncAccountBalance
-                        )
+                        parsedSettledMicros == null || parsedSettledMicros < 0L -> errorMsg = "请输入有效的已核销金额（不能为负数）"
+                        parsedSettledMicros > amountMicros -> errorMsg = "已核销金额不能超过借贷总金额"
+                        else -> {
+                            val clampedSettled = parsedSettledMicros.coerceIn(0L, amountMicros)
+                            val resolvedStatus = if (clampedSettled >= amountMicros && amountMicros > 0L) {
+                                DebtStatus.SETTLED
+                            } else {
+                                DebtStatus.OPEN
+                            }
+                            val targetDebt = if (existing != null) {
+                                existing.copy(
+                                    direction = direction,
+                                    personName = trimmedName,
+                                    amountMicros = amountMicros,
+                                    settledAmountMicros = clampedSettled,
+                                    currencyCode = currencyCode,
+                                    accountId = selectedAccountId,
+                                    dueDateMillis = dueDateMillis,
+                                    note = noteInput.trim(),
+                                    status = resolvedStatus,
+                                    includeInNetWorth = includeInNetWorth
+                                )
+                            } else {
+                                DebtRecordEntity(
+                                    direction = direction,
+                                    personName = trimmedName,
+                                    amountMicros = amountMicros,
+                                    settledAmountMicros = 0L,
+                                    currencyCode = currencyCode,
+                                    accountId = selectedAccountId,
+                                    dueDateMillis = dueDateMillis,
+                                    note = noteInput.trim(),
+                                    status = DebtStatus.OPEN,
+                                    includeInNetWorth = includeInNetWorth
+                                )
+                            }
+                            onSave(targetDebt, !isEdit && selectedAccountId != null && syncAccountBalance)
+                        }
                     }
                 },
                 shape = RoundedCornerShape(12.dp)
@@ -1143,7 +1254,10 @@ private fun AddDebtDialog(
 
             OutlinedTextField(
                 value = personName,
-                onValueChange = { personName = it },
+                onValueChange = {
+                    personName = it
+                    errorMsg = null
+                },
                 label = { Text("往来人姓名") },
                 singleLine = true,
                 shape = RoundedCornerShape(14.dp),
@@ -1158,7 +1272,10 @@ private fun AddDebtDialog(
                     existingPersons.take(6).forEach { person ->
                         FilterChip(
                             selected = personName == person,
-                            onClick = { personName = person },
+                            onClick = {
+                                personName = person
+                                errorMsg = null
+                            },
                             label = { Text(person) }
                         )
                     }
@@ -1167,13 +1284,32 @@ private fun AddDebtDialog(
 
             OutlinedTextField(
                 value = amountInput,
-                onValueChange = { amountInput = it },
+                onValueChange = {
+                    amountInput = it
+                    errorMsg = null
+                },
                 label = { Text("借贷金额 ($currencyCode)") },
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                 singleLine = true,
                 shape = RoundedCornerShape(14.dp),
                 modifier = Modifier.fillMaxWidth()
             )
+
+            if (isEdit) {
+                OutlinedTextField(
+                    value = settledAmountInput,
+                    onValueChange = {
+                        settledAmountInput = it
+                        errorMsg = null
+                    },
+                    label = { Text("已核销金额 ($currencyCode，可选)") },
+                    supportingText = { Text("等于总金额时自动标为已结清，小于总金额时为未结清") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    singleLine = true,
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
 
             Text("币种", style = MaterialTheme.typography.labelMedium)
             QuickCurrencySelectorRow(
@@ -1214,25 +1350,54 @@ private fun AddDebtDialog(
                         label = { Text("不关联账户") }
                     )
                 }
-                items(activeAccounts, key = { it.id }) { acc ->
+                items(selectableAccounts, key = { it.id }) { acc ->
                     FilterChip(
                         selected = selectedAccountId == acc.id,
                         onClick = {
                             selectedAccountId = acc.id
-                            currencyCode = acc.currencyCode
+                            if (!isEdit) {
+                                currencyCode = acc.currencyCode
+                            }
                         },
                         label = { Text("${acc.name} (${acc.currencyCode})") }
                     )
                 }
             }
 
-            if (selectedAccountId != null) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(end = 8.dp)
+                ) {
+                    Text("计入总资产 / 净资产", style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        text = "开启后，未结清借出计入总资产，未结清借入计入总负债，核销后实时联动",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Switch(
+                    checked = includeInNetWorth,
+                    onCheckedChange = { includeInNetWorth = it }
+                )
+            }
+
+            if (!isEdit && selectedAccountId != null) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Column(modifier = Modifier.weight(1f)) {
+                    Column(
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(end = 8.dp)
+                    ) {
                         Text("同步增减账户余额", style = MaterialTheme.typography.bodyMedium)
                         Text(
                             text = if (direction == DebtDirection.LEND) {
@@ -1247,6 +1412,19 @@ private fun AddDebtDialog(
                     Switch(
                         checked = syncAccountBalance,
                         onCheckedChange = { syncAccountBalance = it }
+                    )
+                }
+            } else if (isEdit) {
+                Surface(
+                    shape = RoundedCornerShape(10.dp),
+                    color = MaterialTheme.colorScheme.surfaceContainerLow,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = "仅更新借贷台账，不改动已生成的历史账户流水",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)
                     )
                 }
             }
@@ -1310,16 +1488,54 @@ private fun AddDebtDialog(
     }
 }
 
-private fun convertToBaseApprox(
+private fun convertToBaseWithRates(
     amountMicros: Long,
     fromCurrency: String,
-    baseCurrency: String
+    baseCurrency: String,
+    rates: List<ExchangeRateEntity>
 ): Long {
     val from = fromCurrency.trim().uppercase().ifEmpty { CurrencyCatalog.DEFAULT_BASE_CURRENCY }
     val base = baseCurrency.trim().uppercase().ifEmpty { CurrencyCatalog.DEFAULT_BASE_CURRENCY }
     if (amountMicros == 0L || from == base) return amountMicros
-    val fromToCny = CurrencyCatalog.find(from).fallbackRateToCnyMicros
-    val baseToCny = CurrencyCatalog.find(base).fallbackRateToCnyMicros
-    val rate = MoneyAmount.crossRate(fromToCny, baseToCny)
+    val rate = resolveLiveOrFallbackRate(from, base, rates)
     return MoneyAmount.convert(amountMicros, rate)
+}
+
+private fun resolveLiveOrFallbackRate(
+    from: String,
+    to: String,
+    rates: List<ExchangeRateEntity>
+): Long {
+    if (from == to) return MoneyAmount.RATE_SCALE
+
+    val direct = rates
+        .filter { it.baseCurrency.equals(from, true) && it.targetCurrency.equals(to, true) }
+        .maxByOrNull { it.date + "_" + it.updatedAt }
+    if (direct != null) return direct.rateMicros
+
+    val inverse = rates
+        .filter { it.baseCurrency.equals(to, true) && it.targetCurrency.equals(from, true) }
+        .maxByOrNull { it.date + "_" + it.updatedAt }
+    if (inverse != null) return MoneyAmount.invertRate(inverse.rateMicros)
+
+    val cny = CurrencyCatalog.DEFAULT_BASE_CURRENCY
+    val fromToCny = if (from == cny) {
+        MoneyAmount.RATE_SCALE
+    } else {
+        rates.filter { it.baseCurrency.equals(from, true) && it.targetCurrency.equals(cny, true) }
+            .maxByOrNull { it.date + "_" + it.updatedAt }?.rateMicros
+            ?: rates.filter { it.baseCurrency.equals(cny, true) && it.targetCurrency.equals(from, true) }
+                .maxByOrNull { it.date + "_" + it.updatedAt }?.let { MoneyAmount.invertRate(it.rateMicros) }
+            ?: CurrencyCatalog.find(from).fallbackRateToCnyMicros
+    }
+    val toToCny = if (to == cny) {
+        MoneyAmount.RATE_SCALE
+    } else {
+        rates.filter { it.baseCurrency.equals(to, true) && it.targetCurrency.equals(cny, true) }
+            .maxByOrNull { it.date + "_" + it.updatedAt }?.rateMicros
+            ?: rates.filter { it.baseCurrency.equals(cny, true) && it.targetCurrency.equals(to, true) }
+                .maxByOrNull { it.date + "_" + it.updatedAt }?.let { MoneyAmount.invertRate(it.rateMicros) }
+            ?: CurrencyCatalog.find(to).fallbackRateToCnyMicros
+    }
+    return MoneyAmount.crossRate(fromToCny, toToCny)
 }

@@ -93,7 +93,8 @@ data class DebtRecordEntity(
     val note: String = "",
     val status: String = DebtStatus.OPEN,
     @ColumnInfo(name = "created_at") val createdAt: Long = System.currentTimeMillis(),
-    @ColumnInfo(name = "updated_at") val updatedAt: Long = System.currentTimeMillis()
+    @ColumnInfo(name = "updated_at") val updatedAt: Long = System.currentTimeMillis(),
+    @ColumnInfo(name = "include_in_net_worth") val includeInNetWorth: Boolean = false
 )
 
 @Entity(

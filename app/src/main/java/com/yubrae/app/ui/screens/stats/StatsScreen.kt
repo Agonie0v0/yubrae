@@ -93,6 +93,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -175,6 +176,26 @@ private data class TrendBarItem(
     val month: Int? = null
 )
 
+private data class NetWorthChartBounds(
+    val paddedMin: Long,
+    val paddedMax: Long,
+    val valueRange: Double,
+    val minIdx: Int,
+    val maxIdx: Int
+)
+
+private val StatsYearMonthFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy年M月")
+private val StatsTypeOptions = listOf(
+    TransactionType.EXPENSE to "支出",
+    TransactionType.INCOME to "收入"
+)
+private val ChartGridDashEffect: PathEffect = PathEffect.dashPathEffect(floatArrayOf(5f, 5f), 0f)
+private val ChartZeroLineDashEffect: PathEffect = PathEffect.dashPathEffect(floatArrayOf(4f, 4f), 0f)
+private val StatsTopBarBottomShape = RoundedCornerShape(bottomStart = 18.dp, bottomEnd = 18.dp)
+private val StatsProgressBarShape = RoundedCornerShape(4.dp)
+private val StatsBadgeShape = RoundedCornerShape(5.dp)
+private val StatsSummaryCardShape = RoundedCornerShape(10.dp)
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun StatsScreen(
@@ -234,7 +255,7 @@ fun StatsScreen(
     var highlightedTagName by remember { mutableStateOf<String?>(null) }
     var drillDownTag by remember { mutableStateOf<TagStat?>(null) }
 
-    val zone = ZoneId.systemDefault()
+    val zone = remember { ZoneId.systemDefault() }
     val anchorDate = remember(resolvedAnchorMillis) {
         Instant.ofEpochMilli(resolvedAnchorMillis).atZone(zone).toLocalDate()
     }
@@ -896,18 +917,19 @@ private fun StatsTopControlBar(
     val semantic = KairoTheme.semantic
     val info = CurrencyCatalog.find(displayCurrency)
     val gradientColors = semantic.heroGradient
+    val heroBrush = remember(gradientColors) { Brush.linearGradient(colors = gradientColors) }
     val titleColor = semantic.heroOnSurface
     val pillBgColor = semantic.heroPillBg
 
     Surface(
-        shape = RoundedCornerShape(bottomStart = 18.dp, bottomEnd = 18.dp),
+        shape = StatsTopBarBottomShape,
         color = Color.Transparent,
         modifier = Modifier.fillMaxWidth()
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(Brush.linearGradient(colors = gradientColors))
+                .background(heroBrush)
                 .statusBarsPadding()
                 .padding(horizontal = 12.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically
@@ -965,10 +987,7 @@ private fun StatsTopControlBar(
                     horizontalArrangement = Arrangement.spacedBy(2.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    listOf(
-                        TransactionType.EXPENSE to "支出",
-                        TransactionType.INCOME to "收入"
-                    ).forEach { (typeCode, label) ->
+                    StatsTypeOptions.forEach { (typeCode, label) ->
                         val active = selectedType == typeCode
                         Surface(
                             shape = CircleShape,
@@ -1138,7 +1157,7 @@ private fun TrendBarChartCard(
     modifier: Modifier = Modifier
 ) {
     val semantic = KairoTheme.semantic
-    val zone = ZoneId.systemDefault()
+    val zone = remember { ZoneId.systemDefault() }
     val items = remember(trendBuckets, monthlyTrend, granularity) {
         if (trendBuckets.isNotEmpty()) {
             trendBuckets.map { bucket ->
@@ -1272,9 +1291,11 @@ private fun TrendBarChartCard(
                     }
                 }
 
-                val maxMicros = items.maxOfOrNull { maxOf(it.incomeMicros, it.expenseMicros) }
-                    ?.coerceAtLeast(100L * MoneyAmount.AMOUNT_SCALE)
-                    ?: (100L * MoneyAmount.AMOUNT_SCALE)
+                val maxMicros = remember(items) {
+                    items.maxOfOrNull { maxOf(it.incomeMicros, it.expenseMicros) }
+                        ?.coerceAtLeast(100L * MoneyAmount.AMOUNT_SCALE)
+                        ?: (100L * MoneyAmount.AMOUNT_SCALE)
+                }
 
                 Canvas(
                     modifier = Modifier
@@ -1311,7 +1332,7 @@ private fun TrendBarChartCard(
                             start = Offset(leftPad, y),
                             end = Offset(size.width, y),
                             strokeWidth = 0.7.dp.toPx(),
-                            pathEffect = if (i == 0) null else PathEffect.dashPathEffect(floatArrayOf(5f, 5f), 0f)
+                            pathEffect = if (i == 0) null else ChartGridDashEffect
                         )
                         val tickMicros = (maxMicros.toDouble() * ratio).toLong()
                         val tickText = if (privacyMasked) "****" else formatCompactScale(tickMicros, displayCurrency)
@@ -1467,7 +1488,9 @@ private fun CategoryBreakdownCard(
                     )
                 }
             } else {
-                val activeStat = stats.firstOrNull { it.categoryId == highlightedCategoryId }
+                val activeStat = remember(stats, highlightedCategoryId) {
+                    stats.firstOrNull { it.categoryId == highlightedCategoryId }
+                }
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -1479,6 +1502,8 @@ private fun CategoryBreakdownCard(
                         val diameter = size.minDimension - strokeWidth
                         val topLeft = Offset(strokeWidth / 2f, strokeWidth / 2f)
                         val arcSize = Size(diameter, diameter)
+                        val baseStroke = Stroke(width = strokeWidth, cap = StrokeCap.Butt)
+                        val highlightedStroke = Stroke(width = strokeWidth + 3.dp.toPx(), cap = StrokeCap.Butt)
 
                         drawArc(
                             color = trackBgColor,
@@ -1487,7 +1512,7 @@ private fun CategoryBreakdownCard(
                             useCenter = false,
                             topLeft = topLeft,
                             size = arcSize,
-                            style = Stroke(width = strokeWidth)
+                            style = baseStroke
                         )
 
                         var currentStart = -90f
@@ -1503,10 +1528,7 @@ private fun CategoryBreakdownCard(
                                 useCenter = false,
                                 topLeft = topLeft,
                                 size = arcSize,
-                                style = Stroke(
-                                    width = if (highlightedCategoryId == stat.categoryId) strokeWidth + 3.dp.toPx() else strokeWidth,
-                                    cap = StrokeCap.Butt
-                                )
+                                style = if (highlightedCategoryId == stat.categoryId) highlightedStroke else baseStroke
                             )
                             currentStart += rawSweep
                         }
@@ -1650,7 +1672,7 @@ private fun CategoryBreakdownCard(
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .height(4.dp)
-                                        .clip(RoundedCornerShape(4.dp))
+                                        .clip(StatsProgressBarShape)
                                 )
                             }
                         }
@@ -1776,7 +1798,11 @@ private fun CategoryDrillDownBottomSheet(
                         .heightIn(max = 440.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    items(transactions, key = { it.id }) { tx ->
+                    items(
+                        items = transactions,
+                        key = { it.id },
+                        contentType = { "category_drilldown_tx" }
+                    ) { tx ->
                         val isRefund = tx.type == TransactionType.INCOME && tx.refundOfTxId != null
                         val accountName = accountMap[tx.accountId]?.name ?: "账户 #${tx.accountId}"
                         val title = tx.merchant.ifBlank {
@@ -1799,6 +1825,8 @@ private fun CategoryDrillDownBottomSheet(
                         } else {
                             0L
                         }
+                        val cleanedNote = remember(tx.note) { KairoFormats.cleanListRowNote(tx.note) }
+                        val txTags = remember(tx.tags) { TagTextCodec.parse(tx.tags) }
 
                         YimuCard(
                             containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
@@ -1864,7 +1892,6 @@ private fun CategoryDrillDownBottomSheet(
                                             ChannelChip(channel = tx.sourceType)
                                         }
                                     }
-                                    val cleanedNote = KairoFormats.cleanListRowNote(tx.note)
                                     if (cleanedNote.isNotBlank() && cleanedNote != title) {
                                         Text(
                                             text = cleanedNote,
@@ -1874,7 +1901,6 @@ private fun CategoryDrillDownBottomSheet(
                                             overflow = TextOverflow.Ellipsis
                                         )
                                     }
-                                    val txTags = TagTextCodec.parse(tx.tags)
                                     if (txTags.isNotEmpty()) {
                                         Row(
                                             horizontalArrangement = Arrangement.spacedBy(4.dp),
@@ -2077,19 +2103,52 @@ private fun NetWorthHistoryCard(
                     }
                 }
 
-                val rawMin = points.minOf { it.netWorthMicros }
-                val rawMax = points.maxOf { it.netWorthMicros }
-                val basePad = if (rawMax == rawMin) {
-                    (kotlin.math.abs(rawMax) / 10L).coerceAtLeast(100L * MoneyAmount.AMOUNT_SCALE)
-                } else {
-                    ((rawMax - rawMin) * 18L) / 100L
+                val chartBounds = remember(points) {
+                    val rawMin = points.minOf { it.netWorthMicros }
+                    val rawMax = points.maxOf { it.netWorthMicros }
+                    val basePad = if (rawMax == rawMin) {
+                        (kotlin.math.abs(rawMax) / 10L).coerceAtLeast(100L * MoneyAmount.AMOUNT_SCALE)
+                    } else {
+                        ((rawMax - rawMin) * 18L) / 100L
+                    }
+                    val pMin = rawMin - basePad
+                    val pMax = rawMax + basePad
+                    NetWorthChartBounds(
+                        paddedMin = pMin,
+                        paddedMax = pMax,
+                        valueRange = (pMax - pMin).coerceAtLeast(1L).toDouble(),
+                        minIdx = points.indices.minByOrNull { points[it].netWorthMicros } ?: 0,
+                        maxIdx = points.indices.maxByOrNull { points[it].netWorthMicros } ?: 0
+                    )
                 }
-                val paddedMin = rawMin - basePad
-                val paddedMax = rawMax + basePad
-                val valueRange = (paddedMax - paddedMin).coerceAtLeast(1L).toDouble()
+                val paddedMin = chartBounds.paddedMin
+                val paddedMax = chartBounds.paddedMax
+                val valueRange = chartBounds.valueRange
+                val minIdx = chartBounds.minIdx
+                val maxIdx = chartBounds.maxIdx
 
-                val minIdx = points.indices.minByOrNull { points[it].netWorthMicros } ?: 0
-                val maxIdx = points.indices.maxByOrNull { points[it].netWorthMicros } ?: 0
+                val density = LocalDensity.current
+                val areaBrush = remember(mintColor, density) {
+                    val topPadPx = with(density) { 22.dp.toPx() }
+                    val chartBottomPx = with(density) { (172.dp - 24.dp).toPx() }
+                    Brush.verticalGradient(
+                        colors = listOf(
+                            mintColor.copy(alpha = 0.22f),
+                            mintColor.copy(alpha = 0.01f)
+                        ),
+                        startY = topPadPx,
+                        endY = chartBottomPx
+                    )
+                }
+                val lineStroke = remember(density) {
+                    Stroke(
+                        width = with(density) { 2.2.dp.toPx() },
+                        cap = StrokeCap.Round,
+                        join = StrokeJoin.Round
+                    )
+                }
+                val linePath = remember { Path() }
+                val areaPath = remember { Path() }
 
                 Canvas(
                     modifier = Modifier
@@ -2134,7 +2193,7 @@ private fun NetWorthHistoryCard(
                             start = Offset(leftPad, y),
                             end = Offset(leftPad + chartW, y),
                             strokeWidth = 0.7.dp.toPx(),
-                            pathEffect = if (step == 2) null else PathEffect.dashPathEffect(floatArrayOf(5f, 5f), 0f)
+                            pathEffect = if (step == 2) null else ChartGridDashEffect
                         )
                     }
 
@@ -2147,7 +2206,7 @@ private fun NetWorthHistoryCard(
                             start = Offset(leftPad, zeroY),
                             end = Offset(leftPad + chartW, zeroY),
                             strokeWidth = 0.8.dp.toPx(),
-                            pathEffect = PathEffect.dashPathEffect(floatArrayOf(4f, 4f), 0f)
+                            pathEffect = ChartZeroLineDashEffect
                         )
                     }
 
@@ -2162,8 +2221,8 @@ private fun NetWorthHistoryCard(
                         Offset(x, y)
                     }
 
-                    val linePath = Path()
-                    val areaPath = Path()
+                    linePath.reset()
+                    areaPath.reset()
                     coords.forEachIndexed { idx, p ->
                         if (idx == 0) {
                             linePath.moveTo(p.x, p.y)
@@ -2181,24 +2240,13 @@ private fun NetWorthHistoryCard(
 
                     drawPath(
                         path = areaPath,
-                        brush = Brush.verticalGradient(
-                            colors = listOf(
-                                mintColor.copy(alpha = 0.22f),
-                                mintColor.copy(alpha = 0.01f)
-                            ),
-                            startY = topPad,
-                            endY = chartBottom
-                        )
+                        brush = areaBrush
                     )
 
                     drawPath(
                         path = linePath,
                         color = mintColor,
-                        style = Stroke(
-                            width = 2.2.dp.toPx(),
-                            cap = StrokeCap.Round,
-                            join = StrokeJoin.Round
-                        )
+                        style = lineStroke
                     )
 
                     // 数据圆点 + 选中晕环
@@ -2403,10 +2451,15 @@ private fun BudgetManagementCard(
                     else -> mintColor
                 }
 
+                val primaryContainer = MaterialTheme.colorScheme.primaryContainer
+                val primaryColor = MaterialTheme.colorScheme.primary
+                val totalCardBg = remember(primaryContainer) { primaryContainer.copy(alpha = 0.28f) }
+                val totalCardBorder = remember(primaryColor) { BorderStroke(0.5.dp, primaryColor.copy(alpha = 0.2f)) }
+
                 Surface(
-                    shape = RoundedCornerShape(10.dp),
-                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.28f),
-                    border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.2f)),
+                    shape = StatsSummaryCardShape,
+                    color = totalCardBg,
+                    border = totalCardBorder,
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 14.dp)
@@ -2441,7 +2494,7 @@ private fun BudgetManagementCard(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .height(5.dp)
-                                .clip(RoundedCornerShape(4.dp))
+                                .clip(StatsProgressBarShape)
                         )
                         Row(
                             modifier = Modifier.fillMaxWidth(),
@@ -2519,7 +2572,7 @@ private fun BudgetManagementCard(
                                             modifier = Modifier.align(Alignment.CenterVertically)
                                         )
                                         Surface(
-                                            shape = RoundedCornerShape(5.dp),
+                                            shape = StatsBadgeShape,
                                             color = MaterialTheme.colorScheme.surfaceContainerHigh,
                                             modifier = Modifier.align(Alignment.CenterVertically)
                                         ) {
@@ -2534,7 +2587,7 @@ private fun BudgetManagementCard(
                                         if (showLedgerBadge) {
                                             val ledgerName = ledgerMap[bp.budget.ledgerId]?.name ?: "默认账本"
                                             Surface(
-                                                shape = RoundedCornerShape(5.dp),
+                                                shape = StatsBadgeShape,
                                                 color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.7f),
                                                 modifier = Modifier.align(Alignment.CenterVertically)
                                             ) {
@@ -2550,7 +2603,7 @@ private fun BudgetManagementCard(
                                         }
                                         if (bp.overBudget) {
                                             Surface(
-                                                shape = RoundedCornerShape(5.dp),
+                                                shape = StatsBadgeShape,
                                                 color = semantic.expenseContainer,
                                                 modifier = Modifier.align(Alignment.CenterVertically)
                                             ) {
@@ -2615,7 +2668,7 @@ private fun BudgetManagementCard(
                                     modifier = Modifier
                                         .weight(1f)
                                         .height(4.dp)
-                                        .clip(RoundedCornerShape(4.dp))
+                                        .clip(StatsProgressBarShape)
                                 )
                                 Text(
                                     text = "${(bp.progressRatio * 100f).toInt()}%",
@@ -2633,7 +2686,7 @@ private fun BudgetManagementCard(
                                 ) {
                                     if (bp.rolloverMicros > 0L) {
                                         Surface(
-                                            shape = RoundedCornerShape(5.dp),
+                                            shape = StatsBadgeShape,
                                             color = semantic.incomeContainer,
                                             modifier = Modifier.align(Alignment.CenterVertically)
                                         ) {
@@ -2990,7 +3043,7 @@ private fun formatStatsPeriodTitle(
             }
         }
         else -> {
-            selectedMonth.format(DateTimeFormatter.ofPattern("yyyy年M月"))
+            selectedMonth.format(StatsYearMonthFormatter)
         }
     }
 }
@@ -3247,7 +3300,7 @@ private fun TagBreakdownCard(
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .height(4.dp)
-                                        .clip(RoundedCornerShape(4.dp))
+                                        .clip(StatsProgressBarShape)
                                 )
                             }
                         }
@@ -3392,7 +3445,11 @@ private fun TagDrillDownBottomSheet(
                         .heightIn(max = 440.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    items(transactions, key = { it.id }) { tx ->
+                    items(
+                        items = transactions,
+                        key = { it.id },
+                        contentType = { "tag_drilldown_tx" }
+                    ) { tx ->
                         val cat = tx.categoryId?.let { categoryMap[it] }
                         val accountName = accountMap[tx.accountId]?.name ?: "账户 #${tx.accountId}"
                         val title = tx.merchant.ifBlank {
@@ -3411,6 +3468,8 @@ private fun TagDrillDownBottomSheet(
                         } else {
                             0L
                         }
+                        val cleanedNote = remember(tx.note) { KairoFormats.cleanListRowNote(tx.note) }
+                        val txTags = remember(tx.tags) { TagTextCodec.parse(tx.tags) }
 
                         YimuCard(
                             containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
@@ -3457,7 +3516,6 @@ private fun TagDrillDownBottomSheet(
                                             ChannelChip(channel = tx.sourceType)
                                         }
                                     }
-                                    val cleanedNote = KairoFormats.cleanListRowNote(tx.note)
                                     if (cleanedNote.isNotBlank() && cleanedNote != title) {
                                         Text(
                                             text = cleanedNote,
@@ -3467,7 +3525,6 @@ private fun TagDrillDownBottomSheet(
                                             overflow = TextOverflow.Ellipsis
                                         )
                                     }
-                                    val txTags = TagTextCodec.parse(tx.tags)
                                     if (txTags.isNotEmpty()) {
                                         Row(
                                             horizontalArrangement = Arrangement.spacedBy(4.dp),

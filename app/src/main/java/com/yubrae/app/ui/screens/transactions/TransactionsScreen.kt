@@ -99,7 +99,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Brush
@@ -165,6 +165,32 @@ import kotlin.math.abs
 private enum class TxViewMode {
     LIST, CALENDAR
 }
+
+private val TxChannelFilterOptions = listOf(
+    CaptureChannel.MANUAL,
+    CaptureChannel.NOTIFICATION,
+    CaptureChannel.SMS,
+    CaptureChannel.SCREEN,
+    CaptureChannel.AUTO_ACCOUNTING,
+    CaptureChannel.AI,
+    CaptureChannel.IMPORT,
+    CaptureChannel.RECURRING,
+    CaptureChannel.SHARE
+)
+private val CalendarWeekHeaders = listOf("日", "一", "二", "三", "四", "五", "六")
+private val CalendarTenThousand = BigDecimal(10_000)
+private val ReimburseFilterOptions = listOf(
+    "ALL" to "全部",
+    ReimburseStatus.NONE to "不报销",
+    ReimburseStatus.PENDING to "待报销",
+    ReimburseStatus.REIMBURSED to "已报销"
+)
+private val TopHeaderBottomShape = RoundedCornerShape(bottomStart = 18.dp, bottomEnd = 18.dp)
+private val DayHeaderTopShape = RoundedCornerShape(topStart = 14.dp, topEnd = 14.dp)
+private val DayRowBottomShape = RoundedCornerShape(bottomStart = 14.dp, bottomEnd = 14.dp)
+private val CalendarCellShape = RoundedCornerShape(9.dp)
+private val MicroBadgeShape = RoundedCornerShape(5.dp)
+private val ExtraTagCountShape = RoundedCornerShape(6.dp)
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class, ExperimentalLayoutApi::class)
 @Composable
@@ -470,7 +496,7 @@ fun TransactionsScreen(
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            item(key = "advanced_filter_toggle") {
+                            item(key = "advanced_filter_toggle", contentType = "filter_chip") {
                                 FilterChip(
                                     selected = showAdvancedFilters || advancedFilterCount > 0,
                                     onClick = { showAdvancedFilters = !showAdvancedFilters },
@@ -491,7 +517,7 @@ fun TransactionsScreen(
                             }
 
                             if (hasAnySubFilter) {
-                                item(key = "reset_all_filters") {
+                                item(key = "reset_all_filters", contentType = "filter_chip") {
                                     FilterChip(
                                         selected = false,
                                         onClick = clearAllFilters,
@@ -503,7 +529,7 @@ fun TransactionsScreen(
                                 }
                             }
 
-                            item(key = "currency_filter") {
+                            item(key = "currency_filter", contentType = "dropdown_filter_chip") {
                                 val currencyOptions = remember(
                                     settings.pinnedCurrencies,
                                     accounts,
@@ -571,7 +597,7 @@ fun TransactionsScreen(
                                 }
                             }
 
-                            item(key = "account_filter") {
+                            item(key = "account_filter", contentType = "dropdown_filter_chip") {
                                 Box {
                                     val selectedAcctName = accountMap[filters.accountIdFilter]?.name ?: "全部账户"
                                     FilterChip(
@@ -609,7 +635,7 @@ fun TransactionsScreen(
                                 }
                             }
 
-                            item(key = "channel_filter") {
+                            item(key = "channel_filter", contentType = "dropdown_filter_chip") {
                                 Box {
                                     val channelLabel = if (filters.channelFilter == "ALL") {
                                         "全部来源"
@@ -638,17 +664,7 @@ fun TransactionsScreen(
                                                 showChannelFilterMenu = false
                                             }
                                         )
-                                        listOf(
-                                            CaptureChannel.MANUAL,
-                                            CaptureChannel.NOTIFICATION,
-                                            CaptureChannel.SMS,
-                                            CaptureChannel.SCREEN,
-                                            CaptureChannel.AUTO_ACCOUNTING,
-                                            CaptureChannel.AI,
-                                            CaptureChannel.IMPORT,
-                                            CaptureChannel.RECURRING,
-                                            CaptureChannel.SHARE
-                                        ).forEach { ch ->
+                                        TxChannelFilterOptions.forEach { ch ->
                                             DropdownMenuItem(
                                                 text = { Text(KairoFormats.channelLabel(ch)) },
                                                 onClick = {
@@ -1089,11 +1105,13 @@ private fun TransactionsTopHeaderCard(
 ) {
     val semantic = KairoTheme.semantic
     val gradientColors = semantic.heroGradient
+    val heroBrush = remember(gradientColors) { Brush.linearGradient(colors = gradientColors) }
     val titleColor = semantic.heroOnSurface
     val subtitleColor = titleColor.copy(alpha = 0.68f)
     val pillBgColor = semantic.heroPillBg
-    val currentYear = remember { YearMonth.now().year }
-    val isCurrentMonth = yearMonth == YearMonth.now()
+    val currentMonth = remember { YearMonth.now() }
+    val currentYear = currentMonth.year
+    val isCurrentMonth = yearMonth == currentMonth
     val shortMonthLabel = if (yearMonth.year == currentYear) {
         "${yearMonth.monthValue}月"
     } else {
@@ -1101,14 +1119,14 @@ private fun TransactionsTopHeaderCard(
     }
 
     Surface(
-        shape = RoundedCornerShape(bottomStart = 18.dp, bottomEnd = 18.dp),
+        shape = TopHeaderBottomShape,
         color = Color.Transparent,
         modifier = Modifier.fillMaxWidth()
     ) {
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(Brush.linearGradient(colors = gradientColors))
+                .background(heroBrush)
                 .then(if (applyStatusBarPadding) Modifier.statusBarsPadding() else Modifier)
                 .padding(start = 12.dp, end = 8.dp, top = 6.dp, bottom = 10.dp)
         ) {
@@ -1338,17 +1356,19 @@ private fun TransactionsTopHeaderCard(
 
                 // 多币种时极紧凑单行汇总条
                 if (foreignCurrencySummaries.isNotEmpty()) {
-                    val summaryText = if (privacyMasked) {
-                        "外币($baseCurrency 折算) · ****"
-                    } else {
-                        val parts = foreignCurrencySummaries.joinToString(" · ") { (code, exp, inc) ->
-                            when {
-                                exp > 0L && inc > 0L -> "$code 支${MoneyAmount.format(exp, code)} 收${MoneyAmount.format(inc, code)}"
-                                exp > 0L -> "$code 支${MoneyAmount.format(exp, code)}"
-                                else -> "$code 收${MoneyAmount.format(inc, code)}"
+                    val summaryText = remember(foreignCurrencySummaries, baseCurrency, privacyMasked) {
+                        if (privacyMasked) {
+                            "外币($baseCurrency 折算) · ****"
+                        } else {
+                            val parts = foreignCurrencySummaries.joinToString(" · ") { (code, exp, inc) ->
+                                when {
+                                    exp > 0L && inc > 0L -> "$code 支${MoneyAmount.format(exp, code)} 收${MoneyAmount.format(inc, code)}"
+                                    exp > 0L -> "$code 支${MoneyAmount.format(exp, code)}"
+                                    else -> "$code 收${MoneyAmount.format(inc, code)}"
+                                }
                             }
+                            "外币($baseCurrency 折算): $parts"
                         }
-                        "外币($baseCurrency 折算): $parts"
                     }
                     Text(
                         text = summaryText,
@@ -1469,8 +1489,7 @@ private fun MonthlyCalendarCard(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
-                val weekHeaders = listOf("日", "一", "二", "三", "四", "五", "六")
-                weekHeaders.forEachIndexed { idx, label ->
+                CalendarWeekHeaders.forEachIndexed { idx, label ->
                     val isWeekend = idx == 0 || idx == 6
                     Text(
                         text = label,
@@ -1526,10 +1545,10 @@ private fun MonthlyCalendarCard(
                                 modifier = Modifier
                                     .weight(1f)
                                     .height(50.dp)
-                                    .clip(RoundedCornerShape(9.dp))
+                                    .clip(CalendarCellShape)
                                     .background(cellBg)
                                     .then(
-                                        if (cellBorder != null) Modifier.border(cellBorder, RoundedCornerShape(9.dp)) else Modifier
+                                        if (cellBorder != null) Modifier.border(cellBorder, CalendarCellShape) else Modifier
                                     )
                                     .clickable { onSelectDate(date) }
                                     .padding(horizontal = 2.dp, vertical = 3.dp)
@@ -1589,9 +1608,8 @@ private fun MonthlyCalendarCard(
 
 private fun formatCompactCalendarMicros(micros: Long): String {
     val bd = MoneyAmount.microsToBigDecimal(abs(micros))
-    val tenThousand = BigDecimal(10_000)
-    return if (bd >= tenThousand) {
-        bd.divide(tenThousand, 1, RoundingMode.HALF_UP)
+    return if (bd >= CalendarTenThousand) {
+        bd.divide(CalendarTenThousand, 1, RoundingMode.HALF_UP)
             .stripTrailingZeros()
             .toPlainString() + "w"
     } else if (bd >= BigDecimal(100)) {
@@ -1621,7 +1639,9 @@ private fun AdvancedFilterPanel(
     val parentCategories = remember(categories) {
         categories.filter { it.parentId == null }.sortedWith(compareBy({ it.type }, { it.sortOrder }, { it.id }))
     }
-    val selectedCat = categories.firstOrNull { it.id == selectedCategoryId }
+    val selectedCat = remember(categories, selectedCategoryId) {
+        categories.firstOrNull { it.id == selectedCategoryId }
+    }
     val activeParentId = selectedCat?.parentId ?: selectedCat?.id
     val subCategories = remember(categories, activeParentId) {
         if (activeParentId != null) categories.filter { it.parentId == activeParentId } else emptyList()
@@ -1655,14 +1675,14 @@ private fun AdvancedFilterPanel(
             }
 
             LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                item(key = "cat_all") {
+                item(key = "cat_all", contentType = "cat_chip") {
                     FilterChip(
                         selected = selectedCategoryId == null,
                         onClick = { onSelectCategory(null) },
                         label = { Text("全部") }
                     )
                 }
-                items(parentCategories, key = { it.id }) { cat ->
+                items(parentCategories, key = { it.id }, contentType = { "cat_chip" }) { cat ->
                     FilterChip(
                         selected = activeParentId == cat.id,
                         onClick = {
@@ -1716,14 +1736,14 @@ private fun AdvancedFilterPanel(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                item(key = "tag_all") {
+                item(key = "tag_all", contentType = "tag_all_chip") {
                     val allSelected = selectedTag == null
                     val primaryColor = MaterialTheme.colorScheme.primary
                     Surface(
                         modifier = Modifier
-                            .clip(RoundedCornerShape(6.dp))
+                            .clip(ExtraTagCountShape)
                             .clickable { onSelectTag(null) },
-                        shape = RoundedCornerShape(6.dp),
+                        shape = ExtraTagCountShape,
                         color = if (allSelected) {
                             primaryColor.copy(alpha = 0.16f)
                         } else {
@@ -1756,7 +1776,7 @@ private fun AdvancedFilterPanel(
                         }
                     }
                 }
-                items(tagFilterEntries, key = { it.first }) { (tagName, colorHex, iconKey) ->
+                items(tagFilterEntries, key = { it.first }, contentType = { "tag_chip" }) { (tagName, colorHex, iconKey) ->
                     TagBadgeChip(
                         name = tagName,
                         colorHex = colorHex,
@@ -1775,13 +1795,7 @@ private fun AdvancedFilterPanel(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                val options = listOf(
-                    "ALL" to "全部",
-                    ReimburseStatus.NONE to "不报销",
-                    ReimburseStatus.PENDING to "待报销",
-                    ReimburseStatus.REIMBURSED to "已报销"
-                )
-                items(options, key = { it.first }) { (code, label) ->
+                items(ReimburseFilterOptions, key = { it.first }, contentType = { "reimburse_chip" }) { (code, label) ->
                     FilterChip(
                         selected = selectedReimburseStatus == code,
                         onClick = { onSelectReimburseStatus(code) },
@@ -2027,14 +2041,16 @@ private fun Modifier.yimuCardSliceBorder(
     position: CardSlicePosition,
     borderColor: Color,
     cornerRadius: Dp = 14.dp
-): Modifier = this.drawWithContent {
-    drawContent()
+): Modifier = this.drawWithCache {
     val strokePx = 0.5.dp.toPx()
     val half = strokePx / 2f
     val w = size.width
     val h = size.height
-    if (w <= strokePx || h <= strokePx) return@drawWithContent
+    if (w <= strokePx || h <= strokePx) {
+        return@drawWithCache onDrawWithContent { drawContent() }
+    }
     val r = cornerRadius.toPx().coerceAtMost((minOf(w, h) - strokePx).coerceAtLeast(0f) / 2f)
+    val stroke = Stroke(width = strokePx)
     when (position) {
         CardSlicePosition.TOP -> {
             val path = Path().apply {
@@ -2055,11 +2071,21 @@ private fun Modifier.yimuCardSliceBorder(
                 )
                 lineTo(w - half, h)
             }
-            drawPath(path = path, color = borderColor, style = Stroke(width = strokePx))
+            onDrawWithContent {
+                drawContent()
+                drawPath(path = path, color = borderColor, style = stroke)
+            }
         }
         CardSlicePosition.MIDDLE -> {
-            drawLine(borderColor, Offset(half, 0f), Offset(half, h), strokeWidth = strokePx)
-            drawLine(borderColor, Offset(w - half, 0f), Offset(w - half, h), strokeWidth = strokePx)
+            val leftStart = Offset(half, 0f)
+            val leftEnd = Offset(half, h)
+            val rightStart = Offset(w - half, 0f)
+            val rightEnd = Offset(w - half, h)
+            onDrawWithContent {
+                drawContent()
+                drawLine(borderColor, leftStart, leftEnd, strokeWidth = strokePx)
+                drawLine(borderColor, rightStart, rightEnd, strokeWidth = strokePx)
+            }
         }
         CardSlicePosition.BOTTOM -> {
             val path = Path().apply {
@@ -2080,7 +2106,10 @@ private fun Modifier.yimuCardSliceBorder(
                 )
                 lineTo(w - half, 0f)
             }
-            drawPath(path = path, color = borderColor, style = Stroke(width = strokePx))
+            onDrawWithContent {
+                drawContent()
+                drawPath(path = path, color = borderColor, style = stroke)
+            }
         }
     }
 }
@@ -2094,10 +2123,11 @@ private fun DayHeaderCardRow(
 ) {
     val semantic = KairoTheme.semantic
     val borderColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.32f)
+    val dayHeaderText = remember(group.date) { KairoFormats.formatDayHeader(group.date) }
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(topStart = 14.dp, topEnd = 14.dp))
+            .clip(DayHeaderTopShape)
             .background(MaterialTheme.colorScheme.surfaceContainerLowest)
             .yimuCardSliceBorder(CardSlicePosition.TOP, borderColor, 14.dp)
     ) {
@@ -2110,7 +2140,7 @@ private fun DayHeaderCardRow(
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
             Text(
-                text = KairoFormats.formatDayHeader(group.date),
+                text = dayHeaderText,
                 style = MaterialTheme.typography.labelMedium.copy(
                     fontSize = 11.5.sp,
                     lineHeight = 16.sp
@@ -2171,11 +2201,7 @@ private fun FlattenedTransactionRow(
     onClick: () -> Unit,
     onLongClick: () -> Unit
 ) {
-    val rowShape = if (isLastInDay) {
-        RoundedCornerShape(bottomStart = 14.dp, bottomEnd = 14.dp)
-    } else {
-        RectangleShape
-    }
+    val rowShape = if (isLastInDay) DayRowBottomShape else RectangleShape
     val rowBg = if (isSelected) {
         MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.25f)
     } else {
@@ -2255,15 +2281,18 @@ private fun TransactionRowItem(
     }
     val noteTrimmed = remember(tx.note) { KairoFormats.cleanListRowNote(tx.note) }
     val includeAccountInSubtitle = tx.type != TransactionType.TRANSFER && tx.type != TransactionType.ADJUST
-    val subtitleText = buildString {
-        append(KairoFormats.formatTime(tx.timestamp))
-        if (includeAccountInSubtitle) {
-            append(" · ")
-            append(account?.name ?: "账户")
-        }
-        if (noteTrimmed.isNotEmpty()) {
-            append(" · ")
-            append(noteTrimmed)
+    val accountName = account?.name
+    val subtitleText = remember(tx.timestamp, includeAccountInSubtitle, accountName, noteTrimmed) {
+        buildString {
+            append(KairoFormats.formatTime(tx.timestamp))
+            if (includeAccountInSubtitle) {
+                append(" · ")
+                append(accountName ?: "账户")
+            }
+            if (noteTrimmed.isNotEmpty()) {
+                append(" · ")
+                append(noteTrimmed)
+            }
         }
     }
     val signedMicros = when (tx.type) {
@@ -2273,17 +2302,41 @@ private fun TransactionRowItem(
     }
     val showSign = tx.type == TransactionType.EXPENSE || tx.type == TransactionType.INCOME || tx.type == TransactionType.ADJUST
     val isForeign = !tx.origCurrency.equals(baseCurrency, ignoreCase = true)
-    val secondaryAmountText = when {
-        isForeign -> formatPrivacyAmount(privacyMasked, "≈ ${MoneyAmount.format(convertedBaseMicros, baseCurrency)}")
-        !tx.accountCurrency.equals(tx.origCurrency, ignoreCase = true) -> formatPrivacyAmount(
+    val primaryAmountText = remember(signedMicros, tx.origCurrency, showSign, isForeign, privacyMasked) {
+        formatPrivacyAmount(
             privacyMasked,
-            "账户 ${MoneyAmount.format(tx.accountAmountMicros, tx.accountCurrency, showCurrencyCode = true)}"
+            MoneyAmount.format(
+                amountMicros = signedMicros,
+                currencyCode = tx.origCurrency,
+                showSign = showSign,
+                showCurrencyCode = isForeign || !tx.origCurrency.equals("CNY", true)
+            )
         )
-        tx.type == TransactionType.TRANSFER && tx.toCurrency != null && tx.toAmountMicros != null && !tx.toCurrency.equals(tx.origCurrency, true) -> formatPrivacyAmount(
-            privacyMasked,
-            "→ ${MoneyAmount.format(tx.toAmountMicros, tx.toCurrency, showCurrencyCode = true)}"
-        )
-        else -> null
+    }
+    val secondaryAmountText = remember(
+        isForeign,
+        convertedBaseMicros,
+        baseCurrency,
+        tx.accountCurrency,
+        tx.origCurrency,
+        tx.accountAmountMicros,
+        tx.type,
+        tx.toCurrency,
+        tx.toAmountMicros,
+        privacyMasked
+    ) {
+        when {
+            isForeign -> formatPrivacyAmount(privacyMasked, "≈ ${MoneyAmount.format(convertedBaseMicros, baseCurrency)}")
+            !tx.accountCurrency.equals(tx.origCurrency, ignoreCase = true) -> formatPrivacyAmount(
+                privacyMasked,
+                "账户 ${MoneyAmount.format(tx.accountAmountMicros, tx.accountCurrency, showCurrencyCode = true)}"
+            )
+            tx.type == TransactionType.TRANSFER && tx.toCurrency != null && tx.toAmountMicros != null && !tx.toCurrency.equals(tx.origCurrency, true) -> formatPrivacyAmount(
+                privacyMasked,
+                "→ ${MoneyAmount.format(tx.toAmountMicros, tx.toCurrency, showCurrencyCode = true)}"
+            )
+            else -> null
+        }
     }
     val txTags = remember(tx.tags) { TagTextCodec.parse(tx.tags) }
 
@@ -2369,15 +2422,7 @@ private fun TransactionRowItem(
                 Spacer(modifier = Modifier.width(8.dp))
 
                 Text(
-                    text = formatPrivacyAmount(
-                        privacyMasked,
-                        MoneyAmount.format(
-                            amountMicros = signedMicros,
-                            currencyCode = tx.origCurrency,
-                            showSign = showSign,
-                            showCurrencyCode = isForeign || !tx.origCurrency.equals("CNY", true)
-                        )
-                    ),
+                    text = primaryAmountText,
                     style = MaterialTheme.typography.titleMedium.copy(
                         fontSize = 14.5.sp,
                         lineHeight = 18.sp
@@ -2466,7 +2511,7 @@ private fun TransactionRowItem(
                     }
                     if (extraCount > 0) {
                         Surface(
-                            shape = RoundedCornerShape(6.dp),
+                            shape = ExtraTagCountShape,
                             color = MaterialTheme.colorScheme.surfaceContainerHigh
                         ) {
                             Text(
@@ -2493,7 +2538,7 @@ private fun TxInlineMicroBadge(
     contentColor: Color
 ) {
     Surface(
-        shape = RoundedCornerShape(5.dp),
+        shape = MicroBadgeShape,
         color = containerColor
     ) {
         Text(
@@ -2753,7 +2798,7 @@ private fun TransactionDetailSheet(
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        items(attachments, key = { it }) { path ->
+                        items(attachments, key = { it }, contentType = { "receipt_thumb" }) { path ->
                             ReceiptThumbnailImage(
                                 path = path,
                                 modifier = Modifier
@@ -2938,7 +2983,7 @@ private fun TransactionDetailSheet(
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("目标账户：", style = MaterialTheme.typography.labelMedium)
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    items(accounts, key = { it.id }) { acc ->
+                    items(accounts, key = { it.id }, contentType = { "account_chip" }) { acc ->
                         FilterChip(
                             selected = selectedAccountId == acc.id,
                             onClick = { selectedAccountId = acc.id },
@@ -3024,7 +3069,7 @@ private fun BatchCategoryPickerDialog(
                     .heightIn(max = 320.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                items(filteredCats, key = { it.id }) { cat ->
+                items(filteredCats, key = { it.id }, contentType = { "batch_cat_item" }) { cat ->
                     val isSub = cat.parentId != null
                     Surface(
                         shape = RoundedCornerShape(12.dp),

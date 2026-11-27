@@ -1609,4 +1609,166 @@ class LedgerRepositoryTest {
         assertNull(fallbackSummary.billingDay)
         assertNull(fallbackSummary.repaymentDay)
     }
+
+    @Test
+    fun computeNetWorth_includesOpenNetWorthDebtsAndReactsToPartialSettleAndEdit() = runTest {
+        exchangeRateDao.upsert(
+            ExchangeRateEntity(
+                baseCurrency = "USD",
+                targetCurrency = "CNY",
+                rateMicros = 7_000_000L,
+                date = "2026-11-22",
+                source = "CUSTOM"
+            )
+        )
+        accountDao.insert(
+            AccountEntity(
+                name = "储蓄卡",
+                groupType = AccountGroup.DEBIT,
+                currencyCode = "CNY",
+                balanceMicros = MoneyAmount.parseToMicros("1000.00")!!
+            )
+        )
+        accountDao.insert(
+            AccountEntity(
+                name = "信用卡",
+                groupType = AccountGroup.CREDIT,
+                currencyCode = "CNY",
+                balanceMicros = MoneyAmount.parseToMicros("-100.00")!!
+            )
+        )
+
+        // 1. 借出 100 USD (计入净资产 -> +700 CNY 总资产)
+        val lendUsdId = ledger.saveDebt(
+            DebtRecordEntity(
+                direction = DebtDirection.LEND,
+                personName = "Alice",
+                amountMicros = MoneyAmount.parseToMicros("100.00")!!,
+                currencyCode = "USD",
+                note = "代垫机票",
+                includeInNetWorth = true,
+                createdAt = millisOf(2026, 11, 1, 9, 0)
+            ),
+            syncAccountBalance = false
+        )
+        // 2. 借入 200 CNY (计入净资产 -> +200 CNY 总负债)
+        val borrowCreatedAt = millisOf(2026, 11, 2, 10, 0)
+        val borrowCnyId = ledger.saveDebt(
+            DebtRecordEntity(
+                direction = DebtDirection.BORROW,
+                personName = "Bob",
+                amountMicros = MoneyAmount.parseToMicros("200.00")!!,
+                currencyCode = "CNY",
+                note = "拼单房租",
+                includeInNetWorth = true,
+                createdAt = borrowCreatedAt
+            ),
+            syncAccountBalance = false
+        )
+        // 3. 借出 500 CNY (不计入净资产 -> 忽略)
+        ledger.saveDebt(
+            DebtRecordEntity(
+                direction = DebtDirection.LEND,
+                personName = "Charlie",
+                amountMicros = MoneyAmount.parseToMicros("500.00")!!,
+                currencyCode = "CNY",
+                includeInNetWorth = false
+            ),
+            syncAccountBalance = false
+        )
+        // 4. 已结清借出 400 CNY (即使 includeInNetWorth = true 也忽略)
+        ledger.saveDebt(
+            DebtRecordEntity(
+                direction = DebtDirection.LEND,
+                personName = "Dave",
+                amountMicros = MoneyAmount.parseToMicros("400.00")!!,
+                settledAmountMicros = MoneyAmount.parseToMicros("400.00")!!,
+                currencyCode = "CNY",
+                status = DebtStatus.SETTLED,
+                includeInNetWorth = true
+            ),
+            syncAccountBalance = false
+        )
+
+        // 初始净资产: 资产 1000 + 700 = 1700, 负债 100 + 200 = 300, 净资产 1400
+        val initial = ledger.computeNetWorth("CNY")
+        assertEquals(MoneyAmount.parseToMicros("1700.00")!!, initial.totalAssetsMicros)
+        assertEquals(MoneyAmount.parseToMicros("300.00")!!, initial.totalLiabilitiesMicros)
+        assertEquals(MoneyAmount.parseToMicros("1400.00")!!, initial.netWorthMicros)
+
+        // 部分核销 USD 借出 40 USD -> 剩余 60 USD (420 CNY) -> 资产变为 1420, 净资产 1120
+        val afterPartialSettle = ledger.settleDebt(
+            debtId = lendUsdId,
+            settleAmountMicros = MoneyAmount.parseToMicros("40.00")!!,
+            accountId = null,
+            note = "先还 40 美元"
+        ).getOrThrow()
+        assertEquals(DebtStatus.OPEN, afterPartialSettle.status)
+        assertEquals(MoneyAmount.parseToMicros("40.00")!!, afterPartialSettle.settledAmountMicros)
+
+        val afterSettleNetWorth = ledger.computeNetWorth("CNY")
+        assertEquals(MoneyAmount.parseToMicros("1420.00")!!, afterSettleNetWorth.totalAssetsMicros)
+        assertEquals(MoneyAmount.parseToMicros("300.00")!!, afterSettleNetWorth.totalLiabilitiesMicros)
+        assertEquals(MoneyAmount.parseToMicros("1120.00")!!, afterSettleNetWorth.netWorthMicros)
+
+        // 编辑已有借入记录：改金额 350、已核销 100、往来人/备注/还款日，传入 createdAt = 0L 必须保留原 createdAt
+        nowMillis = millisOf(2026, 11, 25, 18, 0)
+        val dueDate = millisOf(2026, 12, 15, 12, 0)
+        ledger.saveDebt(
+            DebtRecordEntity(
+                id = borrowCnyId,
+                direction = DebtDirection.BORROW,
+                personName = "Bob 室友",
+                amountMicros = MoneyAmount.parseToMicros("350.00")!!,
+                settledAmountMicros = MoneyAmount.parseToMicros("100.00")!!,
+                currencyCode = "CNY",
+                dueDateMillis = dueDate,
+                note = "合租水电与房租",
+                status = DebtStatus.SETTLED, // 应自动校正为 OPEN
+                createdAt = 0L,
+                includeInNetWorth = true
+            ),
+            syncAccountBalance = false
+        )
+        val editedBorrow = debtRecordDao.getById(borrowCnyId)!!
+        assertEquals("Bob 室友", editedBorrow.personName)
+        assertEquals("合租水电与房租", editedBorrow.note)
+        assertEquals(dueDate, editedBorrow.dueDateMillis)
+        assertEquals(borrowCreatedAt, editedBorrow.createdAt)
+        assertEquals(nowMillis, editedBorrow.updatedAt)
+        assertEquals(DebtStatus.OPEN, editedBorrow.status)
+        assertEquals(MoneyAmount.parseToMicros("100.00")!!, editedBorrow.settledAmountMicros)
+        assertTrue(editedBorrow.includeInNetWorth)
+
+        // 此时未结清借入 = 250 CNY -> 负债 = 100 + 250 = 350, 净资产 = 1420 - 350 = 1070
+        val afterEditNetWorth = ledger.computeNetWorth("CNY")
+        assertEquals(MoneyAmount.parseToMicros("1420.00")!!, afterEditNetWorth.totalAssetsMicros)
+        assertEquals(MoneyAmount.parseToMicros("350.00")!!, afterEditNetWorth.totalLiabilitiesMicros)
+        assertEquals(MoneyAmount.parseToMicros("1070.00")!!, afterEditNetWorth.netWorthMicros)
+
+        // 编辑已核销金额超额 -> 钳位到总额并自动标记为 SETTLED -> 负债回落到 100 CNY
+        ledger.saveDebt(
+            editedBorrow.copy(
+                settledAmountMicros = MoneyAmount.parseToMicros("999.00")!!,
+                status = DebtStatus.OPEN
+            ),
+            syncAccountBalance = false
+        )
+        val clampedSettledBorrow = debtRecordDao.getById(borrowCnyId)!!
+        assertEquals(MoneyAmount.parseToMicros("350.00")!!, clampedSettledBorrow.settledAmountMicros)
+        assertEquals(DebtStatus.SETTLED, clampedSettledBorrow.status)
+
+        val afterAutoSettled = ledger.computeNetWorth("CNY")
+        assertEquals(MoneyAmount.parseToMicros("1420.00")!!, afterAutoSettled.totalAssetsMicros)
+        assertEquals(MoneyAmount.parseToMicros("100.00")!!, afterAutoSettled.totalLiabilitiesMicros)
+        assertEquals(MoneyAmount.parseToMicros("1320.00")!!, afterAutoSettled.netWorthMicros)
+
+        // 取消 USD 借出的 includeInNetWorth -> 资产恢复 1000, 净资产 900
+        val lendEntity = debtRecordDao.getById(lendUsdId)!!
+        ledger.saveDebt(lendEntity.copy(includeInNetWorth = false), syncAccountBalance = false)
+        val afterToggleOff = ledger.computeNetWorth("CNY")
+        assertEquals(MoneyAmount.parseToMicros("1000.00")!!, afterToggleOff.totalAssetsMicros)
+        assertEquals(MoneyAmount.parseToMicros("100.00")!!, afterToggleOff.totalLiabilitiesMicros)
+        assertEquals(MoneyAmount.parseToMicros("900.00")!!, afterToggleOff.netWorthMicros)
+    }
 }

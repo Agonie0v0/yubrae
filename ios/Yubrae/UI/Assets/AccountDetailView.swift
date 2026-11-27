@@ -41,7 +41,6 @@ private enum AccountDetailActiveSheet: Identifiable {
     case editAccount(AccountDto)
     case calibrate(AccountDto)
     case deleteAccount(AccountDto)
-    case editNote(AccountDto)
     case addInstallment(AccountDto)
     case pickMonth
     case pickYear
@@ -53,7 +52,6 @@ private enum AccountDetailActiveSheet: Identifiable {
         case .editAccount(let acc): return "edit-\(acc.id)"
         case .calibrate(let acc): return "cal-\(acc.id)"
         case .deleteAccount(let acc): return "del-\(acc.id)"
-        case .editNote(let acc): return "note-\(acc.id)"
         case .addInstallment(let acc): return "inst-\(acc.id)"
         case .pickMonth: return "pickMonth"
         case .pickYear: return "pickYear"
@@ -270,22 +268,15 @@ public struct AccountDetailView: View {
                         }
                         .accessibilityLabel("切换隐私遮罩")
 
+                        Button {
+                            activeSheet = .editAccount(acc)
+                        } label: {
+                            Image(systemName: "pencil")
+                                .foregroundColor(palette.textPrimary)
+                        }
+                        .accessibilityLabel("编辑账户")
+
                         Menu {
-                            Button {
-                                activeSheet = .editAccount(acc)
-                            } label: {
-                                Label("编辑账户", systemImage: "pencil")
-                            }
-                            Button {
-                                activeSheet = .calibrate(acc)
-                            } label: {
-                                Label("校准余额", systemImage: "slider.horizontal.3")
-                            }
-                            Button {
-                                activeSheet = .editNote(acc)
-                            } label: {
-                                Label("编辑备注", systemImage: "note.text")
-                            }
                             Button {
                                 let targetArchived = !acc.archived
                                 store.archiveAccount(id: acc.id, archived: targetArchived)
@@ -383,8 +374,6 @@ public struct AccountDetailView: View {
                 activeSheet = nil
                 dismiss()
             }
-        case .editNote(let target):
-            AccountNoteEditorSheet(store: store, account: target)
         case .addInstallment(let target):
             InstallmentEditorSheet(store: store, account: target)
         case .pickMonth:
@@ -524,32 +513,26 @@ public struct AccountDetailView: View {
                 }
             }
 
-            // Tappable quick-edit note bar
-            Button {
-                activeSheet = .editNote(acc)
-            } label: {
-                HStack(spacing: 6) {
+            if !trimmedNote.isEmpty {
+                HStack(alignment: .top, spacing: 6) {
                     Image(systemName: "note.text")
                         .font(.caption)
-                        .foregroundColor(.white.opacity(0.85))
-                    Text(trimmedNote.isEmpty ? "点击添加账户备注..." : trimmedNote)
+                        .foregroundColor(.white.opacity(0.82))
+                        .padding(.top, 1)
+                    Text(trimmedNote)
                         .font(.caption)
-                        .foregroundColor(.white.opacity(trimmedNote.isEmpty ? 0.72 : 0.95))
+                        .foregroundColor(.white.opacity(0.92))
                         .lineLimit(2)
                         .multilineTextAlignment(.leading)
-                    Spacer(minLength: 4)
-                    Image(systemName: "pencil")
-                        .font(.caption2)
-                        .foregroundColor(.white.opacity(0.78))
+                    Spacer(minLength: 0)
                 }
                 .padding(.horizontal, 11)
                 .padding(.vertical, 8)
                 .background(
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(Color.white.opacity(0.14))
+                        .fill(Color.white.opacity(0.13))
                 )
             }
-            .buttonStyle(.plain)
 
             // 3-column period summary
             HStack(spacing: 10) {
@@ -597,7 +580,7 @@ public struct AccountDetailView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    // MARK: - 4 Quick Actions Bar
+    // MARK: - 3 Quick Actions Bar
 
     private func quickActionsRow(_ acc: AccountDto) -> some View {
         let isCredit = acc.groupType.uppercased() == AccountGroup.CREDIT
@@ -638,10 +621,6 @@ public struct AccountDetailView: View {
 
             detailQuickButton(title: "校准余额", systemImage: "slider.horizontal.3", accent: palette.warningColor) {
                 activeSheet = .calibrate(acc)
-            }
-
-            detailQuickButton(title: "编辑", systemImage: "pencil.circle.fill", accent: palette.textSecondary) {
-                activeSheet = .editAccount(acc)
             }
         }
     }
@@ -1023,35 +1002,6 @@ public struct AccountDetailView: View {
                         .frame(height: 7)
                     }
                 }
-
-                Button {
-                    quickRecordContext = DetailQuickRecordContext(
-                        editingTransaction: nil,
-                        initialType: TransactionType.TRANSFER,
-                        initialAccountId: nil,
-                        initialToAccountId: acc.id,
-                        initialAmountMicros: usedMicros
-                    )
-                } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: "arrow.uturn.left.circle.fill")
-                        Text(usedMicros > 0
-                            ? "还信用卡（当前待还 \(YubraeTheme.masked(MoneyAmount.format(usedMicros, currencyCode: cur), isMasked: masked))）"
-                            : "还信用卡")
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.8)
-                    }
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundColor(palette.onPrimary)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 11)
-                    .padding(.horizontal, 12)
-                    .background(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .fill(palette.primary)
-                    )
-                }
-                .buttonStyle(.plain)
             }
         }
     }
@@ -1914,57 +1864,6 @@ public struct AccountDetailView: View {
             return String(format: "%.1fk", value / 1_000)
         }
         return String(format: "%.0f", value)
-    }
-}
-
-// MARK: - Lightweight Account Note Editor Sheet
-
-private struct AccountNoteEditorSheet: View {
-    @ObservedObject var store: LedgerStore
-    let account: AccountDto
-
-    @Environment(\.dismiss) private var dismiss
-    @State private var noteText: String
-
-    init(store: LedgerStore, account: AccountDto) {
-        self.store = store
-        self.account = account
-        _noteText = State(initialValue: account.note)
-    }
-
-    var body: some View {
-        NavigationStack {
-            Form {
-                Section(header: Text("账户备注"), footer: Text("可用于记录卡号后四位、开户行、还款用途或专属提示。")) {
-                    TextField("输入账户备注（留空可清空）", text: $noteText, axis: .vertical)
-                        .lineLimit(3...6)
-                }
-            }
-            .navigationTitle("编辑备注 · \(account.name)")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("取消") { dismiss() }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("保存") {
-                        var updated = store.account(byId: account.id) ?? account
-                        updated.note = noteText.trimmingCharacters(in: .whitespacesAndNewlines)
-                        _ = store.saveAccount(updated)
-                        store.toastMessage = updated.note.isEmpty ? "已清空账户备注" : "已更新账户备注"
-                        dismiss()
-                    }
-                    .fontWeight(.semibold)
-                }
-                ToolbarItemGroup(placement: .keyboard) {
-                    Spacer()
-                    Button("完成") {
-                        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
-                    }
-                }
-            }
-        }
-        .presentationDetents([.medium])
     }
 }
 

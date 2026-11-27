@@ -1406,6 +1406,7 @@ public struct DebtRecordDto: Identifiable, Hashable, Codable, Sendable {
     public var status: String
     public var createdAt: Int64
     public var updatedAt: Int64
+    public var includeInNetWorth: Bool
 
     public init(
         id: Int64 = 0,
@@ -1419,7 +1420,8 @@ public struct DebtRecordDto: Identifiable, Hashable, Codable, Sendable {
         note: String = "",
         status: String = DebtStatus.OPEN,
         createdAt: Int64 = 0,
-        updatedAt: Int64 = 0
+        updatedAt: Int64 = 0,
+        includeInNetWorth: Bool = false
     ) {
         self.id = id
         self.direction = direction
@@ -1433,10 +1435,11 @@ public struct DebtRecordDto: Identifiable, Hashable, Codable, Sendable {
         self.status = status
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+        self.includeInNetWorth = includeInNetWorth
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, direction, personName, amountMicros, settledAmountMicros, currencyCode, accountId, dueDateMillis, note, status, createdAt, updatedAt
+        case id, direction, personName, amountMicros, settledAmountMicros, currencyCode, accountId, dueDateMillis, note, status, createdAt, updatedAt, includeInNetWorth
     }
 
     public init(from decoder: Decoder) throws {
@@ -1453,6 +1456,7 @@ public struct DebtRecordDto: Identifiable, Hashable, Codable, Sendable {
         self.status = try c.decodeIfPresent(String.self, forKey: .status) ?? DebtStatus.OPEN
         self.createdAt = try c.decodeIfPresent(Int64.self, forKey: .createdAt) ?? 0
         self.updatedAt = try c.decodeIfPresent(Int64.self, forKey: .updatedAt) ?? 0
+        self.includeInNetWorth = try c.decodeIfPresent(Bool.self, forKey: .includeInNetWorth) ?? false
     }
 }
 

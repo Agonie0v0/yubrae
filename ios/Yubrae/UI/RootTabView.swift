@@ -260,7 +260,7 @@ public struct RootTabView: View {
                 .overlay(palette.surface.opacity(palette.isDark ? 0.78 : 0.84))
                 .ignoresSafeArea(edges: .bottom)
         )
-        .animation(.spring(response: 0.34, dampingFraction: 0.88), value: selectedTab)
+        .animation(.easeOut(duration: 0.18), value: selectedTab)
     }
 
     private func bottomTabItem(_ tab: YubraeTab) -> some View {
@@ -270,7 +270,11 @@ public struct RootTabView: View {
 
         return Button {
             if selectedTab != tab {
-                withAnimation(.spring(response: 0.34, dampingFraction: 0.88)) {
+                if abs(tab.rawValue - selectedTab.rawValue) == 1 {
+                    withAnimation(.easeOut(duration: 0.2)) {
+                        selectedTab = tab
+                    }
+                } else {
                     selectedTab = tab
                 }
             } else {

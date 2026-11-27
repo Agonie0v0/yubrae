@@ -37,6 +37,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.PagerDefaults
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -70,7 +71,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -152,6 +152,9 @@ private val bottomTabs = listOf(
     BottomTabItem(3, "我的", Icons.Rounded.Person)
 )
 
+private val NavTabItemShape = RoundedCornerShape(12.dp)
+private val NavTabPillShape = RoundedCornerShape(14.dp)
+
 private object OverlayRouteKinds {
     const val NONE = "NONE"
     const val ACCOUNT_DETAIL = "ACCOUNT_DETAIL"
@@ -185,7 +188,6 @@ fun KairoAppRoot(
     val lifecycleOwner = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
-    val saveableStateHolder = rememberSaveableStateHolder()
 
     // 根组件仅订阅轻量全局元数据与角标计数，重数据流下沉到各子页面按需收集
     val settings by viewModel.settings.collectAsStateWithLifecycle()
@@ -432,33 +434,31 @@ fun KairoAppRoot(
                         when {
                             initialState is RootLayer.MainTabs && targetState !is RootLayer.MainTabs -> {
                                 ((slideInHorizontally(
-                                    animationSpec = tween(durationMillis = 280, easing = FastOutSlowInEasing),
-                                    initialOffsetX = { fullWidth -> fullWidth / 3 }
-                                ) + fadeIn(animationSpec = tween(durationMillis = 240))) togetherWith
-                                    (fadeOut(animationSpec = tween(durationMillis = 180)) +
-                                        scaleOut(
-                                            targetScale = 0.98f,
-                                            animationSpec = tween(durationMillis = 240, easing = FastOutSlowInEasing)
-                                        )))
+                                    animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing),
+                                    initialOffsetX = { fullWidth -> fullWidth / 4 }
+                                ) + fadeIn(animationSpec = tween(durationMillis = 150))) togetherWith
+                                    (slideOutHorizontally(
+                                        animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing),
+                                        targetOffsetX = { fullWidth -> -fullWidth / 8 }
+                                    ) + fadeOut(animationSpec = tween(durationMillis = 120))))
                                     .apply { targetContentZIndex = 1f }
                                     .using(SizeTransform(clip = false))
                             }
                             initialState !is RootLayer.MainTabs && targetState is RootLayer.MainTabs -> {
-                                ((fadeIn(animationSpec = tween(durationMillis = 220)) +
-                                    scaleIn(
-                                        initialScale = 0.98f,
-                                        animationSpec = tween(durationMillis = 240, easing = FastOutSlowInEasing)
-                                    )) togetherWith
+                                ((slideInHorizontally(
+                                    animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing),
+                                    initialOffsetX = { fullWidth -> -fullWidth / 8 }
+                                ) + fadeIn(animationSpec = tween(durationMillis = 150))) togetherWith
                                     (slideOutHorizontally(
-                                        animationSpec = tween(durationMillis = 240, easing = FastOutSlowInEasing),
-                                        targetOffsetX = { fullWidth -> fullWidth / 2 }
-                                    ) + fadeOut(animationSpec = tween(durationMillis = 200))))
+                                        animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing),
+                                        targetOffsetX = { fullWidth -> fullWidth / 4 }
+                                    ) + fadeOut(animationSpec = tween(durationMillis = 150))))
                                     .apply { targetContentZIndex = -1f }
                                     .using(SizeTransform(clip = false))
                             }
                             else -> {
-                                (fadeIn(animationSpec = tween(durationMillis = 200)) togetherWith
-                                    fadeOut(animationSpec = tween(durationMillis = 180)))
+                                (fadeIn(animationSpec = tween(durationMillis = 160)) togetherWith
+                                    fadeOut(animationSpec = tween(durationMillis = 140)))
                                     .using(SizeTransform(clip = false))
                             }
                         }
@@ -630,18 +630,23 @@ fun KairoAppRoot(
                                         pendingCount = pendingCount,
                                         hasUpdateBadge = hasAvailableUpdate,
                                         onSelectTab = { index ->
-                                            if (index == 3 || index != pagerState.currentPage) {
+                                            val currentPage = pagerState.currentPage
+                                            if (index == 3 || index != currentPage) {
                                                 settingsSubRoute = SettingsRoutes.HUB
                                             }
-                                            if (index != pagerState.currentPage) {
+                                            if (index != currentPage) {
                                                 scope.launch {
-                                                    pagerState.animateScrollToPage(
-                                                        page = index,
-                                                        animationSpec = tween(
-                                                            durationMillis = if (abs(index - pagerState.currentPage) > 1) 280 else 240,
-                                                            easing = FastOutSlowInEasing
+                                                    if (abs(index - currentPage) == 1) {
+                                                        pagerState.animateScrollToPage(
+                                                            page = index,
+                                                            animationSpec = tween(
+                                                                durationMillis = 180,
+                                                                easing = FastOutSlowInEasing
+                                                            )
                                                         )
-                                                    )
+                                                    } else {
+                                                        pagerState.scrollToPage(index)
+                                                    }
                                                 }
                                             }
                                         },
@@ -664,146 +669,137 @@ fun KairoAppRoot(
                                 HorizontalPager(
                                     state = pagerState,
                                     userScrollEnabled = !isTxMultiSelect,
-                                    beyondViewportPageCount = 0,
+                                    beyondViewportPageCount = 3,
+                                    flingBehavior = PagerDefaults.flingBehavior(
+                                        state = pagerState,
+                                        snapPositionalThreshold = 0.25f
+                                    ),
                                     modifier = Modifier.fillMaxSize()
                                 ) { page ->
-                                    Box(
-                                        modifier = Modifier
-                                            .fillMaxSize()
-                                            .graphicsLayer {
-                                                val pageOffset = abs(pagerState.getOffsetDistanceInPages(page))
-                                                val fraction = pageOffset.coerceIn(0f, 1f)
-                                                alpha = 1f - 0.14f * fraction
-                                                val scale = 1f - 0.02f * fraction
-                                                scaleX = scale
-                                                scaleY = scale
-                                            }
-                                    ) {
-                                        saveableStateHolder.SaveableStateProvider(page) {
-                                            when (page) {
-                                                0 -> TransactionsScreen(
-                                                    viewModel = viewModel,
-                                                    onEditTransaction = { tx ->
-                                                        editingTransaction = tx
-                                                        refundOriginTransaction = null
-                                                        quickRecordInitialToAccountId = null
-                                                        quickRecordInitialAmountMicros = null
-                                                        showQuickRecord = true
-                                                    },
-                                                    onOpenQuickRecord = {
-                                                        editingTransaction = null
-                                                        refundOriginTransaction = null
-                                                        quickRecordInitialType = TransactionType.EXPENSE
-                                                        quickRecordInitialAccountId = null
-                                                        quickRecordInitialToAccountId = null
-                                                        quickRecordInitialAmountMicros = null
-                                                        showQuickRecord = true
-                                                    },
-                                                    contentPadding = innerPadding,
-                                                    onRefundTransaction = { tx ->
-                                                        editingTransaction = null
-                                                        refundOriginTransaction = tx
-                                                        quickRecordInitialType = TransactionType.INCOME
-                                                        quickRecordInitialAccountId = tx.accountId
-                                                        quickRecordInitialToAccountId = null
-                                                        quickRecordInitialAmountMicros = null
-                                                        showQuickRecord = true
-                                                    },
-                                                    onBatchUpdateCategory = { ids, catId ->
-                                                        viewModel.batchUpdateCategory(ids, catId)
-                                                    },
-                                                    onBatchDeleteTransactions = { ids ->
-                                                        viewModel.batchDeleteTransactions(ids)
-                                                    },
-                                                    listState = txListState,
-                                                    onOpenLedgerManager = { showLedgerSheet = true },
-                                                    onTogglePrivacy = onTogglePrivacy,
-                                                    onOpenSmartInput = {
-                                                        smartInputImagePath = null
-                                                        showSmartInput = true
-                                                    },
-                                                    onMultiSelectModeChange = { isTxMultiSelect = it }
-                                                )
-                                                1 -> AssetsScreen(
-                                                    viewModel = viewModel,
-                                                    onOpenQuickTransfer = {
-                                                        editingTransaction = null
-                                                        refundOriginTransaction = null
-                                                        quickRecordInitialType = TransactionType.TRANSFER
-                                                        quickRecordInitialAccountId = null
-                                                        quickRecordInitialToAccountId = null
-                                                        quickRecordInitialAmountMicros = null
-                                                        showQuickRecord = true
-                                                    },
-                                                    onOpenQuickRecordForAccount = { accId ->
-                                                        editingTransaction = null
-                                                        refundOriginTransaction = null
-                                                        quickRecordInitialType = TransactionType.EXPENSE
-                                                        quickRecordInitialAccountId = accId
-                                                        quickRecordInitialToAccountId = null
-                                                        quickRecordInitialAmountMicros = null
-                                                        showQuickRecord = true
-                                                    },
-                                                    contentPadding = innerPadding,
-                                                    pendingReimburseCount = pendingReimburseCount,
-                                                    openDebtCount = openDebtCount,
-                                                    onOpenAccountDetail = { account ->
-                                                        overlayAccountId = account.id
-                                                        overlayKind = OverlayRouteKinds.ACCOUNT_DETAIL
-                                                    },
-                                                    onOpenReimburseCenter = {
-                                                        overlayKind = OverlayRouteKinds.REIMBURSE
-                                                    },
-                                                    onOpenDebtCenter = {
-                                                        overlayKind = OverlayRouteKinds.DEBTS
-                                                    },
-                                                    listState = assetsListState,
-                                                    onTogglePrivacy = onTogglePrivacy,
-                                                    onOpenExchangeRates = {
-                                                        selectedTab = 3
-                                                        settingsSubRoute = SettingsRoutes.RATES
-                                                        scope.launch {
-                                                            pagerState.scrollToPage(3)
-                                                        }
-                                                    },
-                                                    onOpenHiddenAssets = {
-                                                        overlayKind = OverlayRouteKinds.HIDDEN_ASSETS
-                                                    },
-                                                    onOpenCreditRepay = { creditAccount ->
-                                                        openCreditRepay(creditAccount)
+                                    Box(modifier = Modifier.fillMaxSize()) {
+                                        when (page) {
+                                            0 -> TransactionsScreen(
+                                                viewModel = viewModel,
+                                                onEditTransaction = { tx ->
+                                                    editingTransaction = tx
+                                                    refundOriginTransaction = null
+                                                    quickRecordInitialToAccountId = null
+                                                    quickRecordInitialAmountMicros = null
+                                                    showQuickRecord = true
+                                                },
+                                                onOpenQuickRecord = {
+                                                    editingTransaction = null
+                                                    refundOriginTransaction = null
+                                                    quickRecordInitialType = TransactionType.EXPENSE
+                                                    quickRecordInitialAccountId = null
+                                                    quickRecordInitialToAccountId = null
+                                                    quickRecordInitialAmountMicros = null
+                                                    showQuickRecord = true
+                                                },
+                                                contentPadding = innerPadding,
+                                                onRefundTransaction = { tx ->
+                                                    editingTransaction = null
+                                                    refundOriginTransaction = tx
+                                                    quickRecordInitialType = TransactionType.INCOME
+                                                    quickRecordInitialAccountId = tx.accountId
+                                                    quickRecordInitialToAccountId = null
+                                                    quickRecordInitialAmountMicros = null
+                                                    showQuickRecord = true
+                                                },
+                                                onBatchUpdateCategory = { ids, catId ->
+                                                    viewModel.batchUpdateCategory(ids, catId)
+                                                },
+                                                onBatchDeleteTransactions = { ids ->
+                                                    viewModel.batchDeleteTransactions(ids)
+                                                },
+                                                listState = txListState,
+                                                onOpenLedgerManager = { showLedgerSheet = true },
+                                                onTogglePrivacy = onTogglePrivacy,
+                                                onOpenSmartInput = {
+                                                    smartInputImagePath = null
+                                                    showSmartInput = true
+                                                },
+                                                onMultiSelectModeChange = { isTxMultiSelect = it }
+                                            )
+                                            1 -> AssetsScreen(
+                                                viewModel = viewModel,
+                                                onOpenQuickTransfer = {
+                                                    editingTransaction = null
+                                                    refundOriginTransaction = null
+                                                    quickRecordInitialType = TransactionType.TRANSFER
+                                                    quickRecordInitialAccountId = null
+                                                    quickRecordInitialToAccountId = null
+                                                    quickRecordInitialAmountMicros = null
+                                                    showQuickRecord = true
+                                                },
+                                                onOpenQuickRecordForAccount = { accId ->
+                                                    editingTransaction = null
+                                                    refundOriginTransaction = null
+                                                    quickRecordInitialType = TransactionType.EXPENSE
+                                                    quickRecordInitialAccountId = accId
+                                                    quickRecordInitialToAccountId = null
+                                                    quickRecordInitialAmountMicros = null
+                                                    showQuickRecord = true
+                                                },
+                                                contentPadding = innerPadding,
+                                                pendingReimburseCount = pendingReimburseCount,
+                                                openDebtCount = openDebtCount,
+                                                onOpenAccountDetail = { account ->
+                                                    overlayAccountId = account.id
+                                                    overlayKind = OverlayRouteKinds.ACCOUNT_DETAIL
+                                                },
+                                                onOpenReimburseCenter = {
+                                                    overlayKind = OverlayRouteKinds.REIMBURSE
+                                                },
+                                                onOpenDebtCenter = {
+                                                    overlayKind = OverlayRouteKinds.DEBTS
+                                                },
+                                                listState = assetsListState,
+                                                onTogglePrivacy = onTogglePrivacy,
+                                                onOpenExchangeRates = {
+                                                    selectedTab = 3
+                                                    settingsSubRoute = SettingsRoutes.RATES
+                                                    scope.launch {
+                                                        pagerState.scrollToPage(3)
                                                     }
-                                                )
-                                                2 -> StatsScreen(
-                                                    viewModel = viewModel,
-                                                    contentPadding = innerPadding,
-                                                    onEditTransaction = { tx ->
-                                                        editingTransaction = tx
-                                                        refundOriginTransaction = null
-                                                        quickRecordInitialToAccountId = null
-                                                        quickRecordInitialAmountMicros = null
-                                                        showQuickRecord = true
-                                                    },
-                                                    listState = statsListState,
-                                                    onOpenLedgerManager = { showLedgerSheet = true },
-                                                    onTogglePrivacy = onTogglePrivacy
-                                                )
-                                                else -> MineHubScreen(
-                                                    viewModel = viewModel,
-                                                    onNavigate = { route ->
-                                                        when (route) {
-                                                            SettingsRoutes.CATEGORIES -> overlayKind = OverlayRouteKinds.CATEGORIES
-                                                            SettingsRoutes.TAGS -> overlayKind = OverlayRouteKinds.TAGS
-                                                            SettingsRoutes.REIMBURSE -> overlayKind = OverlayRouteKinds.REIMBURSE
-                                                            SettingsRoutes.DEBTS -> overlayKind = OverlayRouteKinds.DEBTS
-                                                            else -> settingsSubRoute = route
-                                                        }
-                                                    },
-                                                    onOpenLedgerManager = { showLedgerSheet = true },
-                                                    onTogglePrivacy = onTogglePrivacy,
-                                                    listState = mineListState,
-                                                    contentPadding = innerPadding
-                                                )
-                                            }
+                                                },
+                                                onOpenHiddenAssets = {
+                                                    overlayKind = OverlayRouteKinds.HIDDEN_ASSETS
+                                                },
+                                                onOpenCreditRepay = { creditAccount ->
+                                                    openCreditRepay(creditAccount)
+                                                }
+                                            )
+                                            2 -> StatsScreen(
+                                                viewModel = viewModel,
+                                                contentPadding = innerPadding,
+                                                onEditTransaction = { tx ->
+                                                    editingTransaction = tx
+                                                    refundOriginTransaction = null
+                                                    quickRecordInitialToAccountId = null
+                                                    quickRecordInitialAmountMicros = null
+                                                    showQuickRecord = true
+                                                },
+                                                listState = statsListState,
+                                                onOpenLedgerManager = { showLedgerSheet = true },
+                                                onTogglePrivacy = onTogglePrivacy
+                                            )
+                                            else -> MineHubScreen(
+                                                viewModel = viewModel,
+                                                onNavigate = { route ->
+                                                    when (route) {
+                                                        SettingsRoutes.CATEGORIES -> overlayKind = OverlayRouteKinds.CATEGORIES
+                                                        SettingsRoutes.TAGS -> overlayKind = OverlayRouteKinds.TAGS
+                                                        SettingsRoutes.REIMBURSE -> overlayKind = OverlayRouteKinds.REIMBURSE
+                                                        SettingsRoutes.DEBTS -> overlayKind = OverlayRouteKinds.DEBTS
+                                                        else -> settingsSubRoute = route
+                                                    }
+                                                },
+                                                onOpenLedgerManager = { showLedgerSheet = true },
+                                                onTogglePrivacy = onTogglePrivacy,
+                                                listState = mineListState,
+                                                contentPadding = innerPadding
+                                            )
                                         }
                                     }
                                 }
@@ -1134,6 +1130,7 @@ private fun DebtCenterHost(
 ) {
     val debts by viewModel.debts.collectAsStateWithLifecycle()
     val activeAccounts by viewModel.activeAccounts.collectAsStateWithLifecycle()
+    val exchangeRates by viewModel.exchangeRates.collectAsStateWithLifecycle()
 
     DebtCenterScreen(
         debts = debts,
@@ -1145,7 +1142,8 @@ private fun DebtCenterHost(
         onSettleDebt = { debtId, settleAmt, accId, note ->
             viewModel.settleDebt(debtId, settleAmt, accId, note)
         },
-        onDeleteDebt = { debtId -> viewModel.deleteDebt(debtId) }
+        onDeleteDebt = { debtId -> viewModel.deleteDebt(debtId) },
+        rates = exchangeRates
     )
 }
 
@@ -1313,19 +1311,21 @@ private fun YubraeNavTabItem(
         } else {
             MaterialTheme.colorScheme.onSurfaceVariant
         },
-        animationSpec = tween(durationMillis = 200),
+        animationSpec = tween(durationMillis = 140, easing = FastOutSlowInEasing),
         label = "nav_tab_tint"
     )
-    val pillProgress by animateFloatAsState(
+    val pillProgressState = animateFloatAsState(
         targetValue = if (selected) 1f else 0f,
-        animationSpec = tween(durationMillis = 220, easing = FastOutSlowInEasing),
+        animationSpec = tween(durationMillis = 140, easing = FastOutSlowInEasing),
         label = "nav_tab_pill"
     )
+    val primaryContainer = MaterialTheme.colorScheme.primaryContainer
+    val pillColor = remember(primaryContainer) { primaryContainer.copy(alpha = 0.65f) }
 
     Column(
         modifier = modifier
             .fillMaxHeight()
-            .clip(RoundedCornerShape(12.dp))
+            .clip(NavTabItemShape)
             .clickable(onClick = onClick),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
@@ -1340,12 +1340,13 @@ private fun YubraeNavTabItem(
                 modifier = Modifier
                     .matchParentSize()
                     .graphicsLayer {
-                        alpha = pillProgress
-                        scaleX = 0.65f + 0.35f * pillProgress
-                        scaleY = 0.8f + 0.2f * pillProgress
+                        val progress = pillProgressState.value
+                        alpha = progress
+                        scaleX = 0.65f + 0.35f * progress
+                        scaleY = 0.8f + 0.2f * progress
                     }
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.65f))
+                    .clip(NavTabPillShape)
+                    .background(pillColor)
             )
             Box(
                 modifier = Modifier.size(24.dp),

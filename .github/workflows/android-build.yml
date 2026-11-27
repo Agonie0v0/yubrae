@@ -164,13 +164,21 @@ jobs:
               if m_tag:
                   tag_tuples.append(tuple(int(g) for g in m_tag.groups()))
 
+          def bump_next_version(major: int, minor: int, patch: int) -> tuple[int, int, int]:
+              if patch >= 9:
+                  next_minor = minor + 1
+                  if next_minor > 9:
+                      return (major + 1, 0, 0)
+                  return (major, next_minor, 0)
+              return (major, minor, patch + 1)
+
           max_tag = max(tag_tuples) if tag_tuples else None
           if max_tag is None or base_tuple > max_tag:
               target_tuple = base_tuple
               reason = f"using source baseline {android_ver} (max remote tag: {max_tag})"
           else:
-              target_tuple = (max_tag[0], max_tag[1], max_tag[2] + 1)
-              reason = f"auto-bumped patch from max remote tag v{'.'.join(map(str, max_tag))}"
+              target_tuple = bump_next_version(*max_tag)
+              reason = f"auto-bumped version from max remote tag v{'.'.join(map(str, max_tag))}"
 
           if target_tuple[1] >= 1000 or target_tuple[2] >= 1000:
               fail(

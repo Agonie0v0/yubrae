@@ -7,7 +7,7 @@ private enum AssetActiveSheet: Identifiable {
     case deleteAccount(AccountDto)
     case reorder
     case hiddenManager
-    case addDebt
+    case editDebt(DebtRecordDto?)
     case settleDebt(DebtRecordDto)
     case settleReimburse
 
@@ -23,8 +23,8 @@ private enum AssetActiveSheet: Identifiable {
             return "reorder"
         case .hiddenManager:
             return "hidden"
-        case .addDebt:
-            return "addDebt"
+        case .editDebt(let debt):
+            return "editDebt-\(debt?.id ?? 0)"
         case .settleDebt(let debt):
             return "settleDebt-\(debt.id)"
         case .settleReimburse:
@@ -58,6 +58,9 @@ public struct AssetsView: View {
     @State private var showSearchBar = false
     @State private var searchQuery = ""
     @State private var showArchivedSection = false
+    @State private var showSettledDebts = false
+    @State private var targetedAccountDropId: Int64?
+    @State private var targetedGroupDropCode: String?
     @State private var activeSheet: AssetActiveSheet?
     @State private var quickRecordPreset: AssetQuickRecordPreset?
 
@@ -120,6 +123,15 @@ public struct AssetsView: View {
         store.debts.filter { $0.status == DebtStatus.OPEN }
     }
 
+    private var settledDebts: [DebtRecordDto] {
+        store.debts
+            .filter { $0.status != DebtStatus.OPEN }
+            .sorted { lhs, rhs in
+                if lhs.updatedAt != rhs.updatedAt { return lhs.updatedAt > rhs.updatedAt }
+                return lhs.id > rhs.id
+            }
+    }
+
     private var visibleActiveAccounts: [AccountDto] {
         let base = store.activeAccounts.filter { acc in
             if !showHiddenAccounts && hiddenAccountIdSet.contains(acc.id) {
@@ -153,7 +165,7 @@ public struct AssetsView: View {
         visibleActiveAccounts.count + archivedAccounts.count
     }
 
-    /// 资产构成比例（仅统计计入净资产且折算余额 > 0 的活跃账户）
+    /// 资产构成比例（统计计入净资产且折算余额 > 0 的活跃账户，以及计入净资产的未结清借出应收）
     private var assetCompositionSlices: [AssetCompositionSlice] {
         let baseCur = CurrencyCatalog.normalize(store.settings.baseCurrency)
         var liquidMicros: Int64 = 0
@@ -174,13 +186,19 @@ public struct AssetsView: View {
             }
         }
 
-        let total = liquidMicros + investMicros + foreignMicros
+        let debtReceivableMicros = max(
+            Int64(0),
+            store.computeIncludedDebtReceivableMicros(displayCurrency: activeDisplayCurrency)
+        )
+
+        let total = liquidMicros + investMicros + foreignMicros + debtReceivableMicros
         guard total > 0 else { return [] }
 
         let raw: [(String, String, Int64, Color)] = [
             ("liquid", "流动资金", liquidMicros, Color(argbHex: 0xFF6EE7B7)),
             ("invest", "理财投资", investMicros, Color(argbHex: 0xFFFCD34D)),
-            ("foreign", "外币资产", foreignMicros, Color(argbHex: 0xFF93C5FD))
+            ("foreign", "外币资产", foreignMicros, Color(argbHex: 0xFF93C5FD)),
+            ("debtReceivable", "借贷应收", debtReceivableMicros, Color(argbHex: 0xFFC4B5FD))
         ]
         return raw.compactMap { item in
             guard item.2 > 0 else { return nil }
@@ -222,6 +240,18 @@ public struct AssetsView: View {
                     if !archivedAccounts.isEmpty {
                         archivedAccountsCard
                     }
+
+                    if !isSearching && !visibleActiveAccounts.isEmpty {
+                        HStack(spacing: 5) {
+                            Image(systemName: "hand.draw")
+                                .font(.caption2)
+                            Text("长按账户或分组标题可直接拖动排序")
+                                .font(.caption2)
+                        }
+                        .foregroundColor(palette.textTertiary)
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 2)
+                    }
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 10)
@@ -231,15 +261,6 @@ public struct AssetsView: View {
             .navigationTitle("资产")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button {
-                        activeSheet = .hiddenManager
-                    } label: {
-                        Image(systemName: "eye.trianglebadge.exclamationmark")
-                            .foregroundColor(palette.textPrimary)
-                    }
-                    .accessibilityLabel("隐藏资产管理")
-                }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     HStack(spacing: 14) {
                         Button {
@@ -249,13 +270,49 @@ public struct AssetsView: View {
                                 .foregroundColor(palette.textPrimary)
                         }
                         .accessibilityLabel("切换隐私遮罩")
-                        Button {
-                            activeSheet = .editAccount(nil, AccountGroup.WALLET)
+
+                        Menu {
+                            Button {
+                                activeSheet = .reorder
+                            } label: {
+                                Label("批量排序管理", systemImage: "arrow.up.arrow.down")
+                            }
+                            Button {
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    showHiddenAccounts.toggle()
+                                }
+                            } label: {
+                                Label(
+                                    showHiddenAccounts ? "隐藏已隐藏账户" : "显示已隐藏账户",
+                                    systemImage: showHiddenAccounts ? "eye.slash" : "eye"
+                                )
+                            }
+                            Button {
+                                activeSheet = .hiddenManager
+                            } label: {
+                                Label("隐藏资产管理", systemImage: "eye.trianglebadge.exclamationmark")
+                            }
+                            Button {
+                                withAnimation(.easeInOut(duration: 0.2)) {
+                                    showArchivedSection.toggle()
+                                }
+                            } label: {
+                                Label(
+                                    showArchivedSection ? "收起已归档账户" : "展开已归档账户",
+                                    systemImage: "archivebox"
+                                )
+                            }
+                            Divider()
+                            Button {
+                                activeSheet = .editDebt(nil)
+                            } label: {
+                                Label("记借贷", systemImage: "person.2")
+                            }
                         } label: {
-                            Image(systemName: "plus.circle.fill")
-                                .foregroundColor(palette.primary)
+                            Image(systemName: "ellipsis.circle")
+                                .foregroundColor(palette.textPrimary)
                         }
-                        .accessibilityLabel("新建账户")
+                        .accessibilityLabel("更多资产操作")
                     }
                 }
             }
@@ -292,8 +349,8 @@ public struct AssetsView: View {
             AssetReorderSheet(store: store, initialGroupOrder: orderedGroups)
         case .hiddenManager:
             HiddenAssetsManagerSheet(store: store)
-        case .addDebt:
-            AddDebtSheet(store: store)
+        case .editDebt(let debt):
+            DebtEditorSheet(store: store, editingDebt: debt)
         case .settleDebt(let debt):
             SettleDebtSheet(store: store, debt: debt)
         case .settleReimburse:
@@ -301,7 +358,7 @@ public struct AssetsView: View {
         }
     }
 
-    // MARK: - Hero Card (Net Worth + Composition Bar + 4-Action Quick Strip)
+    // MARK: - Hero Card (Net Worth + Composition Bar + 3-Action Quick Strip)
 
     private var netWorthHeroCard: some View {
         let masked = store.settings.privacyMaskEnabled
@@ -413,22 +470,41 @@ public struct AssetsView: View {
             .padding(2)
             .background(Capsule().fill(Color.white.opacity(0.14)))
 
-            HStack(spacing: 12) {
-                ForEach(slices) { slice in
-                    let pctText = masked ? "••%" : "\(Int((slice.ratio * 100).rounded()))%"
-                    HStack(spacing: 4) {
-                        Circle()
-                            .fill(slice.color)
-                            .frame(width: 6, height: 6)
-                        Text("\(slice.title) \(pctText)")
-                            .font(.system(size: 11, weight: .medium).monospacedDigit())
-                            .foregroundColor(.white.opacity(0.88))
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.8)
+            if slices.count > 3 {
+                LazyVGrid(
+                    columns: [
+                        GridItem(.flexible(), alignment: .leading),
+                        GridItem(.flexible(), alignment: .leading)
+                    ],
+                    alignment: .leading,
+                    spacing: 5
+                ) {
+                    ForEach(slices) { slice in
+                        assetCompositionLegendItem(slice: slice, masked: masked)
                     }
                 }
-                Spacer(minLength: 0)
+            } else {
+                HStack(spacing: 12) {
+                    ForEach(slices) { slice in
+                        assetCompositionLegendItem(slice: slice, masked: masked)
+                    }
+                    Spacer(minLength: 0)
+                }
             }
+        }
+    }
+
+    private func assetCompositionLegendItem(slice: AssetCompositionSlice, masked: Bool) -> some View {
+        let pctText = masked ? "••%" : "\(Int((slice.ratio * 100).rounded()))%"
+        return HStack(spacing: 4) {
+            Circle()
+                .fill(slice.color)
+                .frame(width: 6, height: 6)
+            Text("\(slice.title) \(pctText)")
+                .font(.system(size: 11, weight: .medium).monospacedDigit())
+                .foregroundColor(.white.opacity(0.88))
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
         }
     }
 
@@ -449,14 +525,6 @@ public struct AssetsView: View {
                         showSearchBar = true
                     }
                 }
-            }
-
-            heroQuickActionButton(
-                title: "排序",
-                systemImage: "arrow.up.arrow.down",
-                highlighted: false
-            ) {
-                activeSheet = .reorder
             }
 
             heroQuickActionButton(
@@ -592,7 +660,7 @@ public struct AssetsView: View {
 
             if hiddenModuleSet.contains(AssetHiddenModule.DEBT) {
                 Button {
-                    activeSheet = .addDebt
+                    activeSheet = .editDebt(nil)
                 } label: {
                     Label("记借贷", systemImage: "person.2")
                         .font(.caption.weight(.semibold))
@@ -662,9 +730,30 @@ public struct AssetsView: View {
                         .foregroundColor(palette.textPrimary)
                         .lineLimit(1)
                         .minimumScaleFactor(0.85)
-                    Spacer(minLength: 8)
+                    Spacer(minLength: 6)
+                    if !settledDebts.isEmpty {
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                showSettledDebts.toggle()
+                            }
+                        } label: {
+                            HStack(spacing: 3) {
+                                Text("已结清 \(settledDebts.count)")
+                                Image(systemName: showSettledDebts ? "chevron.up" : "chevron.down")
+                                    .font(.system(size: 9, weight: .bold))
+                            }
+                            .font(.caption2.weight(.semibold))
+                            .foregroundColor(palette.textSecondary)
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(Capsule().fill(palette.surfaceSecondary))
+                        }
+                        .buttonStyle(.plain)
+                    }
                     Button("+ 新增") {
-                        activeSheet = .addDebt
+                        activeSheet = .editDebt(nil)
                     }
                     .font(.caption.weight(.semibold))
                     .foregroundColor(palette.primary)
@@ -678,55 +767,147 @@ public struct AssetsView: View {
                         .font(.caption)
                         .foregroundColor(palette.textTertiary)
                 } else {
-                    ForEach(openDebts) { debt in
-                        let remain = max(0, debt.amountMicros - debt.settledAmountMicros)
-                        let isLend = debt.direction == DebtDirection.LEND
-                        HStack(spacing: 8) {
-                            VStack(alignment: .leading, spacing: 2) {
-                                HStack(spacing: 6) {
-                                    Text(isLend ? "借出" : "借入")
-                                        .font(.caption2.weight(.bold))
-                                        .foregroundColor(isLend ? palette.incomeColor : palette.expenseColor)
-                                        .lineLimit(1)
-                                        .fixedSize(horizontal: true, vertical: false)
-                                        .padding(.horizontal, 6)
-                                        .padding(.vertical, 2)
-                                        .background(Capsule().fill((isLend ? palette.incomeColor : palette.expenseColor).opacity(0.14)))
-                                    Text(debt.personName)
-                                        .font(.subheadline.weight(.semibold))
-                                        .foregroundColor(palette.textPrimary)
-                                        .lineLimit(1)
-                                }
-                                if !debt.note.isEmpty {
-                                    Text(debt.note)
-                                        .font(.caption2)
-                                        .foregroundColor(palette.textTertiary)
-                                        .lineLimit(1)
-                                }
+                    VStack(spacing: 0) {
+                        ForEach(openDebts) { debt in
+                            debtRecordRow(debt, masked: masked, isSettled: false)
+                            if debt.id != openDebts.last?.id {
+                                Divider()
                             }
-                            Spacer(minLength: 8)
-                            VStack(alignment: .trailing, spacing: 4) {
-                                Text(YubraeTheme.masked(MoneyAmount.format(remain, currencyCode: debt.currencyCode, showCurrencyCode: true), isMasked: masked))
-                                    .font(.subheadline.weight(.bold).monospacedDigit())
-                                    .foregroundColor(palette.textPrimary)
-                                    .lineLimit(1)
-                                    .fixedSize(horizontal: true, vertical: false)
-                                Button("核销/还款") {
-                                    activeSheet = .settleDebt(debt)
-                                }
-                                .font(.caption2.weight(.semibold))
-                                .foregroundColor(palette.primary)
-                                .lineLimit(1)
-                                .fixedSize(horizontal: true, vertical: false)
-                                .buttonStyle(.plain)
-                            }
-                            .layoutPriority(1)
                         }
-                        .padding(.vertical, 4)
+                    }
+                }
+
+                if showSettledDebts && !settledDebts.isEmpty {
+                    Divider()
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("已结清记录（\(settledDebts.count)）")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundColor(palette.textTertiary)
+                        VStack(spacing: 0) {
+                            ForEach(settledDebts) { debt in
+                                debtRecordRow(debt, masked: masked, isSettled: true)
+                                if debt.id != settledDebts.last?.id {
+                                    Divider()
+                                }
+                            }
+                        }
                     }
                 }
             }
         }
+    }
+
+    private func debtRecordRow(_ debt: DebtRecordDto, masked: Bool, isSettled: Bool) -> some View {
+        let remain = max(Int64(0), debt.amountMicros - debt.settledAmountMicros)
+        let displayAmount = isSettled ? debt.amountMicros : remain
+        let isLend = debt.direction == DebtDirection.LEND
+
+        return HStack(spacing: 8) {
+            Button {
+                activeSheet = .editDebt(debt)
+            } label: {
+                HStack(spacing: 8) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack(spacing: 5) {
+                            Text(isLend ? "借出" : "借入")
+                                .font(.caption2.weight(.bold))
+                                .foregroundColor(isLend ? palette.incomeColor : palette.expenseColor)
+                                .lineLimit(1)
+                                .fixedSize(horizontal: true, vertical: false)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Capsule().fill((isLend ? palette.incomeColor : palette.expenseColor).opacity(0.14)))
+                            Text(debt.personName)
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundColor(isSettled ? palette.textSecondary : palette.textPrimary)
+                                .lineLimit(1)
+                            if debt.includeInNetWorth {
+                                Text("计入净资产")
+                                    .font(.system(size: 10, weight: .semibold))
+                                    .foregroundColor(palette.primary)
+                                    .lineLimit(1)
+                                    .fixedSize(horizontal: true, vertical: false)
+                                    .padding(.horizontal, 5)
+                                    .padding(.vertical, 1.5)
+                                    .background(Capsule().fill(palette.accentSoftFill))
+                            }
+                            if isSettled {
+                                Text("已结清")
+                                    .font(.system(size: 10, weight: .semibold))
+                                    .foregroundColor(palette.textTertiary)
+                                    .lineLimit(1)
+                                    .fixedSize(horizontal: true, vertical: false)
+                                    .padding(.horizontal, 5)
+                                    .padding(.vertical, 1.5)
+                                    .background(Capsule().fill(palette.surfaceSecondary))
+                            }
+                        }
+
+                        let metaParts: [String] = {
+                            var parts: [String] = []
+                            if let due = debt.dueDateMillis, due > 0 {
+                                parts.append("约定 \(YubraeTheme.formatDate(due, pattern: "yyyy-MM-dd"))")
+                            }
+                            if !isSettled && debt.settledAmountMicros > 0 {
+                                let settledStr = YubraeTheme.masked(
+                                    MoneyAmount.format(debt.settledAmountMicros, currencyCode: debt.currencyCode),
+                                    isMasked: masked
+                                )
+                                parts.append("已核销 \(settledStr)")
+                            }
+                            if !debt.note.isEmpty {
+                                parts.append(debt.note)
+                            }
+                            return parts
+                        }()
+                        if !metaParts.isEmpty {
+                            Text(metaParts.joined(separator: " · "))
+                                .font(.caption2)
+                                .foregroundColor(palette.textTertiary)
+                                .lineLimit(1)
+                        }
+                    }
+
+                    Spacer(minLength: 6)
+
+                    VStack(alignment: .trailing, spacing: 2) {
+                        Text(YubraeTheme.masked(MoneyAmount.format(displayAmount, currencyCode: debt.currencyCode, showCurrencyCode: true), isMasked: masked))
+                            .font(.subheadline.weight(.bold).monospacedDigit())
+                            .foregroundColor(isSettled ? palette.textSecondary : palette.textPrimary)
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
+                        if !isSettled && debt.settledAmountMicros > 0 {
+                            let totalStr = YubraeTheme.masked(MoneyAmount.format(debt.amountMicros, currencyCode: debt.currencyCode), isMasked: masked)
+                            Text("总额 \(totalStr)")
+                                .font(.caption2.monospacedDigit())
+                                .foregroundColor(palette.textTertiary)
+                                .lineLimit(1)
+                                .fixedSize(horizontal: true, vertical: false)
+                        }
+                    }
+                    .layoutPriority(1)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if !isSettled {
+                Button {
+                    activeSheet = .settleDebt(debt)
+                } label: {
+                    Text("核销")
+                        .font(.caption.weight(.semibold))
+                        .foregroundColor(palette.primary)
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(Capsule().fill(palette.accentSoftFill))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.vertical, 6)
     }
 
     // MARK: - Grouped Accounts
@@ -769,80 +950,122 @@ public struct AssetsView: View {
             sum + (netWorth.accountConvertedBalances[acc.id] ?? 0)
         }
         let isCollapsed = !isSearching && collapsedGroupSet.contains(group.rawValue)
+        let isGroupTargeted = !isSearching && targetedGroupDropCode == group.rawValue
+
+        let headerView = HStack(spacing: 8) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    store.toggleAssetGroupCollapsed(group.rawValue)
+                }
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: isCollapsed ? "chevron.right" : "chevron.down")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundColor(palette.textTertiary)
+                        .frame(width: 12)
+                    Image(systemName: group.sfSymbol)
+                        .font(.caption.weight(.semibold))
+                        .foregroundColor(palette.primary)
+                    Text(group.labelZh)
+                        .font(.caption.weight(.semibold))
+                        .foregroundColor(palette.textSecondary)
+                        .lineLimit(1)
+                    Text("\(accounts.count)")
+                        .font(.system(size: 10, weight: .semibold).monospacedDigit())
+                        .foregroundColor(palette.textTertiary)
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 1.5)
+                        .background(Capsule().fill(palette.surfaceSecondary))
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            Spacer(minLength: 6)
+
+            Text(YubraeTheme.masked(MoneyAmount.format(groupSubtotal, currencyCode: activeDisplayCurrency), isMasked: masked))
+                .font(.caption.weight(.semibold).monospacedDigit())
+                .foregroundColor(groupSubtotal < 0 ? palette.expenseColor : palette.textSecondary)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+
+            Button {
+                activeSheet = .editAccount(nil, group.rawValue)
+            } label: {
+                Image(systemName: "plus.circle.fill")
+                    .font(.system(size: 16))
+                    .foregroundColor(palette.primary.opacity(0.85))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("在\(group.labelZh)新建账户")
+        }
+        .padding(.horizontal, 6)
+        .padding(.vertical, 4)
+        .contentShape(Rectangle())
 
         return VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                Button {
-                    withAnimation(.easeInOut(duration: 0.2)) {
-                        store.toggleAssetGroupCollapsed(group.rawValue)
-                    }
-                } label: {
-                    HStack(spacing: 5) {
-                        Image(systemName: isCollapsed ? "chevron.right" : "chevron.down")
-                            .font(.system(size: 10, weight: .bold))
-                            .foregroundColor(palette.textTertiary)
-                            .frame(width: 12)
-                        Image(systemName: group.sfSymbol)
-                            .font(.caption.weight(.semibold))
-                            .foregroundColor(palette.primary)
-                        Text(group.labelZh)
-                            .font(.caption.weight(.semibold))
-                            .foregroundColor(palette.textSecondary)
-                            .lineLimit(1)
-                        Text("\(accounts.count)")
-                            .font(.system(size: 10, weight: .semibold).monospacedDigit())
-                            .foregroundColor(palette.textTertiary)
-                            .lineLimit(1)
-                            .fixedSize(horizontal: true, vertical: false)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 1.5)
-                            .background(Capsule().fill(palette.surfaceSecondary))
-                    }
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-
-                Spacer(minLength: 6)
-
-                Text(YubraeTheme.masked(MoneyAmount.format(groupSubtotal, currencyCode: activeDisplayCurrency), isMasked: masked))
-                    .font(.caption.weight(.semibold).monospacedDigit())
-                    .foregroundColor(groupSubtotal < 0 ? palette.expenseColor : palette.textSecondary)
-                    .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
-
-                Button {
-                    activeSheet = .editAccount(nil, group.rawValue)
-                } label: {
-                    Image(systemName: "plus.circle.fill")
-                        .font(.system(size: 16))
-                        .foregroundColor(palette.primary.opacity(0.85))
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("在\(group.labelZh)新建账户")
-            }
-            .padding(.horizontal, 4)
+            applyGroupDragAndDrop(headerView, group: group, isTargeted: isGroupTargeted)
 
             if !isCollapsed {
                 YubraeCard(palette: palette, padding: 0) {
                     VStack(spacing: 0) {
                         ForEach(accounts) { acc in
-                            accountRowLink(acc)
+                            accountRowLink(acc, in: group)
                             if acc.id != accounts.last?.id {
                                 Divider().padding(.leading, 64)
                             }
                         }
                     }
                 }
+                .overlay(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .strokeBorder(isGroupTargeted ? palette.primary.opacity(0.55) : Color.clear, lineWidth: 1.5)
+                        .allowsHitTesting(false)
+                )
                 .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
     }
 
-    private func accountRowLink(_ acc: AccountDto) -> some View {
+    @ViewBuilder
+    private func applyGroupDragAndDrop<Content: View>(
+        _ content: Content,
+        group: AccountGroup,
+        isTargeted: Bool
+    ) -> some View {
+        if isSearching {
+            content
+        } else {
+            content
+                .background(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(isTargeted ? palette.accentSoftFill.opacity(0.65) : Color.clear)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .strokeBorder(isTargeted ? palette.primary.opacity(0.65) : Color.clear, lineWidth: 1.5)
+                        .allowsHitTesting(false)
+                )
+                .draggable("group:\(group.rawValue)")
+                .dropDestination(for: String.self) { items, _ in
+                    handleGroupDrop(items: items, targetGroup: group)
+                } isTargeted: { targeted in
+                    if targeted {
+                        targetedGroupDropCode = group.rawValue
+                    } else if targetedGroupDropCode == group.rawValue {
+                        targetedGroupDropCode = nil
+                    }
+                }
+        }
+    }
+
+    private func accountRowLink(_ acc: AccountDto, in group: AccountGroup) -> some View {
         let isHidden = hiddenAccountIdSet.contains(acc.id)
         let isCredit = acc.groupType.uppercased() == AccountGroup.CREDIT
 
-        return NavigationLink {
+        let rowLink = NavigationLink {
             AccountDetailView(store: store, accountId: acc.id)
         } label: {
             accountRowContent(acc, isHidden: isHidden, isCredit: isCredit)
@@ -887,6 +1110,40 @@ public struct AssetsView: View {
             } label: {
                 Label("删除账户", systemImage: "trash")
             }
+        }
+
+        return applyAccountDragAndDrop(rowLink, account: acc, group: group)
+    }
+
+    @ViewBuilder
+    private func applyAccountDragAndDrop<Content: View>(
+        _ content: Content,
+        account: AccountDto,
+        group: AccountGroup
+    ) -> some View {
+        if isSearching {
+            content
+        } else {
+            let isTargeted = targetedAccountDropId == account.id
+            content
+                .background(isTargeted ? palette.accentSoftFill.opacity(0.42) : Color.clear)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .strokeBorder(isTargeted ? palette.primary.opacity(0.65) : Color.clear, lineWidth: 1.5)
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 2)
+                        .allowsHitTesting(false)
+                )
+                .draggable("acct:\(account.id)")
+                .dropDestination(for: String.self) { items, _ in
+                    handleAccountDrop(items: items, targetAccount: account, targetGroup: group)
+                } isTargeted: { targeted in
+                    if targeted {
+                        targetedAccountDropId = account.id
+                    } else if targetedAccountDropId == account.id {
+                        targetedAccountDropId = nil
+                    }
+                }
         }
     }
 
@@ -1136,6 +1393,70 @@ public struct AssetsView: View {
         }
     }
 
+    private func handleAccountDrop(
+        items: [String],
+        targetAccount: AccountDto,
+        targetGroup: AccountGroup
+    ) -> Bool {
+        targetedAccountDropId = nil
+        guard let payload = items.first else { return false }
+        if payload.hasPrefix("group:") {
+            return handleGroupDrop(items: items, targetGroup: targetGroup)
+        }
+        guard payload.hasPrefix("acct:"),
+              let sourceId = Int64(String(payload.dropFirst("acct:".count))),
+              sourceId != targetAccount.id else {
+            return false
+        }
+        let currentSorted = store.accounts.sorted { lhs, rhs in
+            if lhs.sortOrder != rhs.sortOrder { return lhs.sortOrder < rhs.sortOrder }
+            return lhs.id < rhs.id
+        }
+        guard let sourceIndex = currentSorted.firstIndex(where: { $0.id == sourceId }),
+              let targetIndex = currentSorted.firstIndex(where: { $0.id == targetAccount.id }),
+              currentSorted[sourceIndex].groupType.uppercased() == targetAccount.groupType.uppercased() else {
+            return false
+        }
+        var orderedIds = currentSorted.map(\.id)
+        let movedId = orderedIds.remove(at: sourceIndex)
+        orderedIds.insert(movedId, at: targetIndex)
+        withAnimation(.easeInOut(duration: 0.2)) {
+            store.reorderAccounts(orderedIds: orderedIds)
+        }
+        triggerLightHaptic()
+        return true
+    }
+
+    private func handleGroupDrop(items: [String], targetGroup: AccountGroup) -> Bool {
+        targetedGroupDropCode = nil
+        guard let payload = items.first,
+              payload.hasPrefix("group:") else {
+            return false
+        }
+        let sourceCode = String(payload.dropFirst("group:".count)).uppercased()
+        let targetCode = targetGroup.rawValue
+        guard sourceCode != targetCode else { return false }
+
+        var order = orderedGroups.map(\.rawValue)
+        guard let sourceIndex = order.firstIndex(of: sourceCode),
+              let targetIndex = order.firstIndex(of: targetCode) else {
+            return false
+        }
+        let moved = order.remove(at: sourceIndex)
+        order.insert(moved, at: targetIndex)
+        withAnimation(.easeInOut(duration: 0.2)) {
+            store.updateAssetGroupOrder(order)
+        }
+        triggerLightHaptic()
+        return true
+    }
+
+    private func triggerLightHaptic() {
+        let generator = UIImpactFeedbackGenerator(style: .light)
+        generator.prepare()
+        generator.impactOccurred()
+    }
+
     private func matchesAccountSearch(_ acc: AccountDto, query: String) -> Bool {
         let curName = CurrencyCatalog.find(acc.currencyCode).nameZh
         let groupName = AccountGroup.labelZh(for: acc.groupType)
@@ -1382,7 +1703,6 @@ struct AccountEditorSheet: View {
     @State private var selectedIcon: String
     @State private var selectedColorHex: Int64
     @State private var includeInNetWorth: Bool
-    @State private var showCalibration = false
     @State private var showDeleteConfirm = false
 
     private let iconOptions = ["wallet", "chat", "account_balance_wallet", "account_balance", "credit_card", "payments", "directions_bus", "attach_money", "euro", "currency_pound", "trending_up", "savings"]
@@ -1523,13 +1843,7 @@ struct AccountEditorSheet: View {
                 }
 
                 if editingAccount != nil {
-                    Section("快捷操作") {
-                        Button {
-                            showCalibration = true
-                        } label: {
-                            Label("校准余额", systemImage: "slider.horizontal.3")
-                        }
-                        .buttonStyle(.borderless)
+                    Section {
                         Button(role: .destructive) {
                             showDeleteConfirm = true
                         } label: {
@@ -1557,12 +1871,6 @@ struct AccountEditorSheet: View {
                     Button("完成") {
                         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
                     }
-                }
-            }
-            .sheet(isPresented: $showCalibration) {
-                if let existing = editingAccount.flatMap({ store.account(byId: $0.id) }) ?? editingAccount {
-                    BalanceCalibrationSheet(store: store, account: existing)
-                        .yubraeSheetStyle(palette: palette)
                 }
             }
             .sheet(isPresented: $showDeleteConfirm) {
@@ -1898,54 +2206,216 @@ private struct HiddenAssetsManagerSheet: View {
 
 // MARK: - Debt & Reimbursement Sheets
 
-private struct AddDebtSheet: View {
+private struct DebtEditorSheet: View {
     @ObservedObject var store: LedgerStore
+    let editingDebt: DebtRecordDto?
+
     @Environment(\.dismiss) private var dismiss
 
-    @State private var direction: String = DebtDirection.LEND
-    @State private var personName: String = ""
-    @State private var amountText: String = ""
+    @State private var direction: String
+    @State private var personName: String
+    @State private var amountText: String
+    @State private var settledAmountText: String
     @State private var currencyCode: String
+    @State private var hasDueDate: Bool
+    @State private var dueDate: Date
     @State private var accountId: Int64?
-    @State private var syncBalance = true
-    @State private var note: String = ""
+    @State private var syncBalance: Bool
+    @State private var includeInNetWorth: Bool
+    @State private var note: String
+    @State private var showDeleteConfirm = false
 
-    init(store: LedgerStore) {
+    init(store: LedgerStore, editingDebt: DebtRecordDto? = nil) {
         self.store = store
-        _currencyCode = State(initialValue: store.settings.baseCurrency)
-        _accountId = State(initialValue: store.activeAccounts.first?.id)
+        self.editingDebt = editingDebt
+        if let debt = editingDebt {
+            let digits = CurrencyCatalog.find(debt.currencyCode).minorDigits
+            _direction = State(initialValue: debt.direction)
+            _personName = State(initialValue: debt.personName)
+            _amountText = State(initialValue: MoneyAmount.formatPlain(debt.amountMicros, minorDigits: digits, grouping: false))
+            _settledAmountText = State(initialValue: MoneyAmount.formatPlain(debt.settledAmountMicros, minorDigits: digits, grouping: false))
+            _currencyCode = State(initialValue: CurrencyCatalog.normalize(debt.currencyCode))
+            if let due = debt.dueDateMillis, due > 0 {
+                _hasDueDate = State(initialValue: true)
+                _dueDate = State(initialValue: Date(timeIntervalSince1970: Double(due) / 1000.0))
+            } else {
+                _hasDueDate = State(initialValue: false)
+                _dueDate = State(initialValue: Calendar.current.date(byAdding: .day, value: 30, to: Date()) ?? Date())
+            }
+            _accountId = State(initialValue: debt.accountId)
+            _syncBalance = State(initialValue: false)
+            _includeInNetWorth = State(initialValue: debt.includeInNetWorth)
+            _note = State(initialValue: debt.note)
+        } else {
+            _direction = State(initialValue: DebtDirection.LEND)
+            _personName = State(initialValue: "")
+            _amountText = State(initialValue: "")
+            _settledAmountText = State(initialValue: "0")
+            _currencyCode = State(initialValue: store.settings.baseCurrency)
+            _hasDueDate = State(initialValue: false)
+            _dueDate = State(initialValue: Calendar.current.date(byAdding: .day, value: 30, to: Date()) ?? Date())
+            _accountId = State(initialValue: store.activeAccounts.first?.id)
+            _syncBalance = State(initialValue: true)
+            _includeInNetWorth = State(initialValue: false)
+            _note = State(initialValue: "")
+        }
+    }
+
+    private var isEditing: Bool {
+        editingDebt != nil
+    }
+
+    private var parsedTotalMicros: Int64? {
+        MoneyAmount.parseToMicros(amountText)
+    }
+
+    private var parsedSettledMicros: Int64? {
+        guard isEditing else { return 0 }
+        let trimmed = settledAmountText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return 0 }
+        return MoneyAmount.parseToMicros(trimmed)
+    }
+
+    private var selectableAccounts: [AccountDto] {
+        var list = store.activeAccounts
+        if let linkedId = editingDebt?.accountId,
+           !list.contains(where: { $0.id == linkedId }),
+           let archivedAcc = store.account(byId: linkedId) {
+            list.append(archivedAcc)
+        }
+        return list
+    }
+
+    private var canSave: Bool {
+        let personOk = !personName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let totalOk = (parsedTotalMicros ?? 0) > 0
+        let settledOk = !isEditing || (parsedSettledMicros ?? -1) >= 0
+        return personOk && totalOk && settledOk
     }
 
     var body: some View {
         NavigationStack {
             Form {
-                Picker("借贷方向", selection: $direction) {
-                    Text("借出（别人欠我）").tag(DebtDirection.LEND)
-                    Text("借入（我欠别人）").tag(DebtDirection.BORROW)
-                }
-                .pickerStyle(.segmented)
+                Section("借贷信息") {
+                    Picker("借贷方向", selection: $direction) {
+                        Text("借出（别人欠我）").tag(DebtDirection.LEND)
+                        Text("借入（我欠别人）").tag(DebtDirection.BORROW)
+                    }
+                    .pickerStyle(.segmented)
 
-                TextField("对方姓名", text: $personName)
-                TextField("金额", text: $amountText)
-                    .keyboardType(.decimalPad)
-                Picker("币种", selection: $currencyCode) {
-                    ForEach(CurrencyCatalog.all) { info in
-                        Text("\(info.flag) \(info.code)").tag(info.code)
+                    TextField("往来人姓名", text: $personName)
+
+                    HStack(spacing: 8) {
+                        Text("借贷总额")
+                            .lineLimit(1)
+                        Spacer(minLength: 8)
+                        TextField("0.00", text: $amountText)
+                            .keyboardType(.decimalPad)
+                            .multilineTextAlignment(.trailing)
+                    }
+
+                    if isEditing {
+                        HStack(spacing: 8) {
+                            Text("已核销金额")
+                                .lineLimit(1)
+                            Spacer(minLength: 8)
+                            TextField("0.00", text: $settledAmountText)
+                                .keyboardType(.decimalPad)
+                                .multilineTextAlignment(.trailing)
+                        }
+
+                        if let total = parsedTotalMicros, total > 0,
+                           let rawSettled = parsedSettledMicros, rawSettled >= 0 {
+                            let clampedSettled = min(rawSettled, total)
+                            let remaining = max(Int64(0), total - clampedSettled)
+                            let willBeSettled = clampedSettled >= total
+                            HStack(spacing: 8) {
+                                Text("剩余未结清")
+                                    .font(.footnote)
+                                    .foregroundColor(.secondary)
+                                Spacer(minLength: 8)
+                                Text(MoneyAmount.format(remaining, currencyCode: currencyCode, showCurrencyCode: true))
+                                    .font(.footnote.weight(.semibold).monospacedDigit())
+                                    .foregroundColor(willBeSettled ? .secondary : .primary)
+                                Text(willBeSettled ? "已结清" : "进行中")
+                                    .font(.caption2.weight(.semibold))
+                                    .foregroundColor(willBeSettled ? .green : .accentColor)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(Capsule().fill((willBeSettled ? Color.green : Color.accentColor).opacity(0.14)))
+                            }
+                        }
+                    }
+
+                    Picker("币种", selection: $currencyCode) {
+                        ForEach(CurrencyCatalog.all) { info in
+                            Text("\(info.flag) \(info.code) · \(info.nameZh)").tag(info.code)
+                        }
                     }
                 }
-                Picker("关联账户", selection: Binding(
-                    get: { accountId ?? 0 },
-                    set: { accountId = $0 > 0 ? $0 : nil }
-                )) {
-                    Text("不关联账户").tag(Int64(0))
-                    ForEach(store.activeAccounts) { acc in
-                        Text(acc.name).tag(acc.id)
+
+                Section {
+                    Toggle("计入总资产 / 净资产", isOn: $includeInNetWorth)
+                } footer: {
+                    Text("开启后，未结清的借出款项将计入总资产，未结清的借入款项将计入总负债；核销还款后净资产实时联动。")
+                }
+
+                Section {
+                    Picker("关联账户", selection: Binding(
+                        get: { accountId ?? 0 },
+                        set: { accountId = $0 > 0 ? $0 : nil }
+                    )) {
+                        Text("不关联账户").tag(Int64(0))
+                        ForEach(selectableAccounts) { acc in
+                            Text(acc.archived ? "\(acc.name)（已归档）" : acc.name).tag(acc.id)
+                        }
+                    }
+
+                    if !isEditing {
+                        Toggle("同步增减账户余额", isOn: $syncBalance)
+                            .disabled(accountId == nil)
+                    }
+                } footer: {
+                    if isEditing {
+                        Text("仅更新借贷记录，不改动历史账户流水。")
+                    } else if accountId != nil {
+                        Text("开启后将在关联账户自动同步一笔借出支出或借入收入。")
+                    } else {
+                        Text("未关联账户时仅保存借贷往来记录，不影响账户余额。")
                     }
                 }
-                Toggle("同步扣减/增加账户余额", isOn: $syncBalance)
-                TextField("备注（可选）", text: $note)
+
+                Section("约定还款日与备注") {
+                    Toggle("设置约定还款日", isOn: $hasDueDate)
+                    if hasDueDate {
+                        DatePicker("约定还款日", selection: $dueDate, displayedComponents: .date)
+                        Button(role: .destructive) {
+                            hasDueDate = false
+                        } label: {
+                            Label("清除约定还款日", systemImage: "xmark.circle")
+                        }
+                        .buttonStyle(.borderless)
+                    }
+                    TextField("备注（可选）", text: $note)
+                }
+
+                if editingDebt != nil {
+                    Section {
+                        Button(role: .destructive) {
+                            showDeleteConfirm = true
+                        } label: {
+                            HStack {
+                                Spacer()
+                                Label("删除该借贷记录", systemImage: "trash")
+                                    .fontWeight(.semibold)
+                                Spacer()
+                            }
+                        }
+                        .buttonStyle(.borderless)
+                    }
+                }
             }
-            .navigationTitle("新增借贷记录")
+            .navigationTitle(isEditing ? "编辑借贷记录" : "新增借贷记录")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -1953,20 +2423,10 @@ private struct AddDebtSheet: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("保存") {
-                        guard let micros = MoneyAmount.parseToMicros(amountText), micros > 0 else { return }
-                        let dto = DebtRecordDto(
-                            direction: direction,
-                            personName: personName.trimmingCharacters(in: .whitespacesAndNewlines),
-                            amountMicros: micros,
-                            currencyCode: currencyCode,
-                            accountId: accountId,
-                            note: note.trimmingCharacters(in: .whitespacesAndNewlines)
-                        )
-                        _ = store.saveDebt(dto, syncAccountBalance: syncBalance)
-                        store.toastMessage = "已记录借贷往来"
-                        dismiss()
+                        saveDebtRecord()
                     }
-                    .disabled(personName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || (MoneyAmount.parseToMicros(amountText) ?? 0) <= 0)
+                    .fontWeight(.semibold)
+                    .disabled(!canSave)
                 }
                 ToolbarItemGroup(placement: .keyboard) {
                     Spacer()
@@ -1975,7 +2435,58 @@ private struct AddDebtSheet: View {
                     }
                 }
             }
+            .alert("删除该借贷记录？", isPresented: $showDeleteConfirm) {
+                Button("确认删除", role: .destructive) {
+                    if let existing = editingDebt {
+                        store.deleteDebt(id: existing.id)
+                        store.toastMessage = "已删除借贷记录"
+                        dismiss()
+                    }
+                }
+                Button("取消", role: .cancel) {}
+            } message: {
+                Text("删除后将移除与「\(editingDebt?.personName ?? "")」的借贷往来，不会改动历史账户流水，且无法撤销。")
+            }
         }
+    }
+
+    private func saveDebtRecord() {
+        let trimmedPerson = personName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedPerson.isEmpty,
+              let totalMicros = parsedTotalMicros,
+              totalMicros > 0 else {
+            return
+        }
+        let settledMicros: Int64
+        if isEditing {
+            guard let parsedSettled = parsedSettledMicros, parsedSettled >= 0 else { return }
+            settledMicros = min(parsedSettled, totalMicros)
+        } else {
+            settledMicros = 0
+        }
+        let resolvedStatus = settledMicros >= totalMicros ? DebtStatus.SETTLED : DebtStatus.OPEN
+        let resolvedDueDateMillis: Int64? = hasDueDate
+            ? Int64((dueDate.timeIntervalSince1970 * 1000.0).rounded())
+            : nil
+
+        let dto = DebtRecordDto(
+            id: editingDebt?.id ?? 0,
+            direction: direction,
+            personName: trimmedPerson,
+            amountMicros: totalMicros,
+            settledAmountMicros: settledMicros,
+            currencyCode: currencyCode,
+            accountId: accountId,
+            dueDateMillis: resolvedDueDateMillis,
+            note: note.trimmingCharacters(in: .whitespacesAndNewlines),
+            status: resolvedStatus,
+            createdAt: editingDebt?.createdAt ?? 0,
+            updatedAt: 0,
+            includeInNetWorth: includeInNetWorth
+        )
+        _ = store.saveDebt(dto, syncAccountBalance: isEditing ? false : (syncBalance && accountId != nil))
+        store.toastMessage = isEditing ? "已保存借贷修改" : "已记录借贷往来"
+        dismiss()
     }
 }
 

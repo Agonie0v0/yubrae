@@ -36,8 +36,8 @@ android {
         applicationId = "com.yubrae.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1002002
-        versionName = "1.2.2"
+        versionCode = 1003000
+        versionName = "1.3.0"
 
         buildConfigField("String", "GITHUB_OWNER", "\"Agonie0v0\"")
         buildConfigField("String", "GITHUB_REPO", "\"yubrae\"")

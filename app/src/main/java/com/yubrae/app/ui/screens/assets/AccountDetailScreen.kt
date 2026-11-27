@@ -243,7 +243,6 @@ fun AccountDetailScreen(
     // 弹窗与菜单状态
     var showTopMenu by remember { mutableStateOf(false) }
     var showEditDialog by remember { mutableStateOf(false) }
-    var showNoteDialog by remember { mutableStateOf(false) }
     var showCalibrateDialog by remember { mutableStateOf(false) }
     var showDeleteDialog by remember { mutableStateOf(false) }
     var showAddInstallmentDialog by remember { mutableStateOf(false) }
@@ -480,22 +479,6 @@ fun AccountDetailScreen(
                                     }
                                 )
                                 DropdownMenuItem(
-                                    leadingIcon = { Icon(Icons.Rounded.Edit, contentDescription = null) },
-                                    text = { Text("编辑账户") },
-                                    onClick = {
-                                        showTopMenu = false
-                                        showEditDialog = true
-                                    }
-                                )
-                                DropdownMenuItem(
-                                    leadingIcon = { Icon(Icons.Rounded.Tune, contentDescription = null) },
-                                    text = { Text("校准余额") },
-                                    onClick = {
-                                        showTopMenu = false
-                                        showCalibrateDialog = true
-                                    }
-                                )
-                                DropdownMenuItem(
                                     leadingIcon = {
                                         Icon(
                                             imageVector = if (account.archived) Icons.Rounded.Unarchive else Icons.Rounded.Archive,
@@ -579,8 +562,8 @@ fun AccountDetailScreen(
             ),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            // 1. 顶部 Hero 信息卡（余额、备注快捷编辑、当前时间范围3列汇总、4枚防溢出快捷操作按钮）
-            item(key = "account_hero") {
+            // 1. 顶部 Hero 信息卡（余额、只读备注徽条、当前时间范围3列汇总、3枚防溢出快捷操作按钮）
+            item(key = "account_hero", contentType = "account_hero") {
                 AccountDetailHeroCard(
                     account = account,
                     displayCurrency = displayCurrency,
@@ -589,20 +572,18 @@ fun AccountDetailScreen(
                     periodInflowMicros = periodInflowMicros,
                     periodOutflowMicros = periodOutflowMicros,
                     privacyMasked = privacyMasked,
-                    onClickNote = { showNoteDialog = true },
                     onQuickRecord = onQuickRecord,
                     onQuickTransferOrRepay = if (account.groupType == AccountGroup.CREDIT) {
                         onQuickRepayCredit
                     } else {
                         onQuickTransfer
                     },
-                    onCalibrate = { showCalibrateDialog = true },
-                    onEditAccount = { showEditDialog = true }
+                    onCalibrate = { showCalibrateDialog = true }
                 )
             }
 
             // 2. 账户余额走势图（7天 / 30天 / 90天 / 180天 + 最高/最低/净变动 + 触控选点浮层）
-            item(key = "balance_trend_chart") {
+            item(key = "balance_trend_chart", contentType = "balance_trend_chart") {
                 AccountBalanceTrendCard(
                     points = dailyTrendPoints,
                     currencyCode = account.currencyCode,
@@ -615,7 +596,7 @@ fun AccountDetailScreen(
 
             // 3. 信用卡真实账期面板 + 分期管理
             if (account.groupType == AccountGroup.CREDIT) {
-                item(key = "credit_quota_panel") {
+                item(key = "credit_quota_panel", contentType = "credit_quota_panel") {
                     val cycleSummary = remember(account, transactions) {
                         LedgerAnalytics.computeCreditBillingCycleSummary(account, transactions)
                     }
@@ -626,12 +607,11 @@ fun AccountDetailScreen(
                         cycleSpendMicros = cycleSummary.cycleSpendMicros,
                         cycleRepaidMicros = cycleSummary.cycleRepaidMicros,
                         zone = zone,
-                        privacyMasked = privacyMasked,
-                        onRepayClick = onQuickRepayCredit
+                        privacyMasked = privacyMasked
                     )
                 }
 
-                item(key = "credit_installments_panel") {
+                item(key = "credit_installments_panel", contentType = "credit_installments_panel") {
                     InstallmentsManagementCard(
                         account = account,
                         installments = accountInstallments,
@@ -645,7 +625,7 @@ fun AccountDetailScreen(
             }
 
             // 4. 成熟的历史账单工作台控制区（按月/按年/全部 + 搜索 + 类型胶囊 + 多选开关）
-            item(key = "tx_workbench_header") {
+            item(key = "tx_workbench_header", contentType = "tx_workbench_header") {
                 AccountHistoryWorkbenchCard(
                     periodMode = periodMode,
                     selectedMonth = selectedMonth,
@@ -685,7 +665,7 @@ fun AccountDetailScreen(
 
             // 5. 按日分组流水列表或空状态
             if (groupedDayTransactions.isEmpty()) {
-                item(key = "empty_account_tx") {
+                item(key = "empty_account_tx", contentType = "empty_state") {
                     when {
                         hasActiveFilter -> EmptyStateCard(
                             icon = Icons.Rounded.Search,
@@ -719,7 +699,7 @@ fun AccountDetailScreen(
                 }
             } else {
                 groupedDayTransactions.forEach { (date, dayTxs) ->
-                    item(key = "day_$date") {
+                    item(key = "day_$date", contentType = "day_tx_group") {
                         AccountDayTransactionGroupCard(
                             date = date,
                             account = account,
@@ -766,23 +746,6 @@ fun AccountDetailScreen(
                 }
             }
         }
-    }
-
-    // 快捷编辑账户备注弹窗
-    if (showNoteDialog) {
-        QuickEditAccountNoteDialog(
-            account = account,
-            onSave = { newNote ->
-                onEditAccount(
-                    account.copy(
-                        note = newNote.trim(),
-                        updatedAt = System.currentTimeMillis()
-                    )
-                )
-                showNoteDialog = false
-            },
-            onDismiss = { showNoteDialog = false }
-        )
     }
 
     // 编辑账户弹窗
@@ -957,24 +920,26 @@ private fun AccountDetailHeroCard(
     periodInflowMicros: Long,
     periodOutflowMicros: Long,
     privacyMasked: Boolean,
-    onClickNote: () -> Unit,
     onQuickRecord: () -> Unit,
     onQuickTransferOrRepay: () -> Unit,
-    onCalibrate: () -> Unit,
-    onEditAccount: () -> Unit
+    onCalibrate: () -> Unit
 ) {
     val semantic = KairoTheme.semantic
     val accentColor = Color(account.colorHex)
-    val gradientColors = if (semantic.isDark) {
-        listOf(
-            accentColor.copy(alpha = 0.28f),
-            MaterialTheme.colorScheme.surfaceContainerHigh
-        )
-    } else {
-        listOf(
-            accentColor.copy(alpha = 0.16f),
-            accentColor.copy(alpha = 0.05f)
-        )
+    val surfaceContainerHigh = MaterialTheme.colorScheme.surfaceContainerHigh
+    val heroGradientBrush = remember(accentColor, semantic.isDark, surfaceContainerHigh) {
+        val gradientColors = if (semantic.isDark) {
+            listOf(
+                accentColor.copy(alpha = 0.28f),
+                surfaceContainerHigh
+            )
+        } else {
+            listOf(
+                accentColor.copy(alpha = 0.16f),
+                accentColor.copy(alpha = 0.05f)
+            )
+        }
+        Brush.linearGradient(colors = gradientColors)
     }
     val pillColor = if (semantic.isDark) {
         MaterialTheme.colorScheme.surfaceContainerLowest.copy(alpha = 0.74f)
@@ -984,6 +949,7 @@ private fun AccountDetailHeroCard(
     val isForeign = !account.currencyCode.equals(displayCurrency, ignoreCase = true)
     val periodNetMicros = periodInflowMicros - periodOutflowMicros
     val isCredit = account.groupType == AccountGroup.CREDIT
+    val trimmedNote = account.note.trim()
 
     Surface(
         shape = RoundedCornerShape(24.dp),
@@ -993,7 +959,7 @@ private fun AccountDetailHeroCard(
     ) {
         Box(
             modifier = Modifier
-                .background(Brush.linearGradient(colors = gradientColors))
+                .background(heroGradientBrush)
                 .padding(16.dp)
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -1094,47 +1060,36 @@ private fun AccountDetailHeroCard(
                     }
                 }
 
-                // 可点击快捷编辑的账户备注条
-                Surface(
-                    shape = RoundedCornerShape(12.dp),
-                    color = pillColor,
-                    border = BorderStroke(0.5.dp, accentColor.copy(alpha = 0.22f)),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(12.dp))
-                        .clickable(onClick = onClickNote)
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 11.dp, vertical = 9.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                // 清爽只读账户备注徽条（仅在备注非空时展示，修改统一走顶栏铅笔「编辑账户」）
+                if (trimmedNote.isNotEmpty()) {
+                    Surface(
+                        shape = RoundedCornerShape(12.dp),
+                        color = pillColor,
+                        border = BorderStroke(0.5.dp, accentColor.copy(alpha = 0.22f)),
+                        modifier = Modifier.fillMaxWidth()
                     ) {
-                        Icon(
-                            imageVector = Icons.Rounded.EditNote,
-                            contentDescription = null,
-                            tint = if (account.note.isNotBlank()) accentColor else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Text(
-                            text = account.note.ifBlank { "点击添加账户备注，如尾号、用途或免年费规则" },
-                            style = MaterialTheme.typography.bodySmall,
-                            color = if (account.note.isNotBlank()) {
-                                MaterialTheme.colorScheme.onSurface
-                            } else {
-                                MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f)
-                            },
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.weight(1f)
-                        )
-                        Icon(
-                            imageVector = Icons.Rounded.Edit,
-                            contentDescription = "编辑备注",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f),
-                            modifier = Modifier.size(14.dp)
-                        )
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 11.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.EditNote,
+                                contentDescription = null,
+                                tint = accentColor,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Text(
+                                text = trimmedNote,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
                     }
                 }
 
@@ -1184,7 +1139,7 @@ private fun AccountDetailHeroCard(
                     }
                 }
 
-                // 4 枚高质感防溢出快捷操作按钮
+                // 3 枚清爽宽裕的防溢出快捷操作按钮：记一笔 / 还信用卡(转账) / 校准余额
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -1218,17 +1173,6 @@ private fun AccountDetailHeroCard(
                         iconTint = MaterialTheme.colorScheme.primary,
                         borderColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.32f),
                         onClick = onCalibrate,
-                        modifier = Modifier.weight(1f)
-                    )
-                    HeroQuickActionTile(
-                        icon = Icons.Rounded.Edit,
-                        label = "编辑账户",
-                        containerColor = pillColor,
-                        contentColor = MaterialTheme.colorScheme.onSurface,
-                        iconBgColor = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.78f),
-                        iconTint = MaterialTheme.colorScheme.onSecondaryContainer,
-                        borderColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.32f),
-                        onClick = onEditAccount,
                         modifier = Modifier.weight(1f)
                     )
                 }
@@ -1337,67 +1281,6 @@ private fun HeroQuickActionTile(
                 maxLines = 1,
                 softWrap = false,
                 textAlign = TextAlign.Center
-            )
-        }
-    }
-}
-
-@Composable
-private fun QuickEditAccountNoteDialog(
-    account: AccountEntity,
-    onSave: (String) -> Unit,
-    onDismiss: () -> Unit
-) {
-    var noteText by remember(account.id, account.note) { mutableStateOf(account.note) }
-
-    YubraeDialog(
-        onDismissRequest = onDismiss,
-        title = "编辑账户备注",
-        subtitle = "${account.name} · ${AccountGroup.labelZh(account.groupType)}",
-        icon = Icons.Rounded.EditNote,
-        confirmButton = {
-            Button(
-                onClick = { onSave(noteText) },
-                shape = RoundedCornerShape(12.dp)
-            ) {
-                Text("保存", maxLines = 1, softWrap = false)
-            }
-        },
-        dismissButton = {
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                if (noteText.isNotEmpty()) {
-                    TextButton(
-                        onClick = { noteText = "" },
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Text("清空", maxLines = 1, softWrap = false)
-                    }
-                }
-                TextButton(
-                    onClick = onDismiss,
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Text("取消", maxLines = 1, softWrap = false)
-                }
-            }
-        }
-    ) {
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedTextField(
-                value = noteText,
-                onValueChange = { if (it.length <= 200) noteText = it },
-                label = { Text("账户备注") },
-                placeholder = { Text("例如：工资卡 · 尾号 8821 · 年刷 6 笔免年费") },
-                minLines = 2,
-                maxLines = 4,
-                shape = RoundedCornerShape(14.dp),
-                modifier = Modifier.fillMaxWidth()
-            )
-            Text(
-                text = "${noteText.length}/200",
-                style = MaterialTheme.typography.labelSmall.tabular(),
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.align(Alignment.End)
             )
         }
     }
@@ -1783,8 +1666,7 @@ private fun CreditAccountSummaryCard(
     cycleSpendMicros: Long,
     cycleRepaidMicros: Long,
     zone: ZoneId,
-    privacyMasked: Boolean,
-    onRepayClick: () -> Unit
+    privacyMasked: Boolean
 ) {
     val semantic = KairoTheme.semantic
     val limitMicros = account.creditLimitMicros.coerceAtLeast(0L)
@@ -2013,22 +1895,6 @@ private fun CreditAccountSummaryCard(
                         overflow = TextOverflow.Ellipsis
                     )
                 }
-            }
-
-            Button(
-                onClick = onRepayClick,
-                shape = CircleShape,
-                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Icon(Icons.Rounded.SwapHoriz, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                    text = "还信用卡",
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                    softWrap = false
-                )
             }
         }
     }

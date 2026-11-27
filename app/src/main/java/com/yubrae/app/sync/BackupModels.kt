@@ -245,7 +245,8 @@ data class DebtRecordDto(
     val note: String = "",
     val status: String = DebtStatus.OPEN,
     val createdAt: Long = 0L,
-    val updatedAt: Long = 0L
+    val updatedAt: Long = 0L,
+    val includeInNetWorth: Boolean = false
 )
 
 @Serializable
@@ -450,12 +451,12 @@ internal fun LedgerDto.toEntity() = LedgerEntity(
 
 internal fun DebtRecordEntity.toDto() = DebtRecordDto(
     id, direction, personName, amountMicros, settledAmountMicros, currencyCode,
-    accountId, dueDateMillis, note, status, createdAt, updatedAt
+    accountId, dueDateMillis, note, status, createdAt, updatedAt, includeInNetWorth
 )
 
 internal fun DebtRecordDto.toEntity() = DebtRecordEntity(
     id, direction, personName, amountMicros, settledAmountMicros, currencyCode,
-    accountId, dueDateMillis, note, status, createdAt, updatedAt
+    accountId, dueDateMillis, note, status, createdAt, updatedAt, includeInNetWorth
 )
 
 internal fun InstallmentPlanEntity.toDto() = InstallmentPlanDto(

@@ -4,12 +4,11 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -45,7 +44,6 @@ import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.DragHandle
-import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.ExpandLess
 import androidx.compose.material.icons.rounded.ExpandMore
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
@@ -77,6 +75,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -160,6 +159,7 @@ private data class AssetCompositionBucket(
     val color: Color
 )
 
+@Suppress("UNUSED_PARAMETER")
 @Composable
 fun AssetsScreen(
     viewModel: KairoMainViewModel,
@@ -181,7 +181,6 @@ fun AssetsScreen(
 ) {
     val uiState by viewModel.assetsUiState.collectAsStateWithLifecycle()
     val allAccounts by viewModel.allAccounts.collectAsStateWithLifecycle()
-    val allTransactions by viewModel.allTransactions.collectAsStateWithLifecycle()
     val settings by viewModel.settings.collectAsStateWithLifecycle()
     val privacyMasked = LocalPrivacyMasked.current
     val hasDetailCallback = onOpenAccountDetail !== DefaultOpenAccountDetail
@@ -190,10 +189,8 @@ fun AssetsScreen(
     val density = LocalDensity.current
     val scope = rememberCoroutineScope()
 
-    var actionAccount by remember { mutableStateOf<AccountEntity?>(null) }
     var editingAccount by remember { mutableStateOf<AccountEntity?>(null) }
     var createInitialGroup by remember { mutableStateOf<String?>(null) }
-    var calibrateTarget by remember { mutableStateOf<AccountEntity?>(null) }
     var deleteTarget by remember { mutableStateOf<AccountEntity?>(null) }
     var showDisplayCurrencyMenu by remember { mutableStateOf(false) }
     var showNetWorthMoreMenu by remember { mutableStateOf(false) }
@@ -207,6 +204,32 @@ fun AssetsScreen(
     LaunchedEffect(searchExpanded) {
         if (searchExpanded) {
             runCatching { searchFocusRequester.requestFocus() }
+        }
+    }
+
+    // 主列表分组与账户长按直接拖拽状态
+    val orderedSections = remember(settings.assetGroupOrder) {
+        resolveOrderedAssetSections(settings.assetGroupOrder)
+    }
+    val sectionById = remember { YimuAssetSections.associateBy { it.id } }
+    var draggingSectionId by remember { mutableStateOf<String?>(null) }
+    var sectionDragOffsetY by remember { mutableFloatStateOf(0f) }
+    var sectionDragStartOrder by remember { mutableStateOf<List<String>>(emptyList()) }
+    val localSectionIds = remember { orderedSections.map { it.id }.toMutableStateList() }
+    val sectionHeightsPx = remember { mutableStateMapOf<String, Int>() }
+    var isDraggingAnyAccount by remember { mutableStateOf(false) }
+    val sectionSpacingPx = remember(density) { with(density) { 10.dp.toPx() } }
+    val defaultSectionHeightPx = remember(density) { with(density) { 140.dp.toPx() } }
+    val sectionDragElevationPx = remember(density) { with(density) { 12.dp.toPx() } }
+    val sectionCardShape = remember { RoundedCornerShape(16.dp) }
+
+    LaunchedEffect(orderedSections) {
+        if (draggingSectionId == null) {
+            val targetIds = orderedSections.map { it.id }
+            if (localSectionIds.toList() != targetIds) {
+                localSectionIds.clear()
+                localSectionIds.addAll(targetIds)
+            }
         }
     }
 
@@ -238,6 +261,7 @@ fun AssetsScreen(
     val pullToHiddenConnection = remember(triggerThresholdPx, maxPullPx) {
         object : NestedScrollConnection {
             override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                if (draggingSectionId != null || isDraggingAnyAccount) return Offset.Zero
                 if (source == NestedScrollSource.UserInput && available.y < 0f && pullOffsetPx > 0f) {
                     val consumedY = available.y.coerceAtLeast(-pullOffsetPx)
                     pullOffsetPx = (pullOffsetPx + consumedY).coerceAtLeast(0f)
@@ -254,6 +278,7 @@ fun AssetsScreen(
                 available: Offset,
                 source: NestedScrollSource
             ): Offset {
+                if (draggingSectionId != null || isDraggingAnyAccount) return Offset.Zero
                 if (source != NestedScrollSource.UserInput) return Offset.Zero
                 val atTop = listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0
                 if (atTop && available.y > 0f) {
@@ -271,6 +296,7 @@ fun AssetsScreen(
             }
 
             override suspend fun onPreFling(available: Velocity): Velocity {
+                if (draggingSectionId != null || isDraggingAnyAccount) return Velocity.Zero
                 if (pullOffsetPx > 0f) {
                     settlePullGesture()
                 }
@@ -279,9 +305,6 @@ fun AssetsScreen(
         }
     }
 
-    val orderedSections = remember(settings.assetGroupOrder) {
-        resolveOrderedAssetSections(settings.assetGroupOrder)
-    }
     val collapsedSections = settings.collapsedAssetGroups
 
     val activeAccountsSorted = remember(allAccounts) {
@@ -321,11 +344,16 @@ fun AssetsScreen(
     }
 
     // 按折算后正资产计算资产构成进度条分桶（流动资金 / 理财投资 / 外币资产 / 借贷应收）
-    val compositionBuckets = remember(activeAccountsSorted, uiState.netWorth.accountConvertedBalances, semantic.isDark) {
+    val compositionBuckets = remember(
+        activeAccountsSorted,
+        uiState.netWorth.accountConvertedBalances,
+        uiState.debtReceivableIncludedMicros,
+        semantic.isDark
+    ) {
         var liquidMicros = 0L
         var investMicros = 0L
         var foreignMicros = 0L
-        var receivableMicros = 0L
+        var receivableMicros = uiState.debtReceivableIncludedMicros.coerceAtLeast(0L)
         activeAccountsSorted.forEach { acc ->
             if (!acc.includeInNetWorth) return@forEach
             val converted = uiState.netWorth.accountConvertedBalances[acc.id] ?: acc.balanceMicros
@@ -370,12 +398,142 @@ fun AssetsScreen(
         }
     }
 
-    val displayedSections = remember(orderedSections, filteredActiveAccounts) {
-        orderedSections.mapNotNull { section ->
+    val currentSectionOrderSnapshot = localSectionIds.toList()
+    val displayedSections = remember(currentSectionOrderSnapshot, filteredActiveAccounts) {
+        currentSectionOrderSnapshot.mapNotNull { id ->
+            val section = sectionById[id] ?: return@mapNotNull null
             val list = filteredActiveAccounts.filter { it.groupType in section.groupCodes }
             if (list.isNotEmpty()) section to list else null
         }
     }
+    val nonEmptySectionIds = remember(displayedSections) {
+        displayedSections.map { it.first.id }.toSet()
+    }
+    val latestNonEmptySectionIds by rememberUpdatedState(nonEmptySectionIds)
+    val canDragSections = !isSearchFiltering && displayedSections.size > 1
+
+    fun buildReorderedAccountIds(
+        changedSectionId: String,
+        newVisibleIdsInSection: List<Long>
+    ): List<Long> {
+        val orderedSpecs = resolveOrderedAssetSections(localSectionIds)
+        val result = ArrayList<Long>(activeAccountsSorted.size + archivedAccountsSorted.size)
+        val seen = HashSet<Long>()
+        orderedSpecs.forEach { spec ->
+            if (spec.id == changedSectionId) {
+                newVisibleIdsInSection.forEach { id ->
+                    if (seen.add(id)) result.add(id)
+                }
+                activeAccountsSorted.forEach { acc ->
+                    if (acc.groupType in spec.groupCodes && seen.add(acc.id)) {
+                        result.add(acc.id)
+                    }
+                }
+            } else {
+                activeAccountsSorted.forEach { acc ->
+                    if (acc.groupType in spec.groupCodes && seen.add(acc.id)) {
+                        result.add(acc.id)
+                    }
+                }
+            }
+        }
+        activeAccountsSorted.forEach { acc ->
+            if (seen.add(acc.id)) result.add(acc.id)
+        }
+        archivedAccountsSorted.forEach { acc ->
+            if (seen.add(acc.id)) result.add(acc.id)
+        }
+        return result
+    }
+
+    fun startSectionDrag(sectionId: String) {
+        if (isDraggingAnyAccount) return
+        draggingSectionId = sectionId
+        sectionDragOffsetY = 0f
+        sectionDragStartOrder = localSectionIds.toList()
+        pullOffsetPx = 0f
+        thresholdHapticFired = false
+        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+    }
+
+    fun dragSectionBy(sectionId: String, deltaY: Float) {
+        if (draggingSectionId != sectionId) return
+        sectionDragOffsetY += deltaY
+        while (sectionDragOffsetY > 0f) {
+            val visibleIds = localSectionIds.filter { it in latestNonEmptySectionIds }
+            val curVisIdx = visibleIds.indexOf(sectionId)
+            if (curVisIdx < 0 || curVisIdx >= visibleIds.lastIndex) break
+            val nextId = visibleIds[curVisIdx + 1]
+            val stepPx = (sectionHeightsPx[nextId]?.toFloat() ?: defaultSectionHeightPx) + sectionSpacingPx
+            if (sectionDragOffsetY >= stepPx * 0.55f) {
+                val fromAll = localSectionIds.indexOf(sectionId)
+                val toAll = localSectionIds.indexOf(nextId)
+                if (fromAll >= 0 && toAll >= 0 && fromAll != toAll) {
+                    val isFirstVisible = listState.layoutInfo.visibleItemsInfo.firstOrNull()?.key == "section_$sectionId"
+                    val anchorIdx = listState.firstVisibleItemIndex
+                    val anchorOff = listState.firstVisibleItemScrollOffset
+                    val moved = localSectionIds.removeAt(fromAll)
+                    localSectionIds.add(toAll, moved)
+                    if (isFirstVisible) {
+                        listState.requestScrollToItem(anchorIdx, anchorOff)
+                    }
+                    sectionDragOffsetY -= stepPx
+                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                } else {
+                    break
+                }
+            } else {
+                break
+            }
+        }
+        while (sectionDragOffsetY < 0f) {
+            val visibleIds = localSectionIds.filter { it in latestNonEmptySectionIds }
+            val curVisIdx = visibleIds.indexOf(sectionId)
+            if (curVisIdx <= 0) break
+            val prevId = visibleIds[curVisIdx - 1]
+            val stepPx = (sectionHeightsPx[prevId]?.toFloat() ?: defaultSectionHeightPx) + sectionSpacingPx
+            if (sectionDragOffsetY <= -stepPx * 0.55f) {
+                val fromAll = localSectionIds.indexOf(sectionId)
+                val toAll = localSectionIds.indexOf(prevId)
+                if (fromAll >= 0 && toAll >= 0 && fromAll != toAll) {
+                    val isFirstVisible = listState.layoutInfo.visibleItemsInfo.firstOrNull()?.key == "section_$sectionId"
+                    val anchorIdx = listState.firstVisibleItemIndex
+                    val anchorOff = listState.firstVisibleItemScrollOffset
+                    val moved = localSectionIds.removeAt(fromAll)
+                    localSectionIds.add(toAll, moved)
+                    if (isFirstVisible) {
+                        listState.requestScrollToItem(anchorIdx, anchorOff)
+                    }
+                    sectionDragOffsetY += stepPx
+                    haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                } else {
+                    break
+                }
+            } else {
+                break
+            }
+        }
+    }
+
+    fun finishSectionDrag(sectionId: String) {
+        if (draggingSectionId != sectionId) return
+        val finalOrder = localSectionIds.toList()
+        val changed = sectionDragStartOrder.isNotEmpty() && finalOrder != sectionDragStartOrder
+        draggingSectionId = null
+        sectionDragOffsetY = 0f
+        sectionDragStartOrder = emptyList()
+        if (changed) {
+            viewModel.updateAssetGroupOrder(finalOrder)
+        } else {
+            val latestIds = orderedSections.map { it.id }
+            if (localSectionIds.toList() != latestIds) {
+                localSectionIds.clear()
+                localSectionIds.addAll(latestIds)
+            }
+        }
+    }
+
+    val isDraggingAny = draggingSectionId != null || isDraggingAnyAccount
 
     Box(
         modifier = Modifier
@@ -385,7 +543,9 @@ fun AssetsScreen(
                 awaitPointerEventScope {
                     while (true) {
                         val event = awaitPointerEvent(PointerEventPass.Final)
-                        if (pullOffsetPx > 0f && event.changes.none { it.pressed }) {
+                        if (draggingSectionId == null && !isDraggingAnyAccount &&
+                            pullOffsetPx > 0f && event.changes.none { it.pressed }
+                        ) {
                             settlePullGesture()
                         }
                     }
@@ -394,13 +554,14 @@ fun AssetsScreen(
     ) {
         LazyColumn(
             state = listState,
+            userScrollEnabled = !isDraggingAny,
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(
                 bottom = contentPadding.calculateBottomPadding() + 84.dp
             ),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            // 1. 顶部净资产圆角大卡（净资产 + 总/负资产 + 资产构成进度条 + 4 枚快捷操作按钮）
+            // 1. 顶部净资产圆角大卡（净资产 + 总/负资产 + 资产构成进度条 + 3 枚快捷操作按钮）
             item(key = "net_worth_card", contentType = "net_worth_hero") {
                 Column(
                     modifier = Modifier
@@ -665,27 +826,74 @@ fun AssetsScreen(
                 displayedSections.forEach { (section, sectionAccounts) ->
                     item(key = "section_${section.id}", contentType = "account_group") {
                         val isCollapsed = if (isSearchFiltering) false else section.id in collapsedSections
-                        YimuAccountSectionCard(
-                            section = section,
-                            accounts = sectionAccounts,
-                            displayCurrency = uiState.displayCurrency,
-                            displayDigits = displayDigits,
-                            convertedMap = uiState.netWorth.accountConvertedBalances,
-                            hiddenAccountIds = uiState.hiddenAccountIds,
-                            privacyMasked = privacyMasked,
-                            collapsed = isCollapsed,
-                            onToggleCollapse = { viewModel.toggleAssetGroupCollapsed(section.id) },
-                            onQuickAddAccount = { createInitialGroup = section.defaultGroupType },
-                            onClickAccount = { acc ->
-                                if (hasDetailCallback) {
-                                    onOpenAccountDetail(acc)
-                                } else {
-                                    actionAccount = acc
+                        val isDraggingThisSection = draggingSectionId == section.id
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .zIndex(if (isDraggingThisSection) 5f else 0f)
+                                .padding(horizontal = 12.dp)
+                                .onSizeChanged { size ->
+                                    if (size.height > 0) {
+                                        sectionHeightsPx[section.id] = size.height
+                                    }
                                 }
-                            },
-                            onLongClickAccount = { acc -> actionAccount = acc },
-                            modifier = Modifier.padding(horizontal = 12.dp)
-                        )
+                                .graphicsLayer {
+                                    translationY = if (isDraggingThisSection) sectionDragOffsetY else 0f
+                                    scaleX = if (isDraggingThisSection) 1.015f else 1f
+                                    scaleY = if (isDraggingThisSection) 1.015f else 1f
+                                    shadowElevation = if (isDraggingThisSection) sectionDragElevationPx else 0f
+                                    shape = sectionCardShape
+                                    clip = false
+                                }
+                        ) {
+                            YimuAccountSectionCard(
+                                section = section,
+                                accounts = sectionAccounts,
+                                displayCurrency = uiState.displayCurrency,
+                                displayDigits = displayDigits,
+                                convertedMap = uiState.netWorth.accountConvertedBalances,
+                                hiddenAccountIds = uiState.hiddenAccountIds,
+                                privacyMasked = privacyMasked,
+                                collapsed = isCollapsed,
+                                isSearchFiltering = isSearchFiltering,
+                                canDragSection = canDragSections,
+                                isDraggingSection = isDraggingThisSection,
+                                onToggleCollapse = { viewModel.toggleAssetGroupCollapsed(section.id) },
+                                onQuickAddAccount = { createInitialGroup = section.defaultGroupType },
+                                onClickAccount = { acc ->
+                                    if (hasDetailCallback) {
+                                        onOpenAccountDetail(acc)
+                                    } else {
+                                        editingAccount = acc
+                                    }
+                                },
+                                onSectionDragStart = { startSectionDrag(section.id) },
+                                onSectionDragDelta = { deltaY -> dragSectionBy(section.id, deltaY) },
+                                onSectionDragFinish = { finishSectionDrag(section.id) },
+                                onAccountDraggingChanged = { dragging ->
+                                    isDraggingAnyAccount = dragging
+                                    if (dragging) {
+                                        pullOffsetPx = 0f
+                                        thresholdHapticFired = false
+                                    }
+                                },
+                                onReorderSectionAccounts = { reorderedVisibleIds ->
+                                    val fullOrderedIds = buildReorderedAccountIds(section.id, reorderedVisibleIds)
+                                    if (fullOrderedIds.isNotEmpty()) {
+                                        viewModel.reorderAccounts(fullOrderedIds)
+                                    }
+                                },
+                                modifier = if (isDraggingThisSection) {
+                                    Modifier.border(
+                                        width = 1.4.dp,
+                                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.65f),
+                                        shape = sectionCardShape
+                                    )
+                                } else {
+                                    Modifier
+                                }
+                            )
+                        }
                     }
                 }
             }
@@ -702,11 +910,28 @@ fun AssetsScreen(
                         hasDetailCallback = hasDetailCallback,
                         onToggleExpand = { archivedSectionExpanded = !archivedSectionExpanded },
                         onOpenDetail = { acc ->
-                            if (hasDetailCallback) onOpenAccountDetail(acc) else actionAccount = acc
+                            if (hasDetailCallback) onOpenAccountDetail(acc) else editingAccount = acc
                         },
                         onRestoreAccount = { acc -> viewModel.archiveAccount(acc.id, false) },
                         onDeleteAccount = { acc -> deleteTarget = acc },
                         modifier = Modifier.padding(horizontal = 12.dp)
+                    )
+                }
+            }
+
+            // 5. 列表最底部轻提示：直接长按拖动排序
+            if (!isSearchFiltering && displayedSections.isNotEmpty()) {
+                item(key = "asset_reorder_hint", contentType = "reorder_hint") {
+                    Text(
+                        text = "长按账户或分组标题可直接拖动排序",
+                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.5.sp),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.62f),
+                        textAlign = TextAlign.Center,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 6.dp)
                     )
                 }
             }
@@ -743,122 +968,7 @@ fun AssetsScreen(
         )
     }
 
-    // 账户长按快捷菜单弹窗（含还信用卡、隐藏此账户）
-    actionAccount?.let { acc ->
-        val balanceFormatted = formatPrivacyAmount(
-            privacyMasked,
-            MoneyAmount.format(acc.balanceMicros, acc.currencyCode, showCurrencyCode = true)
-        )
-        val subtitleText = buildString {
-            append("${AccountGroup.labelZh(acc.groupType)} · ${acc.currencyCode}")
-            if (acc.note.isNotBlank()) {
-                append(" · ${acc.note}")
-            }
-        }
-        YubraeDialog(
-            onDismissRequest = { actionAccount = null },
-            title = acc.name,
-            subtitle = subtitleText,
-            leadingBadge = {
-                CartoonAccountIcon(
-                    iconKey = acc.icon,
-                    accountName = acc.name,
-                    colorHex = acc.colorHex,
-                    size = 40.dp
-                )
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = { actionAccount = null },
-                    shape = RoundedCornerShape(12.dp)
-                ) {
-                    Text("关闭")
-                }
-            }
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                if (hasDetailCallback) {
-                    AccountActionRow(
-                        icon = Icons.Rounded.AccountBalanceWallet,
-                        label = "账户详情",
-                        onClick = {
-                            actionAccount = null
-                            onOpenAccountDetail(acc)
-                        }
-                    )
-                }
-                if (acc.groupType == AccountGroup.CREDIT && !acc.archived) {
-                    AccountActionRow(
-                        icon = Icons.Rounded.SwapHoriz,
-                        label = "还信用卡",
-                        onClick = {
-                            actionAccount = null
-                            onOpenCreditRepay?.invoke(acc) ?: onOpenQuickTransfer()
-                        }
-                    )
-                }
-                AccountActionRow(
-                    icon = Icons.Rounded.Add,
-                    label = "记一笔",
-                    onClick = {
-                        actionAccount = null
-                        onOpenQuickRecordForAccount(acc.id)
-                    }
-                )
-                AccountActionRow(
-                    icon = Icons.Rounded.Tune,
-                    label = "余额校准 · $balanceFormatted",
-                    onClick = {
-                        actionAccount = null
-                        calibrateTarget = acc
-                    }
-                )
-                if (!acc.archived) {
-                    val isHidden = acc.id in uiState.hiddenAccountIds
-                    AccountActionRow(
-                        icon = if (isHidden) Icons.Rounded.Visibility else Icons.Rounded.VisibilityOff,
-                        label = if (isHidden) "恢复显示此账户" else "隐藏此账户（下拉资产页可管理）",
-                        onClick = {
-                            actionAccount = null
-                            viewModel.toggleAccountHidden(acc.id, acc.name)
-                        }
-                    )
-                }
-                AccountActionRow(
-                    icon = Icons.Rounded.Edit,
-                    label = "编辑账户",
-                    onClick = {
-                        actionAccount = null
-                        editingAccount = acc
-                    }
-                )
-                AccountActionRow(
-                    icon = if (acc.archived) Icons.Rounded.Unarchive else Icons.Rounded.Archive,
-                    label = if (acc.archived) "取消归档" else "归档账户",
-                    onClick = {
-                        actionAccount = null
-                        viewModel.archiveAccount(acc.id, !acc.archived)
-                    }
-                )
-                AccountActionRow(
-                    icon = Icons.Rounded.Delete,
-                    label = "删除账户",
-                    tint = semantic.expense,
-                    onClick = {
-                        actionAccount = null
-                        deleteTarget = acc
-                    }
-                )
-            }
-        }
-    }
-
-    // 资产排序管理弹窗（组内账户拖拽排序 + 分组顺序拖拽排序）
+    // 资产排序管理弹窗（大跨度批量调序兜底：组内账户拖拽排序 + 分组顺序拖拽排序）
     if (showReorderDialog) {
         AssetReorderDialog(
             initialGroupOrder = settings.assetGroupOrder,
@@ -895,35 +1005,14 @@ fun AssetsScreen(
                 createInitialGroup = null
                 editingAccount = null
             },
-            initialGroupType = createInitialGroup ?: AccountGroup.WALLET,
-            onQuickCalibrate = if (currentEditing != null) { acc ->
-                createInitialGroup = null
-                editingAccount = null
-                calibrateTarget = acc
-            } else {
-                null
-            }
-        )
-    }
-
-    // 余额校准对话框
-    calibrateTarget?.let { acc ->
-        CalibrateBalanceDialog(
-            account = acc,
-            privacyMasked = privacyMasked,
-            onConfirm = { targetMicros, note, createRecord ->
-                viewModel.calibrateAccountBalance(acc.id, targetMicros, note, createRecord) {
-                    calibrateTarget = null
-                }
-            },
-            onDismiss = { calibrateTarget = null }
+            initialGroupType = createInitialGroup ?: AccountGroup.WALLET
         )
     }
 
     // 删除账户确认/迁移对话框
     deleteTarget?.let { acc ->
-        val linkedCount = remember(allTransactions, acc.id) {
-            allTransactions.count { it.accountId == acc.id || it.toAccountId == acc.id }
+        val linkedCount = remember(acc.id) {
+            viewModel.countLinkedTransactionsForAccount(acc.id)
         }
         val targets = remember(allAccounts, acc.id) {
             allAccounts.filter { !it.archived && it.id != acc.id }
@@ -1013,6 +1102,10 @@ private fun YimuNetWorthCard(
         MoneyAmount.format(totalLiabilitiesMicros, displayCurrency, showCurrencyCode = false)
     }
 
+    val heroGradientBrush = remember(semantic.heroGradient) {
+        Brush.linearGradient(colors = semantic.heroGradient)
+    }
+
     Surface(
         shape = RoundedCornerShape(18.dp),
         color = Color.Transparent,
@@ -1022,7 +1115,7 @@ private fun YimuNetWorthCard(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(Brush.linearGradient(colors = semantic.heroGradient))
+                .background(heroGradientBrush)
                 .padding(start = 16.dp, end = 12.dp, top = 14.dp, bottom = 12.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
@@ -1188,23 +1281,15 @@ private fun YimuNetWorthCard(
                             onDismissRequest = { onToggleMoreMenu(false) }
                         ) {
                             DropdownMenuItem(
-                                text = { Text("资产排序管理") },
+                                text = { Text("批量排序管理") },
                                 onClick = onOpenReorder
                             )
                             DropdownMenuItem(
-                                text = { Text("资产隐藏") },
+                                text = { Text("隐藏资产管理") },
                                 onClick = onOpenHiddenAssets
                             )
                             DropdownMenuItem(
-                                text = { Text("账户转账") },
-                                onClick = onOpenQuickTransfer
-                            )
-                            DropdownMenuItem(
-                                text = { Text("新建账户") },
-                                onClick = onCreateAccount
-                            )
-                            DropdownMenuItem(
-                                text = { Text("汇率中心") },
+                                text = { Text("汇率管理") },
                                 onClick = onOpenExchangeRates
                             )
                             DropdownMenuItem(
@@ -1297,12 +1382,12 @@ private fun YimuNetWorthCard(
                 }
             }
 
-            // 紧凑 4 枚快捷操作胶囊：搜索 / 排序 / 转账 / 新建
+            // 精简 3 枚高价值快捷操作胶囊：搜索 / 转账 / 新建账户
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(end = 4.dp),
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 HeroQuickActionPill(
                     icon = Icons.Rounded.Search,
@@ -1311,15 +1396,6 @@ private fun YimuNetWorthCard(
                     contentColor = titleColor,
                     pillBg = semantic.heroPillBg,
                     onClick = onToggleSearch,
-                    modifier = Modifier.weight(1f)
-                )
-                HeroQuickActionPill(
-                    icon = Icons.Rounded.SwapVert,
-                    label = "排序",
-                    active = false,
-                    contentColor = titleColor,
-                    pillBg = semantic.heroPillBg,
-                    onClick = onOpenReorder,
                     modifier = Modifier.weight(1f)
                 )
                 HeroQuickActionPill(
@@ -1333,7 +1409,7 @@ private fun YimuNetWorthCard(
                 )
                 HeroQuickActionPill(
                     icon = Icons.Rounded.Add,
-                    label = "新建",
+                    label = "新建账户",
                     active = false,
                     contentColor = titleColor,
                     pillBg = semantic.heroPillBg,
@@ -1624,12 +1700,21 @@ private fun YimuAccountSectionCard(
     hiddenAccountIds: Set<Long>,
     privacyMasked: Boolean,
     collapsed: Boolean,
+    isSearchFiltering: Boolean,
+    canDragSection: Boolean,
+    isDraggingSection: Boolean,
     onToggleCollapse: () -> Unit,
     onQuickAddAccount: () -> Unit,
     onClickAccount: (AccountEntity) -> Unit,
-    onLongClickAccount: (AccountEntity) -> Unit,
+    onSectionDragStart: () -> Unit,
+    onSectionDragDelta: (Float) -> Unit,
+    onSectionDragFinish: () -> Unit,
+    onAccountDraggingChanged: (Boolean) -> Unit,
+    onReorderSectionAccounts: (List<Long>) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val haptic = LocalHapticFeedback.current
+    val density = LocalDensity.current
     val subtotalMicros = remember(accounts, convertedMap) {
         accounts.sumOf { convertedMap[it.id] ?: it.balanceMicros }
     }
@@ -1640,12 +1725,91 @@ private fun YimuAccountSectionCard(
     }
     val sectionAccent = Color(section.accentColorHex)
 
-    YimuCard(cornerRadius = 16.dp, modifier = modifier) {
+    // 组内账户直接长按拖拽排序本地状态
+    val localAccounts = remember(section.id) { accounts.toMutableStateList() }
+    var draggingAccountId by remember(section.id) { mutableStateOf<Long?>(null) }
+    var dragOffsetY by remember(section.id) { mutableFloatStateOf(0f) }
+    var dragStartAccountOrder by remember(section.id) { mutableStateOf<List<Long>>(emptyList()) }
+    val rowHeightsPx = remember(section.id) { mutableStateMapOf<Long, Int>() }
+    val defaultRowHeightPx = remember(density) { with(density) { 62.dp.toPx() } }
+    val rowDragElevationPx = remember(density) { with(density) { 10.dp.toPx() } }
+    val dragRowShape = remember { RoundedCornerShape(12.dp) }
+    val canDragAccounts = !isSearchFiltering && accounts.size > 1
+
+    val latestAccounts by rememberUpdatedState(accounts)
+    val latestIsDraggingSection by rememberUpdatedState(isDraggingSection)
+    val latestOnSectionDragStart by rememberUpdatedState(onSectionDragStart)
+    val latestOnSectionDragDelta by rememberUpdatedState(onSectionDragDelta)
+    val latestOnSectionDragFinish by rememberUpdatedState(onSectionDragFinish)
+    val latestOnAccountDraggingChanged by rememberUpdatedState(onAccountDraggingChanged)
+    val latestOnReorderSectionAccounts by rememberUpdatedState(onReorderSectionAccounts)
+
+    LaunchedEffect(accounts) {
+        if (draggingAccountId == null) {
+            localAccounts.clear()
+            localAccounts.addAll(accounts)
+        }
+    }
+
+    DisposableEffect(section.id) {
+        onDispose {
+            if (draggingAccountId != null) {
+                latestOnAccountDraggingChanged(false)
+            }
+        }
+    }
+
+    fun finishAccountDrag(accId: Long) {
+        if (draggingAccountId != accId) return
+        val currentIds = localAccounts.map { it.id }
+        val changed = dragStartAccountOrder.isNotEmpty() && currentIds != dragStartAccountOrder
+        draggingAccountId = null
+        dragOffsetY = 0f
+        dragStartAccountOrder = emptyList()
+        latestOnAccountDraggingChanged(false)
+        if (changed) {
+            latestOnReorderSectionAccounts(currentIds)
+        } else if (localAccounts.toList() != latestAccounts) {
+            localAccounts.clear()
+            localAccounts.addAll(latestAccounts)
+        }
+    }
+
+    YimuCard(
+        cornerRadius = 16.dp,
+        containerColor = if (isDraggingSection) {
+            MaterialTheme.colorScheme.surfaceContainerLow
+        } else {
+            MaterialTheme.colorScheme.surfaceContainerLowest
+        },
+        modifier = modifier
+    ) {
         Column {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clickable(onClick = onToggleCollapse)
+                    .then(
+                        if (canDragSection) {
+                            Modifier.pointerInput(section.id) {
+                                detectDragGesturesAfterLongPress(
+                                    onDragStart = {
+                                        if (draggingAccountId == null) {
+                                            latestOnSectionDragStart()
+                                        }
+                                    },
+                                    onDragEnd = { latestOnSectionDragFinish() },
+                                    onDragCancel = { latestOnSectionDragFinish() },
+                                    onDrag = { change, dragAmount ->
+                                        change.consume()
+                                        latestOnSectionDragDelta(dragAmount.y)
+                                    }
+                                )
+                            }
+                        } else {
+                            Modifier
+                        }
+                    )
                     .padding(start = 14.dp, end = 10.dp, top = 12.dp, bottom = 12.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
@@ -1683,7 +1847,7 @@ private fun YimuAccountSectionCard(
                         color = MaterialTheme.colorScheme.surfaceContainerHigh
                     ) {
                         Text(
-                            text = "${accounts.size}",
+                            text = "${localAccounts.size}",
                             style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.5.sp).tabular(),
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             fontWeight = FontWeight.Medium,
@@ -1732,20 +1896,117 @@ private fun YimuAccountSectionCard(
 
             AnimatedVisibility(visible = !collapsed) {
                 Column {
-                    accounts.forEachIndexed { idx, acc ->
-                        CompactHairlineDivider(
-                            modifier = Modifier.padding(end = 14.dp),
-                            startIndent = if (idx == 0) 14.dp else 58.dp
-                        )
-                        YimuAccountRowItem(
-                            account = acc,
-                            displayCurrency = displayCurrency,
-                            convertedBalanceMicros = convertedMap[acc.id],
-                            isHidden = acc.id in hiddenAccountIds,
-                            privacyMasked = privacyMasked,
-                            onClick = { onClickAccount(acc) },
-                            onLongClick = { onLongClickAccount(acc) }
-                        )
+                    localAccounts.forEachIndexed { idx, acc ->
+                        key(acc.id) {
+                            val isDragging = draggingAccountId == acc.id
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .zIndex(if (isDragging) 2f else 0f)
+                                    .onSizeChanged { size ->
+                                        if (size.height > 0) {
+                                            rowHeightsPx[acc.id] = size.height
+                                        }
+                                    }
+                                    .graphicsLayer {
+                                        translationY = if (isDragging) dragOffsetY else 0f
+                                        scaleX = if (isDragging) 1.02f else 1f
+                                        scaleY = if (isDragging) 1.02f else 1f
+                                        shadowElevation = if (isDragging) rowDragElevationPx else 0f
+                                        shape = dragRowShape
+                                        clip = isDragging
+                                    }
+                                    .then(
+                                        if (isDragging) {
+                                            Modifier
+                                                .background(
+                                                    color = MaterialTheme.colorScheme.surfaceContainerLowest,
+                                                    shape = dragRowShape
+                                                )
+                                                .background(
+                                                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.16f),
+                                                    shape = dragRowShape
+                                                )
+                                                .border(
+                                                    width = 1.2.dp,
+                                                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.55f),
+                                                    shape = dragRowShape
+                                                )
+                                        } else {
+                                            Modifier
+                                        }
+                                    )
+                            ) {
+                                if (!isDragging) {
+                                    CompactHairlineDivider(
+                                        modifier = Modifier.padding(end = 14.dp),
+                                        startIndent = if (idx == 0) 14.dp else 58.dp
+                                    )
+                                } else {
+                                    Spacer(modifier = Modifier.height(0.5.dp))
+                                }
+                                YimuAccountRowItem(
+                                    account = acc,
+                                    displayCurrency = displayCurrency,
+                                    convertedBalanceMicros = convertedMap[acc.id],
+                                    isHidden = acc.id in hiddenAccountIds,
+                                    privacyMasked = privacyMasked,
+                                    onClick = { onClickAccount(acc) },
+                                    dragModifier = if (canDragAccounts) {
+                                        Modifier.pointerInput(acc.id) {
+                                            detectDragGesturesAfterLongPress(
+                                                onDragStart = {
+                                                    if (!latestIsDraggingSection) {
+                                                        draggingAccountId = acc.id
+                                                        dragOffsetY = 0f
+                                                        dragStartAccountOrder = localAccounts.map { it.id }
+                                                        latestOnAccountDraggingChanged(true)
+                                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                    }
+                                                },
+                                                onDragEnd = { finishAccountDrag(acc.id) },
+                                                onDragCancel = { finishAccountDrag(acc.id) },
+                                                onDrag = { change, dragAmount ->
+                                                    if (draggingAccountId != acc.id) return@detectDragGesturesAfterLongPress
+                                                    change.consume()
+                                                    dragOffsetY += dragAmount.y
+                                                    var curIdx = localAccounts.indexOfFirst { it.id == acc.id }
+                                                    if (curIdx < 0) return@detectDragGesturesAfterLongPress
+                                                    while (dragOffsetY > 0f && curIdx < localAccounts.lastIndex) {
+                                                        val nextId = localAccounts[curIdx + 1].id
+                                                        val stepPx = rowHeightsPx[nextId]?.toFloat() ?: defaultRowHeightPx
+                                                        if (dragOffsetY >= stepPx * 0.55f) {
+                                                            val moved = localAccounts.removeAt(curIdx)
+                                                            localAccounts.add(curIdx + 1, moved)
+                                                            dragOffsetY -= stepPx
+                                                            curIdx += 1
+                                                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                                        } else {
+                                                            break
+                                                        }
+                                                    }
+                                                    while (dragOffsetY < 0f && curIdx > 0) {
+                                                        val prevId = localAccounts[curIdx - 1].id
+                                                        val stepPx = rowHeightsPx[prevId]?.toFloat() ?: defaultRowHeightPx
+                                                        if (dragOffsetY <= -stepPx * 0.55f) {
+                                                            val moved = localAccounts.removeAt(curIdx)
+                                                            localAccounts.add(curIdx - 1, moved)
+                                                            dragOffsetY += stepPx
+                                                            curIdx -= 1
+                                                            haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                                        } else {
+                                                            break
+                                                        }
+                                                    }
+                                                }
+                                            )
+                                        }
+                                    } else {
+                                        Modifier
+                                    }
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -1753,7 +2014,6 @@ private fun YimuAccountSectionCard(
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun YimuAccountRowItem(
     account: AccountEntity,
@@ -1762,7 +2022,7 @@ private fun YimuAccountRowItem(
     isHidden: Boolean,
     privacyMasked: Boolean,
     onClick: () -> Unit,
-    onLongClick: () -> Unit
+    dragModifier: Modifier = Modifier
 ) {
     val semantic = KairoTheme.semantic
     val isForeign = !account.currencyCode.equals(displayCurrency, ignoreCase = true)
@@ -1789,10 +2049,8 @@ private fun YimuAccountRowItem(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .combinedClickable(
-                onClick = onClick,
-                onLongClick = onLongClick
-            )
+            .clickable(onClick = onClick)
+            .then(dragModifier)
             .padding(horizontal = 14.dp, vertical = 12.dp)
     ) {
         Row(
@@ -2780,43 +3038,7 @@ internal fun formatCreditCountdown(
     return parts.joinToString(" · ")
 }
 
-@Composable
-private fun AccountActionRow(
-    icon: ImageVector,
-    label: String,
-    tint: Color = MaterialTheme.colorScheme.primary,
-    onClick: () -> Unit
-) {
-    Surface(
-        shape = RoundedCornerShape(12.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerLow,
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .clickable(onClick = onClick)
-    ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                tint = tint,
-                modifier = Modifier.size(20.dp)
-            )
-            Text(
-                text = label,
-                style = MaterialTheme.typography.bodyLarge,
-                color = if (tint == KairoTheme.semantic.expense) tint else MaterialTheme.colorScheme.onSurface,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
-        }
-    }
-}
-
+@Suppress("UNUSED_PARAMETER")
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 internal fun AccountEditorDialog(
@@ -2827,7 +3049,6 @@ internal fun AccountEditorDialog(
     initialGroupType: String = AccountGroup.WALLET,
     onQuickCalibrate: ((AccountEntity) -> Unit)? = null
 ) {
-    val privacyMasked = LocalPrivacyMasked.current
     var name by remember(existing?.id) { mutableStateOf(existing?.name ?: "") }
     var noteInput by remember(existing?.id) { mutableStateOf(existing?.note ?: "") }
     var groupType by remember(existing?.id, initialGroupType) { mutableStateOf(existing?.groupType ?: initialGroupType) }
@@ -2927,78 +3148,6 @@ internal fun AccountEditorDialog(
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            if (existing != null && onQuickCalibrate != null) {
-                Surface(
-                    shape = RoundedCornerShape(12.dp),
-                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f),
-                    border = BorderStroke(0.6.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.25f)),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 12.dp, vertical = 9.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(
-                            modifier = Modifier.weight(1f),
-                            verticalArrangement = Arrangement.spacedBy(1.dp)
-                        ) {
-                            Text(
-                                text = "当前余额",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Text(
-                                text = formatPrivacyAmount(
-                                    privacyMasked,
-                                    MoneyAmount.format(
-                                        amountMicros = existing.balanceMicros,
-                                        currencyCode = existing.currencyCode,
-                                        showCurrencyCode = true
-                                    )
-                                ),
-                                style = MaterialTheme.typography.titleSmall.tabular(),
-                                fontWeight = FontWeight.SemiBold,
-                                color = MaterialTheme.colorScheme.onSurface,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Surface(
-                            modifier = Modifier
-                                .clip(CircleShape)
-                                .clickable { onQuickCalibrate(existing) },
-                            shape = CircleShape,
-                            color = MaterialTheme.colorScheme.primary
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(4.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Rounded.Tune,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.onPrimary,
-                                    modifier = Modifier.size(14.dp)
-                                )
-                                Text(
-                                    text = "校准余额",
-                                    style = MaterialTheme.typography.labelMedium,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = MaterialTheme.colorScheme.onPrimary,
-                                    maxLines = 1,
-                                    softWrap = false
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-
             OutlinedTextField(
                 value = name,
                 onValueChange = {

@@ -1144,4 +1144,235 @@ final class LedgerStoreTests: XCTestCase {
         XCTAssertNil(naturalSummary.daysUntilBilling)
         XCTAssertNil(naturalSummary.daysUntilRepayment)
     }
+
+    @MainActor
+    func testDebtIncludeInNetWorthEditingAndNetWorthCalculation() throws {
+        // 1. 缺少 includeInNetWorth 等可选字段的旧版 DebtRecordDto JSON 解码向后兼容且默认为 false
+        let legacyDebtJson = """
+        {
+          "id": 7,
+          "direction": "LEND",
+          "personName": "老张",
+          "amountMicros": 5000000
+        }
+        """
+        let decodedLegacy = try JSONDecoder().decode(DebtRecordDto.self, from: Data(legacyDebtJson.utf8))
+        XCTAssertEqual(decodedLegacy.id, 7)
+        XCTAssertEqual(decodedLegacy.direction, DebtDirection.LEND)
+        XCTAssertEqual(decodedLegacy.personName, "老张")
+        XCTAssertEqual(decodedLegacy.amountMicros, 5_000_000)
+        XCTAssertEqual(decodedLegacy.settledAmountMicros, 0)
+        XCTAssertEqual(decodedLegacy.status, DebtStatus.OPEN)
+        XCTAssertEqual(decodedLegacy.note, "")
+        XCTAssertFalse(decodedLegacy.includeInNetWorth)
+
+        let modernDebtJson = """
+        {
+          "id": 8,
+          "direction": "BORROW",
+          "personName": "老李",
+          "amountMicros": 2500000,
+          "includeInNetWorth": true
+        }
+        """
+        let decodedModern = try JSONDecoder().decode(DebtRecordDto.self, from: Data(modernDebtJson.utf8))
+        XCTAssertTrue(decodedModern.includeInNetWorth)
+
+        let dir = makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let tz = TimeZone(secondsFromGMT: 8 * 3600)!
+        let store = LedgerStore(storageDirectory: dir, useKeychain: false, timeZone: tz)
+        let unit = MoneyAmount.amountScale
+
+        let debitId = try XCTUnwrap(store.accounts.first(where: { $0.name == "银行储蓄卡" })?.id)
+        store.saveCustomRate(from: "USD", to: "CNY", rateMicros: 7_200_000)
+        _ = try store.calibrateAccountBalance(
+            accountId: debitId,
+            targetBalanceMicros: 1_000 * unit,
+            createRecord: false
+        )
+
+        // 基线净资产与缓存命中校验
+        let baseNetWorth = store.computeNetWorth(displayCurrency: "CNY")
+        XCTAssertEqual(baseNetWorth.totalAssetsMicros, 1_000 * unit)
+        XCTAssertEqual(baseNetWorth.totalLiabilitiesMicros, 0)
+        XCTAssertEqual(baseNetWorth.netWorthMicros, 1_000 * unit)
+        XCTAssertEqual(store.computeNetWorth(displayCurrency: "CNY"), baseNetWorth)
+        XCTAssertEqual(store.computeIncludedDebtReceivableMicros(displayCurrency: "CNY"), 0)
+
+        // 2. includeInNetWorth == false 的借出/借入不影响净资产与应收汇总
+        _ = store.saveDebt(
+            DebtRecordDto(
+                direction: DebtDirection.LEND,
+                personName: "不计入借出",
+                amountMicros: 500 * unit,
+                currencyCode: "CNY",
+                includeInNetWorth: false
+            )
+        )
+        _ = store.saveDebt(
+            DebtRecordDto(
+                direction: DebtDirection.BORROW,
+                personName: "不计入借入",
+                amountMicros: 300 * unit,
+                currencyCode: "CNY",
+                includeInNetWorth: false
+            )
+        )
+        let afterExcluded = store.computeNetWorth(displayCurrency: "CNY")
+        XCTAssertEqual(afterExcluded.totalAssetsMicros, 1_000 * unit)
+        XCTAssertEqual(afterExcluded.totalLiabilitiesMicros, 0)
+        XCTAssertEqual(afterExcluded.netWorthMicros, 1_000 * unit)
+        XCTAssertEqual(store.computeIncludedDebtReceivableMicros(displayCurrency: "CNY"), 0)
+
+        // 3. includeInNetWorth == true 的未结清借出（含多币种）增加总资产、净资产与应收总额
+        let lendCny = store.saveDebt(
+            DebtRecordDto(
+                direction: DebtDirection.LEND,
+                personName: "王小明",
+                amountMicros: 400 * unit,
+                currencyCode: "CNY",
+                note: "周转借款",
+                includeInNetWorth: true
+            )
+        )
+        XCTAssertGreaterThan(lendCny.createdAt, 0)
+        _ = store.saveDebt(
+            DebtRecordDto(
+                direction: DebtDirection.LEND,
+                personName: "Alice",
+                amountMicros: 100 * unit,
+                currencyCode: "USD",
+                includeInNetWorth: true
+            )
+        )
+        let afterLend = store.computeNetWorth(displayCurrency: "CNY")
+        XCTAssertEqual(afterLend.totalAssetsMicros, 2_120 * unit) // 1000 + 400 + 720
+        XCTAssertEqual(afterLend.totalLiabilitiesMicros, 0)
+        XCTAssertEqual(afterLend.netWorthMicros, 2_120 * unit)
+        XCTAssertEqual(store.computeIncludedDebtReceivableMicros(displayCurrency: "CNY"), 1_120 * unit)
+
+        // 汇率变更必须使净资产与应收缓存立即失效
+        store.saveCustomRate(from: "USD", to: "CNY", rateMicros: 8_000_000)
+        let afterRateChange = store.computeNetWorth(displayCurrency: "CNY")
+        XCTAssertEqual(afterRateChange.totalAssetsMicros, 2_200 * unit) // 1000 + 400 + 800
+        XCTAssertEqual(afterRateChange.netWorthMicros, 2_200 * unit)
+        XCTAssertEqual(store.computeIncludedDebtReceivableMicros(displayCurrency: "CNY"), 1_200 * unit)
+
+        // 4. includeInNetWorth == true 的未结清借入增加总负债并扣减净资产，不计入借出应收
+        let borrowCny = store.saveDebt(
+            DebtRecordDto(
+                direction: DebtDirection.BORROW,
+                personName: "李华",
+                amountMicros: 250 * unit,
+                currencyCode: "CNY",
+                includeInNetWorth: true
+            )
+        )
+        let afterBorrow = store.computeNetWorth(displayCurrency: "CNY")
+        XCTAssertEqual(afterBorrow.totalAssetsMicros, 2_200 * unit)
+        XCTAssertEqual(afterBorrow.totalLiabilitiesMicros, 250 * unit)
+        XCTAssertEqual(afterBorrow.netWorthMicros, 1_950 * unit)
+        XCTAssertEqual(store.computeIncludedDebtReceivableMicros(displayCurrency: "CNY"), 1_200 * unit)
+
+        // 5. 部分与全额 settleDebt 实时联动净资产（验证缓存失效）
+        let partialSettled = try store.settleDebt(debtId: lendCny.id, settleAmountMicros: 150 * unit, accountId: nil)
+        XCTAssertEqual(partialSettled.status, DebtStatus.OPEN)
+        XCTAssertEqual(partialSettled.settledAmountMicros, 150 * unit)
+        let afterPartialSettle = store.computeNetWorth(displayCurrency: "CNY")
+        XCTAssertEqual(afterPartialSettle.totalAssetsMicros, 2_050 * unit) // 1000 + 250 + 800
+        XCTAssertEqual(afterPartialSettle.totalLiabilitiesMicros, 250 * unit)
+        XCTAssertEqual(afterPartialSettle.netWorthMicros, 1_800 * unit)
+        XCTAssertEqual(store.computeIncludedDebtReceivableMicros(displayCurrency: "CNY"), 1_050 * unit)
+
+        let fullSettledLend = try store.settleDebt(debtId: lendCny.id, settleAmountMicros: 250 * unit, accountId: nil)
+        XCTAssertEqual(fullSettledLend.status, DebtStatus.SETTLED)
+        let afterFullLendSettle = store.computeNetWorth(displayCurrency: "CNY")
+        XCTAssertEqual(afterFullLendSettle.totalAssetsMicros, 1_800 * unit) // 1000 + 0 + 800
+        XCTAssertEqual(afterFullLendSettle.totalLiabilitiesMicros, 250 * unit)
+        XCTAssertEqual(afterFullLendSettle.netWorthMicros, 1_550 * unit)
+        XCTAssertEqual(store.computeIncludedDebtReceivableMicros(displayCurrency: "CNY"), 800 * unit)
+
+        // 用储蓄卡归还借入 ¥250：储蓄卡资产减 250、负债清零，净资产保持不变
+        let fullSettledBorrow = try store.settleDebt(debtId: borrowCny.id, settleAmountMicros: 250 * unit, accountId: debitId)
+        XCTAssertEqual(fullSettledBorrow.status, DebtStatus.SETTLED)
+        let afterBorrowSettle = store.computeNetWorth(displayCurrency: "CNY")
+        XCTAssertEqual(afterBorrowSettle.totalAssetsMicros, 1_550 * unit) // 750 + 800
+        XCTAssertEqual(afterBorrowSettle.totalLiabilitiesMicros, 0)
+        XCTAssertEqual(afterBorrowSettle.netWorthMicros, 1_550 * unit)
+
+        // 6. saveDebt 编辑已有债务：保留原 createdAt、修改金额/已核销额/备注/开关、钳位与状态自动维护、缓存即时刷新
+        let editedOpen = store.saveDebt(
+            DebtRecordDto(
+                id: lendCny.id,
+                direction: DebtDirection.LEND,
+                personName: "王小明（续借）",
+                amountMicros: 600 * unit,
+                settledAmountMicros: 200 * unit,
+                currencyCode: "CNY",
+                accountId: nil,
+                dueDateMillis: nil,
+                note: "续借调整",
+                status: DebtStatus.SETTLED, // 应自动校正为 OPEN
+                createdAt: 0, // 应继承原 createdAt
+                updatedAt: 0,
+                includeInNetWorth: true
+            )
+        )
+        XCTAssertEqual(editedOpen.createdAt, lendCny.createdAt)
+        XCTAssertEqual(editedOpen.personName, "王小明（续借）")
+        XCTAssertEqual(editedOpen.amountMicros, 600 * unit)
+        XCTAssertEqual(editedOpen.settledAmountMicros, 200 * unit)
+        XCTAssertEqual(editedOpen.note, "续借调整")
+        XCTAssertEqual(editedOpen.status, DebtStatus.OPEN)
+        XCTAssertTrue(editedOpen.includeInNetWorth)
+        let afterEditOpen = store.computeNetWorth(displayCurrency: "CNY")
+        XCTAssertEqual(afterEditOpen.totalAssetsMicros, 1_950 * unit) // 750 + 800 + 400
+        XCTAssertEqual(afterEditOpen.netWorthMicros, 1_950 * unit)
+        XCTAssertEqual(store.computeIncludedDebtReceivableMicros(displayCurrency: "CNY"), 1_200 * unit)
+
+        // 关闭 includeInNetWorth 后净资产缓存立即回落
+        var toggledOff = editedOpen
+        toggledOff.includeInNetWorth = false
+        _ = store.saveDebt(toggledOff)
+        XCTAssertEqual(store.computeNetWorth(displayCurrency: "CNY").totalAssetsMicros, 1_550 * unit)
+        XCTAssertEqual(store.computeIncludedDebtReceivableMicros(displayCurrency: "CNY"), 800 * unit)
+
+        // 已核销额超过总额 -> 钳位至总额并自动转为 SETTLED
+        var overflowSettled = editedOpen
+        overflowSettled.settledAmountMicros = 999 * unit
+        overflowSettled.includeInNetWorth = true
+        let clampedHigh = store.saveDebt(overflowSettled)
+        XCTAssertEqual(clampedHigh.settledAmountMicros, 600 * unit)
+        XCTAssertEqual(clampedHigh.status, DebtStatus.SETTLED)
+        XCTAssertEqual(store.computeNetWorth(displayCurrency: "CNY").totalAssetsMicros, 1_550 * unit)
+        XCTAssertEqual(store.computeIncludedDebtReceivableMicros(displayCurrency: "CNY"), 800 * unit)
+
+        // 已核销额为负数 -> 钳位至 0 并恢复为 OPEN
+        var negativeSettled = editedOpen
+        negativeSettled.settledAmountMicros = -100
+        negativeSettled.includeInNetWorth = true
+        let clampedLow = store.saveDebt(negativeSettled)
+        XCTAssertEqual(clampedLow.settledAmountMicros, 0)
+        XCTAssertEqual(clampedLow.status, DebtStatus.OPEN)
+        XCTAssertEqual(store.computeNetWorth(displayCurrency: "CNY").totalAssetsMicros, 2_150 * unit) // 750 + 800 + 600
+        XCTAssertEqual(store.computeIncludedDebtReceivableMicros(displayCurrency: "CNY"), 1_400 * unit)
+
+        // 7. 本地持久化重载与 .klbk 备份还原（同时验证 restoreFromSnapshot 使缓存失效）
+        let reloaded = LedgerStore(storageDirectory: dir, useKeychain: false, timeZone: tz)
+        XCTAssertEqual(reloaded.debts.first(where: { $0.id == lendCny.id })?.includeInNetWorth, true)
+        XCTAssertEqual(reloaded.computeNetWorth(displayCurrency: "CNY").netWorthMicros, 2_150 * unit)
+        XCTAssertEqual(reloaded.computeIncludedDebtReceivableMicros(displayCurrency: "CNY"), 1_400 * unit)
+
+        let backupData = try reloaded.exportEncryptedBackup(passphrase: "debt-networth-key")
+        let dir2 = makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir2) }
+        let restoredStore = LedgerStore(storageDirectory: dir2, useKeychain: false, timeZone: tz)
+        // 先预热空库缓存，确保导入还原能正确清空旧缓存
+        XCTAssertEqual(restoredStore.computeNetWorth(displayCurrency: "CNY").netWorthMicros, 0)
+        _ = try restoredStore.importEncryptedBackup(backupData, passphrase: "debt-networth-key")
+        XCTAssertEqual(restoredStore.debts.first(where: { $0.id == lendCny.id })?.includeInNetWorth, true)
+        XCTAssertEqual(restoredStore.computeNetWorth(displayCurrency: "CNY").netWorthMicros, 2_150 * unit)
+        XCTAssertEqual(restoredStore.computeIncludedDebtReceivableMicros(displayCurrency: "CNY"), 1_400 * unit)
+    }
 }

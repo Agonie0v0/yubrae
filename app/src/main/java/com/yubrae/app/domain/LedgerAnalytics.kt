@@ -11,6 +11,9 @@ import com.yubrae.app.core.model.MoneyAmount
 import com.yubrae.app.data.db.AccountEntity
 import com.yubrae.app.data.db.BudgetEntity
 import com.yubrae.app.data.db.CategoryEntity
+import com.yubrae.app.data.db.DebtDirection
+import com.yubrae.app.data.db.DebtRecordEntity
+import com.yubrae.app.data.db.DebtStatus
 import com.yubrae.app.data.db.StatsGranularity
 import com.yubrae.app.data.db.TransactionEntity
 import com.yubrae.app.data.db.TransactionStatus
@@ -80,7 +83,8 @@ object LedgerAnalytics {
     suspend fun computeNetWorth(
         accounts: List<AccountEntity>,
         displayCurrency: String,
-        fetchRate: suspend (from: String, to: String) -> Long
+        fetchRate: suspend (from: String, to: String) -> Long,
+        debts: List<DebtRecordEntity> = emptyList()
     ): NetWorthSummary {
         val targetCurrency = normalizeCurrency(displayCurrency)
         val activeAccounts = accounts.filter { !it.archived }
@@ -108,6 +112,23 @@ object LedgerAnalytics {
                 } else {
                     totalLiabilities += -converted
                 }
+            }
+        }
+
+        for (debt in debts) {
+            if (debt.status != DebtStatus.OPEN || !debt.includeInNetWorth) continue
+            val remaining = (debt.amountMicros - debt.settledAmountMicros).coerceAtLeast(0L)
+            if (remaining <= 0L) continue
+            val debtCurrency = normalizeCurrency(debt.currencyCode)
+            val converted = if (debtCurrency == targetCurrency) {
+                remaining
+            } else {
+                val rate = rateCache.getOrPut(debtCurrency) { fetchRate(debtCurrency, targetCurrency) }
+                MoneyAmount.convert(remaining, rate)
+            }
+            when (debt.direction) {
+                DebtDirection.LEND -> totalAssets += converted
+                DebtDirection.BORROW -> totalLiabilities += converted
             }
         }
 
