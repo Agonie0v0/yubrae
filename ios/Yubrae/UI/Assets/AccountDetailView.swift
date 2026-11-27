@@ -35,6 +35,22 @@ private struct AccountRowMicroBadge: Identifiable {
     let color: Color
 }
 
+/// 账户详情页统一金额格式化：对字母代码币种（如 `CHF`）采用 `12.00 CHF` 后置格式，避免 `CHF12.00 CHF` 重复代码；符号币种保留清晰货币符号。
+fileprivate func formatAccountDetailAmount(
+    _ micros: Int64,
+    currencyCode: String,
+    showSign: Bool = false,
+    showCurrencyCode: Bool = false
+) -> String {
+    let norm = CurrencyCatalog.normalize(currencyCode)
+    let info = CurrencyCatalog.find(norm)
+    let trimmedSymbol = info.symbol.trimmingCharacters(in: .whitespacesAndNewlines)
+    if trimmedSymbol.isEmpty || trimmedSymbol.caseInsensitiveCompare(info.code) == .orderedSame {
+        return YubraeTheme.formatPlainSignedAmount(micros, currencyCode: norm, baseCurrency: norm, showSign: showSign)
+    }
+    return MoneyAmount.format(micros, currencyCode: norm, showSign: showSign, showCurrencyCode: showCurrencyCode)
+}
+
 private struct DetailQuickRecordContext: Identifiable {
     let id = UUID()
     let editingTransaction: TransactionDto?
@@ -233,7 +249,7 @@ public struct AccountDetailView: View {
     private var confirmDialogMeta: (title: String, message: String, confirmTitle: String) {
         switch pendingConfirmAction {
         case .deleteTransaction(let tx):
-            let amt = MoneyAmount.format(abs(tx.origAmountMicros), currencyCode: tx.origCurrency, showCurrencyCode: true)
+            let amt = formatAccountDetailAmount(abs(tx.origAmountMicros), currencyCode: tx.origCurrency, showCurrencyCode: true)
             return ("删除该笔账单？", "删除后将自动回滚关联账户余额（金额 \(amt)），且无法撤销。", "确认删除")
         case .batchDelete(let ids):
             return ("批量删除 \(ids.count) 笔账单？", "删除后将同步回滚涉及账户的账面余额，操作不可撤销。", "删除 \(ids.count) 笔")
@@ -434,7 +450,7 @@ public struct AccountDetailView: View {
         let baseCur = CurrencyCatalog.normalize(store.settings.baseCurrency)
         let accCur = CurrencyCatalog.normalize(acc.currencyCode)
         let balanceStr = YubraeTheme.masked(
-            MoneyAmount.format(acc.balanceMicros, currencyCode: accCur, showCurrencyCode: true),
+            formatAccountDetailAmount(acc.balanceMicros, currencyCode: accCur, showCurrencyCode: true),
             isMasked: masked
         )
         let convertedBase: Int64 = {
@@ -511,11 +527,13 @@ public struct AccountDetailView: View {
                     .lineLimit(1)
                     .minimumScaleFactor(0.5)
                 if accCur != baseCur {
+                    let baseInfo = CurrencyCatalog.find(baseCur)
                     let convStr = YubraeTheme.masked(
-                        MoneyAmount.format(convertedBase, currencyCode: baseCur),
+                        formatAccountDetailAmount(convertedBase, currencyCode: baseCur),
                         isMasked: masked
                     )
-                    Text("折合参考 ≈ \(convStr) (\(baseCur))")
+                    let codeSuffix = baseInfo.symbol.caseInsensitiveCompare(baseInfo.code) == .orderedSame ? "" : " (\(baseCur))"
+                    Text("折合参考 ≈ \(convStr)\(codeSuffix)")
                         .font(.caption.monospacedDigit())
                         .foregroundColor(.white.opacity(0.82))
                         .lineLimit(1)
@@ -547,21 +565,21 @@ public struct AccountDetailView: View {
             HStack(spacing: 10) {
                 heroFlowMetric(
                     title: "期间流入",
-                    value: YubraeTheme.masked(MoneyAmount.format(flow.inflow, currencyCode: accCur, showSign: flow.inflow > 0), isMasked: masked)
+                    value: YubraeTheme.masked(formatAccountDetailAmount(flow.inflow, currencyCode: accCur, showSign: flow.inflow > 0), isMasked: masked)
                 )
                 Divider()
                     .frame(height: 26)
                     .background(Color.white.opacity(0.28))
                 heroFlowMetric(
                     title: "期间流出",
-                    value: YubraeTheme.masked(MoneyAmount.format(flow.outflow == 0 ? 0 : -flow.outflow, currencyCode: accCur), isMasked: masked)
+                    value: YubraeTheme.masked(formatAccountDetailAmount(flow.outflow == 0 ? 0 : -flow.outflow, currencyCode: accCur), isMasked: masked)
                 )
                 Divider()
                     .frame(height: 26)
                     .background(Color.white.opacity(0.28))
                 heroFlowMetric(
                     title: "净变动",
-                    value: YubraeTheme.masked(MoneyAmount.format(flow.net, currencyCode: accCur, showSign: true), isMasked: masked)
+                    value: YubraeTheme.masked(formatAccountDetailAmount(flow.net, currencyCode: accCur, showSign: true), isMasked: masked)
                 )
             }
             .padding(.top, 2)
@@ -731,7 +749,7 @@ public struct AccountDetailView: View {
                             .lineLimit(1)
                             .fixedSize(horizontal: true, vertical: false)
                         Spacer(minLength: 6)
-                        Text(YubraeTheme.masked(MoneyAmount.format(hovered.balanceMicros, currencyCode: cur, showCurrencyCode: true), isMasked: masked))
+                        Text(YubraeTheme.masked(formatAccountDetailAmount(hovered.balanceMicros, currencyCode: cur, showCurrencyCode: true), isMasked: masked))
                             .font(.subheadline.weight(.bold).monospacedDigit())
                             .foregroundColor(palette.primary)
                             .lineLimit(1)
@@ -747,17 +765,17 @@ public struct AccountDetailView: View {
                     HStack(spacing: 10) {
                         trendMetricPill(
                             label: "最高",
-                            value: YubraeTheme.masked(MoneyAmount.format(maxMicros, currencyCode: cur), isMasked: masked),
+                            value: YubraeTheme.masked(formatAccountDetailAmount(maxMicros, currencyCode: cur), isMasked: masked),
                             color: palette.textPrimary
                         )
                         trendMetricPill(
                             label: "最低",
-                            value: YubraeTheme.masked(MoneyAmount.format(minMicros, currencyCode: cur), isMasked: masked),
+                            value: YubraeTheme.masked(formatAccountDetailAmount(minMicros, currencyCode: cur), isMasked: masked),
                             color: palette.textPrimary
                         )
                         trendMetricPill(
                             label: "净变动",
-                            value: YubraeTheme.masked(MoneyAmount.format(deltaMicros, currencyCode: cur, showSign: true), isMasked: masked),
+                            value: YubraeTheme.masked(formatAccountDetailAmount(deltaMicros, currencyCode: cur, showSign: true), isMasked: masked),
                             color: deltaMicros >= 0 ? palette.incomeColor : palette.expenseColor
                         )
                     }
@@ -963,25 +981,25 @@ public struct AccountDetailView: View {
                 LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
                     creditMetricBox(
                         title: "本期消费",
-                        value: YubraeTheme.masked(MoneyAmount.format(cycle.cycleSpendMicros, currencyCode: cur), isMasked: masked),
+                        value: YubraeTheme.masked(formatAccountDetailAmount(cycle.cycleSpendMicros, currencyCode: cur), isMasked: masked),
                         valueColor: palette.expenseColor
                     )
                     creditMetricBox(
                         title: "本期已还",
-                        value: YubraeTheme.masked(MoneyAmount.format(cycle.cycleRepaidMicros, currencyCode: cur), isMasked: masked),
+                        value: YubraeTheme.masked(formatAccountDetailAmount(cycle.cycleRepaidMicros, currencyCode: cur), isMasked: masked),
                         valueColor: palette.incomeColor
                     )
                     creditMetricBox(
                         title: "信用额度",
                         value: limitMicros > 0
-                            ? YubraeTheme.masked(MoneyAmount.format(limitMicros, currencyCode: cur), isMasked: masked)
+                            ? YubraeTheme.masked(formatAccountDetailAmount(limitMicros, currencyCode: cur), isMasked: masked)
                             : "未设置",
                         valueColor: palette.textPrimary
                     )
                     creditMetricBox(
                         title: "可用额度",
                         value: limitMicros > 0
-                            ? YubraeTheme.masked(MoneyAmount.format(availMicros, currencyCode: cur), isMasked: masked)
+                            ? YubraeTheme.masked(formatAccountDetailAmount(availMicros, currencyCode: cur), isMasked: masked)
                             : "—",
                         valueColor: palette.primary
                     )
@@ -1119,8 +1137,8 @@ public struct AccountDetailView: View {
                             .padding(.vertical, 2)
                             .background(Capsule().fill((isCompleted ? palette.incomeColor : palette.primary).opacity(0.14)))
                     }
-                    let totalStr = YubraeTheme.masked(MoneyAmount.format(plan.totalAmountMicros, currencyCode: plan.currencyCode), isMasked: masked)
-                    let perStr = YubraeTheme.masked(MoneyAmount.format(perPeriod, currencyCode: plan.currencyCode), isMasked: masked)
+                    let totalStr = YubraeTheme.masked(formatAccountDetailAmount(plan.totalAmountMicros, currencyCode: plan.currencyCode), isMasked: masked)
+                    let perStr = YubraeTheme.masked(formatAccountDetailAmount(perPeriod, currencyCode: plan.currencyCode), isMasked: masked)
                     Text("总额 \(totalStr) · 每期 \(perStr)")
                         .font(.caption2.monospacedDigit())
                         .foregroundColor(palette.textSecondary)
@@ -1148,7 +1166,7 @@ public struct AccountDetailView: View {
 
             HStack(spacing: 10) {
                 if plan.feePerPeriodMicros > 0 {
-                    let feeStr = YubraeTheme.masked(MoneyAmount.format(plan.feePerPeriodMicros, currencyCode: plan.currencyCode), isMasked: masked)
+                    let feeStr = YubraeTheme.masked(formatAccountDetailAmount(plan.feePerPeriodMicros, currencyCode: plan.currencyCode), isMasked: masked)
                     Text("含每期手续费 \(feeStr)")
                         .font(.caption2)
                         .foregroundColor(palette.textTertiary)
@@ -1696,22 +1714,18 @@ public struct AccountDetailView: View {
                let toAmt = tx.toAmountMicros {
                 let toCur = CurrencyCatalog.normalize(tx.toCurrency ?? tx.origCurrency)
                 if hasDiscountOrFee || toCur != cur || toAmt != tx.accountAmountMicros {
-                    let toFmt = toCur != cur
-                        ? MoneyAmount.format(toAmt, currencyCode: toCur, showSign: false, showCurrencyCode: false)
-                        : YubraeTheme.formatPlainSignedAmount(toAmt, currencyCode: toCur, baseCurrency: baseCur, showSign: false)
+                    let toFmt = YubraeTheme.formatPlainSignedAmount(toAmt, currencyCode: toCur, baseCurrency: baseCur, showSign: false)
                     return "到账 \(YubraeTheme.masked(toFmt, isMasked: masked))"
                 }
             } else if tx.type == TransactionType.TRANSFER && tx.toAccountId == acc.id {
                 let fromCur = CurrencyCatalog.normalize(tx.accountCurrency.isEmpty ? tx.origCurrency : tx.accountCurrency)
                 let toAmt = tx.toAmountMicros ?? tx.accountAmountMicros
                 if hasDiscountOrFee || fromCur != cur || tx.accountAmountMicros != toAmt {
-                    let outFmt = fromCur != cur
-                        ? MoneyAmount.format(tx.accountAmountMicros, currencyCode: fromCur, showSign: false, showCurrencyCode: false)
-                        : YubraeTheme.formatPlainSignedAmount(tx.accountAmountMicros, currencyCode: fromCur, baseCurrency: baseCur, showSign: false)
+                    let outFmt = YubraeTheme.formatPlainSignedAmount(tx.accountAmountMicros, currencyCode: fromCur, baseCurrency: baseCur, showSign: false)
                     return "实扣 \(YubraeTheme.masked(outFmt, isMasked: masked))"
                 }
             } else if CurrencyCatalog.normalize(tx.origCurrency) != cur {
-                let origFmt = MoneyAmount.format(tx.origAmountMicros, currencyCode: tx.origCurrency, showSign: false, showCurrencyCode: false)
+                let origFmt = YubraeTheme.formatPlainSignedAmount(tx.origAmountMicros, currencyCode: tx.origCurrency, baseCurrency: baseCur, showSign: false)
                 return "原币 \(YubraeTheme.masked(origFmt, isMasked: masked))"
             }
             return nil
@@ -2118,7 +2132,7 @@ private struct InstallmentEditorSheet: View {
                         HStack {
                             Text("预估每期应还")
                             Spacer()
-                            Text(MoneyAmount.format(est, currencyCode: account.currencyCode, showCurrencyCode: true))
+                            Text(formatAccountDetailAmount(est, currencyCode: account.currencyCode, showCurrencyCode: true))
                                 .fontWeight(.semibold)
                                 .monospacedDigit()
                                 .foregroundColor(.accentColor)
@@ -2154,6 +2168,7 @@ private struct InstallmentEditorSheet: View {
                     Stepper("已还期数：\(completedPeriods) 期", value: $completedPeriods, in: 0...max(0, totalPeriods - 1))
                     Stepper("每月入账日：\(billingDay) 日", value: $billingDay, in: 1...31)
                     DatePicker("下期入账日期", selection: $nextDueDate, displayedComponents: .date)
+                        .environment(\.calendar, YubraePeriodHelper.sundayCalendar())
                 }
 
                 Section("记账分类（可选）") {
@@ -2338,7 +2353,7 @@ private struct BatchAccountPickerSheet: View {
                                             .lineLimit(1)
                                     }
                                     Spacer(minLength: 8)
-                                    Text(MoneyAmount.format(target.balanceMicros, currencyCode: target.currencyCode, showCurrencyCode: true))
+                                    Text(formatAccountDetailAmount(target.balanceMicros, currencyCode: target.currencyCode, showCurrencyCode: true))
                                         .font(.caption.weight(.semibold).monospacedDigit())
                                         .foregroundColor(.secondary)
                                         .lineLimit(1)

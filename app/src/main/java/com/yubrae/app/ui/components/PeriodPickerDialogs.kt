@@ -67,9 +67,36 @@ import java.util.Locale
 internal object PeriodPickerHelper {
 
     fun weekBoundsFor(date: LocalDate): Pair<LocalDate, LocalDate> {
-        val monday = date.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY))
-        val sunday = monday.plusDays(6)
-        return monday to sunday
+        val sunday = date.with(TemporalAdjusters.previousOrSame(DayOfWeek.SUNDAY))
+        val saturday = sunday.plusDays(6)
+        return sunday to saturday
+    }
+
+    fun chineseWeekdayShort(dayOfWeek: DayOfWeek): String = when (dayOfWeek) {
+        DayOfWeek.SUNDAY -> "周日"
+        DayOfWeek.MONDAY -> "周一"
+        DayOfWeek.TUESDAY -> "周二"
+        DayOfWeek.WEDNESDAY -> "周三"
+        DayOfWeek.THURSDAY -> "周四"
+        DayOfWeek.FRIDAY -> "周五"
+        DayOfWeek.SATURDAY -> "周六"
+    }
+
+    fun formatDateWithWeekday(date: LocalDate): String =
+        "${date.year}年${date.monthValue}月${date.dayOfMonth}日 ${chineseWeekdayShort(date.dayOfWeek)}"
+
+    fun monthCalendarWeeks(yearMonth: YearMonth): List<List<LocalDate>> {
+        val firstDay = yearMonth.atDay(1)
+        val lastDay = yearMonth.atEndOfMonth()
+        val gridStart = firstDay.with(TemporalAdjusters.previousOrSame(DayOfWeek.SUNDAY))
+        val gridEnd = lastDay.with(TemporalAdjusters.nextOrSame(DayOfWeek.SATURDAY))
+        val rows = mutableListOf<List<LocalDate>>()
+        var cursor = gridStart
+        while (!cursor.isAfter(gridEnd)) {
+            rows.add((0L..6L).map { cursor.plusDays(it) })
+            cursor = cursor.plusWeeks(1)
+        }
+        return rows
     }
 
     fun weekLabel(date: LocalDate): String {
@@ -444,31 +471,20 @@ fun WeekPickerDialog(
 
     val selectedWeekBounds = remember(selectedDate) { PeriodPickerHelper.weekBoundsFor(selectedDate) }
     val selectedWeekLabel = remember(selectedDate) { PeriodPickerHelper.weekLabel(selectedDate) }
-    val selectedIsoWeek = remember(selectedWeekBounds) {
-        val wf = WeekFields.ISO
+    val selectedWeekNumber = remember(selectedWeekBounds) {
+        val wf = WeekFields.SUNDAY_START
         val start = selectedWeekBounds.first
         "${start.get(wf.weekBasedYear())}年第${start.get(wf.weekOfWeekBasedYear())}周"
     }
 
     val weeksInGrid = remember(displayMonth) {
-        val firstDay = displayMonth.atDay(1)
-        val lastDay = displayMonth.atEndOfMonth()
-        val gridStart = firstDay.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY))
-        val gridEnd = lastDay.with(TemporalAdjusters.nextOrSame(DayOfWeek.SUNDAY))
-        val rows = mutableListOf<List<LocalDate>>()
-        var cursor = gridStart
-        while (!cursor.isAfter(gridEnd)) {
-            val row = (0L..6L).map { cursor.plusDays(it) }
-            rows.add(row)
-            cursor = cursor.plusWeeks(1)
-        }
-        rows
+        PeriodPickerHelper.monthCalendarWeeks(displayMonth)
     }
 
     YubraeDialog(
         onDismissRequest = onDismiss,
         title = "选择自然周",
-        subtitle = "按周一至周日划分统计周期",
+        subtitle = "按周日至周六划分统计周期",
         icon = Icons.Rounded.DateRange,
         dismissButton = {
             TextButton(
@@ -529,7 +545,7 @@ fun WeekPickerDialog(
                     )
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        text = selectedIsoWeek,
+                        text = selectedWeekNumber,
                         style = MaterialTheme.typography.labelSmall.tabular(),
                         color = MaterialTheme.colorScheme.primary,
                         fontWeight = FontWeight.Bold
@@ -552,11 +568,16 @@ fun WeekPickerDialog(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                listOf("一", "二", "三", "四", "五", "六", "日").forEach { dayName ->
+                listOf("日", "一", "二", "三", "四", "五", "六").forEachIndexed { idx, dayName ->
+                    val isWeekend = idx == 0 || idx == 6
                     Text(
                         text = dayName,
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = if (isWeekend) {
+                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.68f)
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
                         textAlign = TextAlign.Center,
                         modifier = Modifier.weight(1f)
                     )
@@ -623,6 +644,215 @@ fun WeekPickerDialog(
                                         text = date.dayOfMonth.toString(),
                                         style = MaterialTheme.typography.bodyMedium.tabular(),
                                         fontWeight = if (isSelectedDay || isToday || isSelectedWeek) {
+                                            FontWeight.SemiBold
+                                        } else {
+                                            FontWeight.Normal
+                                        },
+                                        color = textColor,
+                                        maxLines = 1
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (showJumpMonthDialog) {
+        YearMonthPickerDialog(
+            initialYearMonth = displayMonth,
+            onSelect = { pickedYm ->
+                displayMonth = pickedYm
+            },
+            onDismiss = { showJumpMonthDialog = false }
+        )
+    }
+}
+
+/**
+ * 全应用统一的极简日历选择弹窗：严格按周日至周六排布，避免系统 Material3 DatePicker
+ * 在中文 Locale 或 OEM ROM 下出现周一开头不一致的问题。
+ */
+@Composable
+fun YubraeCalendarDatePickerDialog(
+    initialDate: LocalDate,
+    onSelectDate: (LocalDate) -> Unit,
+    onDismiss: () -> Unit,
+    title: String = "选择日期",
+    subtitle: String? = null
+) {
+    val today = remember { LocalDate.now() }
+    var selectedDate by remember(initialDate) { mutableStateOf(initialDate) }
+    var displayMonth by remember(initialDate) { mutableStateOf(YearMonth.from(initialDate)) }
+    var showJumpMonthDialog by remember { mutableStateOf(false) }
+
+    val selectedDateLabel = remember(selectedDate) {
+        PeriodPickerHelper.formatDateWithWeekday(selectedDate)
+    }
+    val weeksInGrid = remember(displayMonth) {
+        PeriodPickerHelper.monthCalendarWeeks(displayMonth)
+    }
+
+    YubraeDialog(
+        onDismissRequest = onDismiss,
+        title = title,
+        subtitle = subtitle,
+        icon = Icons.Rounded.CalendarMonth,
+        dismissButton = {
+            TextButton(
+                onClick = {
+                    selectedDate = today
+                    displayMonth = YearMonth.from(today)
+                },
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Text("回到今天")
+            }
+            TextButton(
+                onClick = onDismiss,
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Text("取消")
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    onSelectDate(selectedDate)
+                    onDismiss()
+                },
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Text("确定")
+            }
+        }
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.55f),
+                border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.25f)),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 9.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = selectedDateLabel,
+                        style = MaterialTheme.typography.labelLarge.tabular(),
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f)
+                    )
+                    if (selectedDate == today) {
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "今天",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+            }
+
+            PeriodHeaderNavBar(
+                title = "${displayMonth.year}年${displayMonth.monthValue}月",
+                showDropDown = true,
+                prevEnabled = true,
+                onPrev = { displayMonth = displayMonth.minusMonths(1) },
+                onTitleClick = { showJumpMonthDialog = true },
+                onNext = { displayMonth = displayMonth.plusMonths(1) },
+                prevDescription = "上个月",
+                nextDescription = "下个月"
+            )
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                listOf("日", "一", "二", "三", "四", "五", "六").forEachIndexed { idx, dayName ->
+                    val isWeekend = idx == 0 || idx == 6
+                    Text(
+                        text = dayName,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (isWeekend) {
+                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.68f)
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            }
+
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                weeksInGrid.forEach { weekDates ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        weekDates.forEach { date ->
+                            val isInDisplayMonth = YearMonth.from(date) == displayMonth
+                            val isSelected = date == selectedDate
+                            val isToday = date == today
+                            val textColor = when {
+                                isSelected -> MaterialTheme.colorScheme.onPrimary
+                                isToday -> MaterialTheme.colorScheme.primary.copy(
+                                    alpha = if (isInDisplayMonth) 1f else 0.6f
+                                )
+                                isInDisplayMonth -> MaterialTheme.colorScheme.onSurface
+                                else -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.35f)
+                            }
+
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .padding(vertical = 1.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(36.dp)
+                                        .clip(CircleShape)
+                                        .then(
+                                            when {
+                                                isSelected -> Modifier.background(MaterialTheme.colorScheme.primary)
+                                                isToday -> Modifier.border(
+                                                    width = 1.dp,
+                                                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.6f),
+                                                    shape = CircleShape
+                                                )
+                                                else -> Modifier
+                                            }
+                                        )
+                                        .clickable {
+                                            selectedDate = date
+                                            val targetYm = YearMonth.from(date)
+                                            if (targetYm != displayMonth) {
+                                                displayMonth = targetYm
+                                            }
+                                        },
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = date.dayOfMonth.toString(),
+                                        style = MaterialTheme.typography.bodyMedium.tabular(),
+                                        fontWeight = if (isSelected || isToday) {
                                             FontWeight.SemiBold
                                         } else {
                                             FontWeight.Normal

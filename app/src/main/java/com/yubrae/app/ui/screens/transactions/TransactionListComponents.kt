@@ -29,7 +29,6 @@ import androidx.compose.material.icons.automirrored.rounded.MenuBook
 import androidx.compose.material.icons.automirrored.rounded.ViewList
 import androidx.compose.material.icons.rounded.ArrowDropDown
 import androidx.compose.material.icons.rounded.AttachFile
-import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.CalendarMonth
 import androidx.compose.material.icons.rounded.CheckBox
 import androidx.compose.material.icons.rounded.CheckBoxOutlineBlank
@@ -141,7 +140,6 @@ internal fun TransactionsMinimalHeader(
     onOpenLedgerManager: () -> Unit,
     onToggleSearch: () -> Unit,
     onTogglePrivacy: () -> Unit,
-    onOpenSmartInput: () -> Unit,
     onPrevMonth: () -> Unit,
     onNextMonth: () -> Unit,
     onOpenMonthPicker: () -> Unit,
@@ -206,7 +204,7 @@ internal fun TransactionsMinimalHeader(
                 .padding(start = 14.dp, end = 10.dp, top = 6.dp, bottom = 10.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            // 第 1 行：极简导航（左账本、中月份切换、右日历/搜索/AI速记）
+            // 第 1 行：极简导航（左账本、中月份切换、右日历/搜索）
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -342,12 +340,6 @@ internal fun TransactionsMinimalHeader(
                         active = searchExpanded || hasActiveFilter,
                         onClick = onToggleSearch
                     )
-                    MinimalHeaderIconButton(
-                        icon = Icons.Rounded.AutoAwesome,
-                        contentDescription = "AI/语音智能记账",
-                        active = false,
-                        onClick = onOpenSmartInput
-                    )
                 }
             }
 
@@ -426,7 +418,7 @@ internal fun TransactionsMinimalHeader(
     }
 }
 
-private fun buildHeaderMetaFootnote(
+internal fun buildHeaderMetaFootnote(
     foreignCurrencySummaries: List<Triple<String, Long, Long>>,
     monthDiscountBaseMicros: Long,
     monthFeeBaseMicros: Long,
@@ -438,12 +430,18 @@ private fun buildHeaderMetaFootnote(
             if (privacyMasked) {
                 add("$code ****")
             } else {
-                val digits = CurrencyCatalog.find(code).minorDigits
+                val info = CurrencyCatalog.find(code)
+                val digits = info.minorDigits
+                val symbolPrefix = if (info.symbol.isBlank() || info.symbol.equals(info.code, ignoreCase = true)) {
+                    ""
+                } else {
+                    info.symbol
+                }
                 val text = when {
                     exp > 0L && inc > 0L ->
-                        "$code -${MoneyAmount.formatPlain(exp, digits, true)} / +${MoneyAmount.formatPlain(inc, digits, true)}"
-                    exp > 0L -> "$code -${MoneyAmount.formatPlain(exp, digits, true)}"
-                    else -> "$code +${MoneyAmount.formatPlain(inc, digits, true)}"
+                        "$code -$symbolPrefix${MoneyAmount.formatPlain(exp, digits, true)} / +$symbolPrefix${MoneyAmount.formatPlain(inc, digits, true)}"
+                    exp > 0L -> "$code -$symbolPrefix${MoneyAmount.formatPlain(exp, digits, true)}"
+                    else -> "$code +$symbolPrefix${MoneyAmount.formatPlain(inc, digits, true)}"
                 }
                 add(text)
             }

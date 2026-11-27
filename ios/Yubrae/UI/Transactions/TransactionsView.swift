@@ -39,7 +39,7 @@ public struct TransactionsView: View {
     public init(
         store: LedgerStore,
         onOpenQuickRecord: @escaping (TransactionDto?) -> Void,
-        onOpenSmartInput: @escaping () -> Void
+        onOpenSmartInput: @escaping () -> Void = {}
     ) {
         self.store = store
         self.onOpenQuickRecord = onOpenQuickRecord
@@ -212,7 +212,7 @@ public struct TransactionsView: View {
                     }
                     .padding(.horizontal, 16)
                     .padding(.top, 12)
-                    .padding(.bottom, 90)
+                    .padding(.bottom, 108)
                 }
             }
             .background(palette.background.ignoresSafeArea())
@@ -248,14 +248,6 @@ public struct TransactionsView: View {
                                 .foregroundColor(palette.textPrimary)
                         }
                         .accessibilityLabel("切换隐私遮罩")
-
-                        Button {
-                            onOpenSmartInput()
-                        } label: {
-                            Image(systemName: "sparkles")
-                                .foregroundColor(palette.primary)
-                        }
-                        .accessibilityLabel("AI 智能记账")
                     }
                 }
             }
@@ -283,9 +275,18 @@ public struct TransactionsView: View {
             .sheet(isPresented: $showMonthSummarySheet) {
                 let baseCur = store.settings.baseCurrency
                 let masked = store.settings.privacyMaskEnabled
-                let expText = YubraeTheme.masked(MoneyAmount.format(monthExpenseMicros, currencyCode: baseCur), isMasked: masked)
-                let incText = YubraeTheme.masked(MoneyAmount.format(monthIncomeMicros, currencyCode: baseCur), isMasked: masked)
-                let netText = YubraeTheme.masked(MoneyAmount.format(monthIncomeMicros - monthExpenseMicros, currencyCode: baseCur, showSign: true), isMasked: masked)
+                let expText = YubraeTheme.masked(
+                    YubraeTheme.formatPlainSignedAmount(monthExpenseMicros, currencyCode: baseCur, baseCurrency: baseCur, showSign: false),
+                    isMasked: masked
+                )
+                let incText = YubraeTheme.masked(
+                    YubraeTheme.formatPlainSignedAmount(monthIncomeMicros, currencyCode: baseCur, baseCurrency: baseCur, showSign: false),
+                    isMasked: masked
+                )
+                let netText = YubraeTheme.masked(
+                    YubraeTheme.formatPlainSignedAmount(monthIncomeMicros - monthExpenseMicros, currencyCode: baseCur, baseCurrency: baseCur, showSign: true),
+                    isMasked: masked
+                )
                 YubraeMonthSummaryDetailSheet(
                     title: "\(String(selectedYear))年\(selectedMonth)月",
                     currency: baseCur,

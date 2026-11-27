@@ -1826,26 +1826,26 @@ final class LedgerStoreTests: XCTestCase {
         XCTAssertEqual(YubraeTheme.cleanListRowNote("买奶茶！支付成功！消费金额：18.00元"), "买奶茶")
         XCTAssertEqual(YubraeTheme.cleanListRowNote("优惠: 2.00元 · 午饭打包 · 卡内余额: 66.35元"), "午饭打包")
 
-        // 5. YubraeTheme.formatPlainSignedAmount：主币种去符号，外币保留清晰符号
+        // 5. YubraeTheme.formatPlainSignedAmount：全币种（含主币种）保留清晰货币符号，字母代码币种后置代码不重复
         XCTAssertEqual(
             YubraeTheme.formatPlainSignedAmount(-18_000, currencyCode: "CNY", baseCurrency: "CNY"),
-            "-1.80"
+            "-¥1.80"
         )
         XCTAssertEqual(
             YubraeTheme.formatPlainSignedAmount(1_060_000, currencyCode: "cny", baseCurrency: "CNY"),
-            "+106.00"
+            "+¥106.00"
         )
         XCTAssertEqual(
             YubraeTheme.formatPlainSignedAmount(500_000, currencyCode: "CNY", baseCurrency: "CNY", showSign: false),
-            "50.00"
+            "¥50.00"
         )
         XCTAssertEqual(
             YubraeTheme.formatPlainSignedAmount(12_805_000, currencyCode: "CNY", baseCurrency: "CNY", showSign: false),
-            "1,280.50"
+            "¥1,280.50"
         )
         XCTAssertEqual(
             YubraeTheme.formatPlainSignedAmount(0, currencyCode: "CNY", baseCurrency: "CNY", showSign: true),
-            "0.00"
+            "¥0.00"
         )
         XCTAssertEqual(
             YubraeTheme.formatPlainSignedAmount(-531_600, currencyCode: "USD", baseCurrency: "CNY"),
@@ -1865,7 +1865,23 @@ final class LedgerStoreTests: XCTestCase {
         )
         XCTAssertEqual(
             YubraeTheme.formatPlainSignedAmount(-12_000_000, currencyCode: "JPY", baseCurrency: "JPY"),
-            "-1,200"
+            "-JP¥1,200"
+        )
+        XCTAssertEqual(
+            YubraeTheme.formatPlainSignedAmount(-120_000, currencyCode: "CHF", baseCurrency: "CNY"),
+            "-12.00 CHF"
+        )
+        XCTAssertEqual(
+            YubraeTheme.formatPlainSignedAmount(-120_000, currencyCode: "CHF", baseCurrency: "CHF"),
+            "-12.00 CHF"
+        )
+        XCTAssertEqual(
+            YubraeTheme.formatPlainSignedAmount(500_000, currencyCode: "THB", baseCurrency: "CNY"),
+            "+50.00 THB"
+        )
+        XCTAssertEqual(
+            "-\(YubraeTheme.formatPlainSignedAmount(0, currencyCode: "CNY", baseCurrency: "CNY", showSign: false))",
+            "-¥0.00"
         )
 
         // 6. YubraeTheme.formatDayHeaderParts：今天 / 昨天 / 同年周几 / 跨年日期
@@ -1912,5 +1928,86 @@ final class LedgerStoreTests: XCTestCase {
         let liveTodayParts = YubraeTheme.formatDayHeaderParts(currentEpochMillis())
         XCTAssertEqual(liveTodayParts.subText, "今天")
         XCTAssertFalse(liveTodayParts.dateText.isEmpty)
+    }
+
+    @MainActor
+    func testWeeklyTrendBucketsSundayToSaturday() throws {
+        let dir = makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let tz = try XCTUnwrap(TimeZone(secondsFromGMT: 8 * 3600))
+        let store = LedgerStore(storageDirectory: dir, useKeychain: false, timeZone: tz)
+        let wechatId = try XCTUnwrap(store.accounts.first(where: { $0.name == "微信零钱" })?.id)
+        let cal = YubraePeriodHelper.sundayCalendar(timeZone: tz)
+
+        func millis(_ year: Int, _ month: Int, _ day: Int, _ hour: Int = 12) throws -> Int64 {
+            let date = try XCTUnwrap(cal.date(from: DateComponents(year: year, month: month, day: day, hour: hour)))
+            return Int64((date.timeIntervalSince1970 * 1000.0).rounded())
+        }
+
+        // 2026-11-22 (周日) 支出 ¥10.00 -> 应落入 2026-11-25 所在周的第 0 桶「周日」
+        _ = try store.saveTransaction(
+            RecordTransactionRequest(
+                type: TransactionType.EXPENSE,
+                timestamp: try millis(2026, 11, 22, 10),
+                origAmountMicros: 100_000,
+                origCurrency: "CNY",
+                accountId: wechatId,
+                merchant: "周日早餐"
+            )
+        )
+        // 2026-11-25 (周三) 收入 ¥50.00 -> 应落入第 3 桶「周三」
+        _ = try store.saveTransaction(
+            RecordTransactionRequest(
+                type: TransactionType.INCOME,
+                timestamp: try millis(2026, 11, 25, 14),
+                origAmountMicros: 500_000,
+                origCurrency: "CNY",
+                accountId: wechatId,
+                merchant: "周三兼职"
+            )
+        )
+        // 2026-11-28 (周六) 支出 ¥25.00 -> 应落入第 6 桶「周六」
+        _ = try store.saveTransaction(
+            RecordTransactionRequest(
+                type: TransactionType.EXPENSE,
+                timestamp: try millis(2026, 11, 28, 22),
+                origAmountMicros: 250_000,
+                origCurrency: "CNY",
+                accountId: wechatId,
+                merchant: "周六聚餐"
+            )
+        )
+        // 2026-11-29 (下周日) 支出 ¥88.00 -> 属于下一自然周，不应混入 11/22~11/28 周
+        _ = try store.saveTransaction(
+            RecordTransactionRequest(
+                type: TransactionType.EXPENSE,
+                timestamp: try millis(2026, 11, 29, 9),
+                origAmountMicros: 880_000,
+                origCurrency: "CNY",
+                accountId: wechatId,
+                merchant: "下周日采购"
+            )
+        )
+
+        let buckets = store.computeTrendBuckets(
+            granularity: StatsGranularity.WEEKLY,
+            anchorDateMillis: try millis(2026, 11, 25, 12),
+            displayCurrency: "CNY"
+        )
+        XCTAssertEqual(buckets.map(\.label), ["周日", "周一", "周二", "周三", "周四", "周五", "周六"])
+        XCTAssertEqual(buckets[0].expenseBaseMicros, 100_000)
+        XCTAssertEqual(buckets[3].incomeBaseMicros, 500_000)
+        XCTAssertEqual(buckets[6].expenseBaseMicros, 250_000)
+        XCTAssertEqual(buckets.reduce(0) { $0 + $1.expenseBaseMicros }, 350_000)
+
+        // 锚定下周日 2026-11-29，验证新一周从周日重新开始
+        let nextWeekBuckets = store.computeTrendBuckets(
+            granularity: StatsGranularity.WEEKLY,
+            anchorDateMillis: try millis(2026, 11, 29, 12),
+            displayCurrency: "CNY"
+        )
+        XCTAssertEqual(nextWeekBuckets.map(\.label), ["周日", "周一", "周二", "周三", "周四", "周五", "周六"])
+        XCTAssertEqual(nextWeekBuckets[0].expenseBaseMicros, 880_000)
+        XCTAssertEqual(nextWeekBuckets.reduce(0) { $0 + $1.expenseBaseMicros }, 880_000)
     }
 }

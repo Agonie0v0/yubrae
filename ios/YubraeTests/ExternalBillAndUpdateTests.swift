@@ -622,49 +622,59 @@ final class ExternalBillAndUpdateTests: XCTestCase {
 
     func testYubraePeriodHelperWeekYearAndSummary() throws {
         let tz = try XCTUnwrap(TimeZone(secondsFromGMT: 8 * 3600))
-        let cal = YubraePeriodHelper.mondayCalendar(timeZone: tz)
+        let cal = YubraePeriodHelper.sundayCalendar(timeZone: tz)
+        XCTAssertEqual(cal.firstWeekday, 1)
+        XCTAssertEqual(cal.minimumDaysInFirstWeek, 1)
 
-        // 1. 普通周（2026-11-25 周三 -> 周一 11/23 ~ 周日 11/29）
+        // 1. 普通周（2026-11-25 周三 -> 周日 11/22 ~ 周六 11/28）
         let wed = try XCTUnwrap(cal.date(from: DateComponents(year: 2026, month: 11, day: 25, hour: 14, minute: 30)))
         let normalBounds = YubraePeriodHelper.weekBounds(for: wed, calendar: cal)
         let normalStart = cal.dateComponents([.year, .month, .day, .weekday], from: normalBounds.start)
         let normalEnd = cal.dateComponents([.year, .month, .day, .weekday], from: normalBounds.end)
         XCTAssertEqual(normalStart.year, 2026)
         XCTAssertEqual(normalStart.month, 11)
-        XCTAssertEqual(normalStart.day, 23)
-        XCTAssertEqual(normalStart.weekday, 2) // Monday
+        XCTAssertEqual(normalStart.day, 22)
+        XCTAssertEqual(normalStart.weekday, 1) // Sunday
         XCTAssertEqual(normalEnd.year, 2026)
         XCTAssertEqual(normalEnd.month, 11)
-        XCTAssertEqual(normalEnd.day, 29)
-        XCTAssertEqual(normalEnd.weekday, 1) // Sunday
+        XCTAssertEqual(normalEnd.day, 28)
+        XCTAssertEqual(normalEnd.weekday, 7) // Saturday
         XCTAssertTrue(normalBounds.start <= wed && wed <= normalBounds.end)
-        XCTAssertEqual(YubraePeriodHelper.formatWeekRangeText(for: wed, calendar: cal), "2026/11/23 - 11/29")
+        XCTAssertEqual(YubraePeriodHelper.formatWeekRangeText(for: wed, calendar: cal), "2026/11/22 - 11/28")
 
-        // 2. 闰年跨月（2024-02-29 周四 -> 周一 02/26 ~ 周日 03/03）
+        // 1b. 周日与周六边界（2026-11-22 周日、2026-11-28 周六同属 11/22~11/28；2026-11-29 周日开启下一自然周 11/29~12/05）
+        let sun = try XCTUnwrap(cal.date(from: DateComponents(year: 2026, month: 11, day: 22, hour: 0, minute: 5)))
+        let sat = try XCTUnwrap(cal.date(from: DateComponents(year: 2026, month: 11, day: 28, hour: 23, minute: 55)))
+        let nextSun = try XCTUnwrap(cal.date(from: DateComponents(year: 2026, month: 11, day: 29, hour: 0, minute: 1)))
+        XCTAssertEqual(YubraePeriodHelper.formatWeekRangeText(for: sun, calendar: cal), "2026/11/22 - 11/28")
+        XCTAssertEqual(YubraePeriodHelper.formatWeekRangeText(for: sat, calendar: cal), "2026/11/22 - 11/28")
+        XCTAssertEqual(YubraePeriodHelper.formatWeekRangeText(for: nextSun, calendar: cal), "2026/11/29 - 12/05")
+
+        // 2. 闰年跨月（2024-02-29 周四 -> 周日 02/25 ~ 周六 03/02）
         let leapDay = try XCTUnwrap(cal.date(from: DateComponents(year: 2024, month: 2, day: 29, hour: 9, minute: 0)))
         let leapBounds = YubraePeriodHelper.weekBounds(for: leapDay, calendar: cal)
         let leapStart = cal.dateComponents([.year, .month, .day], from: leapBounds.start)
         let leapEnd = cal.dateComponents([.year, .month, .day], from: leapBounds.end)
         XCTAssertEqual(leapStart.year, 2024)
         XCTAssertEqual(leapStart.month, 2)
-        XCTAssertEqual(leapStart.day, 26)
+        XCTAssertEqual(leapStart.day, 25)
         XCTAssertEqual(leapEnd.year, 2024)
         XCTAssertEqual(leapEnd.month, 3)
-        XCTAssertEqual(leapEnd.day, 3)
-        XCTAssertEqual(YubraePeriodHelper.formatWeekRangeText(for: leapDay, calendar: cal), "2024/02/26 - 03/03")
+        XCTAssertEqual(leapEnd.day, 2)
+        XCTAssertEqual(YubraePeriodHelper.formatWeekRangeText(for: leapDay, calendar: cal), "2024/02/25 - 03/02")
 
-        // 3. 跨年周（2025-12-31 周三 -> 周一 2025/12/29 ~ 周日 2026/01/04，校验非 week-year）
+        // 3. 跨年周（2025-12-31 周三 -> 周日 2025/12/28 ~ 周六 2026/01/03，校验非 week-year）
         let yearEnd = try XCTUnwrap(cal.date(from: DateComponents(year: 2025, month: 12, day: 31, hour: 23, minute: 0)))
         let crossBounds = YubraePeriodHelper.weekBounds(for: yearEnd, calendar: cal)
         let crossStart = cal.dateComponents([.year, .month, .day], from: crossBounds.start)
         let crossEnd = cal.dateComponents([.year, .month, .day], from: crossBounds.end)
         XCTAssertEqual(crossStart.year, 2025)
         XCTAssertEqual(crossStart.month, 12)
-        XCTAssertEqual(crossStart.day, 29)
+        XCTAssertEqual(crossStart.day, 28)
         XCTAssertEqual(crossEnd.year, 2026)
         XCTAssertEqual(crossEnd.month, 1)
-        XCTAssertEqual(crossEnd.day, 4)
-        XCTAssertEqual(YubraePeriodHelper.formatWeekRangeText(for: yearEnd, calendar: cal), "2025/12/29 - 01/04")
+        XCTAssertEqual(crossEnd.day, 3)
+        XCTAssertEqual(YubraePeriodHelper.formatWeekRangeText(for: yearEnd, calendar: cal), "2025/12/28 - 01/03")
 
         // 4. 12 年分页网格与负数保护
         XCTAssertEqual(YubraePeriodHelper.yearGridRange(for: 2026), Array(2016...2027))

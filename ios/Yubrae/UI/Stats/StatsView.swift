@@ -291,6 +291,7 @@ public struct StatsView: View {
                     HStack(spacing: 8) {
                         DatePicker("开始", selection: $customStartDate, displayedComponents: .date)
                             .labelsHidden()
+                            .environment(\.calendar, YubraePeriodHelper.sundayCalendar())
                             .fixedSize(horizontal: true, vertical: false)
                         Text("至")
                             .font(.caption)
@@ -299,6 +300,7 @@ public struct StatsView: View {
                             .fixedSize(horizontal: true, vertical: false)
                         DatePicker("结束", selection: $customEndDate, displayedComponents: .date)
                             .labelsHidden()
+                            .environment(\.calendar, YubraePeriodHelper.sundayCalendar())
                             .fixedSize(horizontal: true, vertical: false)
                     }
                     .frame(maxWidth: .infinity)

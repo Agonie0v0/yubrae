@@ -2029,6 +2029,7 @@ public struct QuickRecordSheet: View {
                 }
 
                 DatePicker("记账时间", selection: $txDate, displayedComponents: [.date, .hourAndMinute])
+                    .environment(\.calendar, YubraePeriodHelper.sundayCalendar())
                     .font(.subheadline)
                     .padding(12)
                     .background(RoundedRectangle(cornerRadius: 12).fill(palette.surface))

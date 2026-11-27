@@ -929,10 +929,10 @@ class KairoMainViewModel(
         val anchorDate = Instant.ofEpochMilli(anchorDateMillis).atZone(zone).toLocalDate()
         return when (granularity) {
             StatsGranularity.WEEKLY -> {
-                val mon = anchorDate.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY))
-                val sun = mon.plusDays(6)
-                val s = mon.atStartOfDay(zone).toInstant().toEpochMilli()
-                val e = sun.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli() - 1L
+                val sun = anchorDate.with(TemporalAdjusters.previousOrSame(DayOfWeek.SUNDAY))
+                val sat = sun.plusDays(6)
+                val s = sun.atStartOfDay(zone).toInstant().toEpochMilli()
+                val e = sat.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli() - 1L
                 s to e
             }
             StatsGranularity.YEARLY -> LedgerAnalytics.yearRangeMillis(anchorDate.year, zone)

@@ -530,10 +530,10 @@ object LedgerAnalytics {
 
         when (granularity) {
             StatsGranularity.WEEKLY -> {
-                val monday = anchorDate.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY))
-                val weekLabels = listOf("周一", "周二", "周三", "周四", "周五", "周六", "周日")
+                val sunday = anchorDate.with(TemporalAdjusters.previousOrSame(DayOfWeek.SUNDAY))
+                val weekLabels = listOf("周日", "周一", "周二", "周三", "周四", "周五", "周六")
                 for (i in 0 until 7) {
-                    val day = monday.plusDays(i.toLong())
+                    val day = sunday.plusDays(i.toLong())
                     val s = day.atStartOfDay(zoneId).toInstant().toEpochMilli()
                     val e = day.plusDays(1).atStartOfDay(zoneId).toInstant().toEpochMilli() - 1L
                     buckets.add(Triple(weekLabels[i], s, e))

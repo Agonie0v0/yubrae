@@ -78,7 +78,6 @@ fun TransactionsScreen(
     onTogglePrivacy: () -> Unit = {
         viewModel.updateSettings { it.copy(privacyMaskEnabled = !it.privacyMaskEnabled) }
     },
-    onOpenSmartInput: () -> Unit = {},
     onMultiSelectModeChange: (Boolean) -> Unit = {}
 ) {
     val uiState by viewModel.transactionsUiState.collectAsStateWithLifecycle()
@@ -284,7 +283,7 @@ fun TransactionsScreen(
                     .weight(1f)
                     .fillMaxWidth(),
                 contentPadding = PaddingValues(
-                    bottom = contentPadding.calculateBottomPadding() + 84.dp
+                    bottom = contentPadding.calculateBottomPadding() + 108.dp
                 )
             ) {
                 item(key = "top_header", contentType = "top_header") {
@@ -307,7 +306,6 @@ fun TransactionsScreen(
                         onOpenLedgerManager = onOpenLedgerManager,
                         onToggleSearch = { searchBarExpanded = !searchBarExpanded },
                         onTogglePrivacy = onTogglePrivacy,
-                        onOpenSmartInput = onOpenSmartInput,
                         onPrevMonth = { viewModel.shiftTxMonth(-1) },
                         onNextMonth = { viewModel.shiftTxMonth(1) },
                         onOpenMonthPicker = { showMonthPickerDialog = true },

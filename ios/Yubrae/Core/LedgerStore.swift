@@ -1983,19 +1983,20 @@ public final class LedgerStore: ObservableObject {
     ) -> [TrendBucketPoint] {
         var cal = Calendar(identifier: .gregorian)
         cal.timeZone = timeZone
-        cal.firstWeekday = 2 // Monday
+        cal.firstWeekday = 1 // Sunday
+        cal.minimumDaysInFirstWeek = 1
         let anchorDate = Date(timeIntervalSince1970: Double(anchorDateMillis) / 1000.0)
         var buckets: [(label: String, start: Int64, end: Int64)] = []
 
         switch granularity.uppercased() {
         case StatsGranularity.WEEKLY:
             let startOfDay = cal.startOfDay(for: anchorDate)
-            let weekday = cal.component(.weekday, from: startOfDay) // 1=Sun, 2=Mon...
-            let daysFromMonday = (weekday + 5) % 7
-            let monday = cal.date(byAdding: .day, value: -daysFromMonday, to: startOfDay) ?? startOfDay
-            let labels = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+            let weekday = cal.component(.weekday, from: startOfDay) // 1=Sun, 2=Mon...7=Sat
+            let daysFromSunday = (weekday - 1 + 7) % 7
+            let sunday = cal.date(byAdding: .day, value: -daysFromSunday, to: startOfDay) ?? startOfDay
+            let labels = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"]
             for i in 0..<7 {
-                let d = cal.date(byAdding: .day, value: i, to: monday) ?? monday
+                let d = cal.date(byAdding: .day, value: i, to: sunday) ?? sunday
                 let next = cal.date(byAdding: .day, value: 1, to: d) ?? d
                 buckets.append((labels[i], epochMillis(of: d), epochMillis(of: next) - 1))
             }

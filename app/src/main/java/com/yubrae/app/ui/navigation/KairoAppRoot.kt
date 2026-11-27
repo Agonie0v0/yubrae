@@ -3,6 +3,7 @@ package com.yubrae.app.ui.navigation
 import android.os.Build
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -10,6 +11,8 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.togetherWith
@@ -42,10 +45,12 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ReceiptLong
 import androidx.compose.material.icons.rounded.AccountBalanceWallet
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.AutoAwesome
 import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.PieChart
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
+import androidx.compose.material3.FabPosition
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -72,6 +77,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -603,6 +609,21 @@ fun KairoAppRoot(
                         RootLayer.MainTabs -> {
                             Scaffold(
                                 contentWindowInsets = WindowInsets(0, 0, 0, 0),
+                                floatingActionButtonPosition = FabPosition.End,
+                                floatingActionButton = {
+                                    AnimatedVisibility(
+                                        visible = pagerState.currentPage == 0 && !isTxMultiSelect,
+                                        enter = fadeIn() + scaleIn(initialScale = 0.85f),
+                                        exit = fadeOut() + scaleOut(targetScale = 0.85f)
+                                    ) {
+                                        HomeAiRecordFab(
+                                            onSmartInput = {
+                                                smartInputImagePath = null
+                                                showSmartInput = true
+                                            }
+                                        )
+                                    }
+                                },
                                 bottomBar = {
                                     YubraeBottomBar(
                                         selectedTab = selectedTab,
@@ -694,10 +715,6 @@ fun KairoAppRoot(
                                                 listState = txListState,
                                                 onOpenLedgerManager = { showLedgerSheet = true },
                                                 onTogglePrivacy = onTogglePrivacy,
-                                                onOpenSmartInput = {
-                                                    smartInputImagePath = null
-                                                    showSmartInput = true
-                                                },
                                                 onMultiSelectModeChange = { isTxMultiSelect = it }
                                             )
                                             1 -> AssetsScreen(
@@ -787,11 +804,15 @@ fun KairoAppRoot(
                     }
                 }
 
-                // 全局 SnackBar 宿主（覆盖主 Tab、设置二级页与全屏业务中心）
-                val snackbarBottomPadding = if (hasOverlayScreen || isInsideSettingsSubScreen) {
-                    16.dp
-                } else {
-                    68.dp
+                // 全局 SnackBar 宿主（覆盖主 Tab、设置二级页与全屏业务中心；Tab 0 显示右下角 FAB 时抬高并避让 FAB）
+                val showHomeFab = !hasOverlayScreen &&
+                    !isInsideSettingsSubScreen &&
+                    pagerState.currentPage == 0 &&
+                    !isTxMultiSelect
+                val snackbarBottomPadding = when {
+                    hasOverlayScreen || isInsideSettingsSubScreen -> 16.dp
+                    showHomeFab -> 78.dp
+                    else -> 68.dp
                 }
                 SnackbarHost(
                     hostState = snackbarHostState,
@@ -800,7 +821,7 @@ fun KairoAppRoot(
                         .navigationBarsPadding()
                         .imePadding()
                         .padding(
-                            end = 0.dp,
+                            end = if (showHomeFab) 66.dp else 0.dp,
                             bottom = snackbarBottomPadding
                         )
                 )
@@ -1154,6 +1175,34 @@ private fun TagManageHost(
         onSeedPresets = { viewModel.seedPresetCatalog() },
         onBack = onBack
     )
+}
+
+@Composable
+private fun HomeAiRecordFab(
+    onSmartInput: () -> Unit
+) {
+    val primaryColor = MaterialTheme.colorScheme.primary
+    Box(
+        modifier = Modifier
+            .size(50.dp)
+            .shadow(
+                elevation = 5.dp,
+                shape = CircleShape,
+                ambientColor = primaryColor.copy(alpha = 0.25f),
+                spotColor = primaryColor.copy(alpha = 0.25f)
+            )
+            .clip(CircleShape)
+            .background(primaryColor)
+            .clickable(onClick = onSmartInput),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(
+            imageVector = Icons.Rounded.AutoAwesome,
+            contentDescription = "AI 快速记账",
+            tint = MaterialTheme.colorScheme.onPrimary,
+            modifier = Modifier.size(22.dp)
+        )
+    }
 }
 
 @OptIn(ExperimentalFoundationApi::class)

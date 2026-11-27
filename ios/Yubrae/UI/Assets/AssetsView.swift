@@ -2389,6 +2389,7 @@ private struct DebtEditorSheet: View {
                     Toggle("设置约定还款日", isOn: $hasDueDate)
                     if hasDueDate {
                         DatePicker("约定还款日", selection: $dueDate, displayedComponents: .date)
+                            .environment(\.calendar, YubraePeriodHelper.sundayCalendar())
                         Button(role: .destructive) {
                             hasDueDate = false
                         } label: {

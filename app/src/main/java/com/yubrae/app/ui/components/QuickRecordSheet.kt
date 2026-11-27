@@ -70,9 +70,6 @@ import androidx.compose.material.icons.rounded.SwapHoriz
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DatePicker
-import androidx.compose.material3.DatePickerDefaults
-import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
@@ -85,7 +82,6 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TimePicker
-import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.material3.rememberTimePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -141,7 +137,6 @@ import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.LocalTime
 import java.time.ZoneId
-import java.time.ZoneOffset
 import kotlin.math.abs
 
 internal fun quickRecordKeypadKeyHeightDp(screenHeightDp: Int): Int =
@@ -2347,38 +2342,15 @@ fun QuickRecordSheet(
     if (showDatePicker) {
         val zone = ZoneId.systemDefault()
         val currentLocalDateTime = Instant.ofEpochMilli(timestampMillis).atZone(zone).toLocalDateTime()
-        val utcMidnight = currentLocalDateTime.toLocalDate().atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
-        val datePickerState = rememberDatePickerState(initialSelectedDateMillis = utcMidnight)
-        DatePickerDialog(
-            onDismissRequest = { showDatePicker = false },
-            shape = YubraeDialogShape,
-            colors = DatePickerDefaults.colors(containerColor = yubraeDialogContainerColor()),
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        val selectedUtc = datePickerState.selectedDateMillis
-                        if (selectedUtc != null) {
-                            val pickedDate = Instant.ofEpochMilli(selectedUtc).atZone(ZoneOffset.UTC).toLocalDate()
-                            val combined = LocalDateTime.of(pickedDate, currentLocalDateTime.toLocalTime())
-                            timestampMillis = combined.atZone(zone).toInstant().toEpochMilli()
-                        }
-                        showDatePicker = false
-                    },
-                    shape = RoundedCornerShape(12.dp)
-                ) { Text("确定") }
+        YubraeCalendarDatePickerDialog(
+            initialDate = currentLocalDateTime.toLocalDate(),
+            title = "选择记账日期",
+            onSelectDate = { pickedDate ->
+                val combined = LocalDateTime.of(pickedDate, currentLocalDateTime.toLocalTime())
+                timestampMillis = combined.atZone(zone).toInstant().toEpochMilli()
             },
-            dismissButton = {
-                TextButton(
-                    onClick = { showDatePicker = false },
-                    shape = RoundedCornerShape(12.dp)
-                ) { Text("取消") }
-            }
-        ) {
-            DatePicker(
-                state = datePickerState,
-                colors = DatePickerDefaults.colors(containerColor = yubraeDialogContainerColor())
-            )
-        }
+            onDismiss = { showDatePicker = false }
+        )
     }
 
     if (showTimePicker) {

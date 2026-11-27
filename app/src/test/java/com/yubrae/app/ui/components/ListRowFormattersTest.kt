@@ -4,6 +4,7 @@ import com.yubrae.app.data.db.ExchangeRateEntity
 import com.yubrae.app.data.db.TransactionEntity
 import com.yubrae.app.data.db.TransactionStatus
 import com.yubrae.app.data.db.TransactionType
+import com.yubrae.app.ui.screens.transactions.buildHeaderMetaFootnote
 import com.yubrae.app.ui.viewmodel.computeRefundedAmountByOrigTxId
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -70,13 +71,14 @@ class ListRowFormattersTest {
     }
 
     @Test
-    fun formatPlainSignedAmount_omitsBaseCurrencySymbolAndKeepsForeignSymbol() {
-        assertEquals("-1.80", KairoFormats.formatPlainSignedAmount(-18_000L, "CNY", "CNY"))
-        assertEquals("+106.00", KairoFormats.formatPlainSignedAmount(1_060_000L, "CNY", "CNY"))
-        assertEquals("50.00", KairoFormats.formatPlainSignedAmount(500_000L, "CNY", "CNY", showSign = false))
-        assertEquals("1,280.50", KairoFormats.formatPlainSignedAmount(12_805_000L, "CNY", "CNY", showSign = false))
-        assertEquals("0.00", KairoFormats.formatPlainSignedAmount(0L, "CNY", "CNY", showSign = true))
-        assertEquals("-1.80", KairoFormats.formatPlainSignedAmount(-18_000L, "cny", "CNY"))
+    fun formatPlainSignedAmount_alwaysIncludesCurrencySymbolOrCode() {
+        assertEquals("-¥1.80", KairoFormats.formatPlainSignedAmount(-18_000L, "CNY", "CNY"))
+        assertEquals("+¥106.00", KairoFormats.formatPlainSignedAmount(1_060_000L, "CNY", "CNY"))
+        assertEquals("¥50.00", KairoFormats.formatPlainSignedAmount(500_000L, "CNY", "CNY", showSign = false))
+        assertEquals("¥1,280.50", KairoFormats.formatPlainSignedAmount(12_805_000L, "CNY", "CNY", showSign = false))
+        assertEquals("¥0.00", KairoFormats.formatPlainSignedAmount(0L, "CNY", "CNY", showSign = true))
+        assertEquals("-¥0.00", "-${KairoFormats.formatPlainSignedAmount(0L, "CNY", "CNY", showSign = false)}")
+        assertEquals("-¥1.80", KairoFormats.formatPlainSignedAmount(-18_000L, "cny", "CNY"))
 
         assertEquals("-$53.16", KairoFormats.formatPlainSignedAmount(-531_600L, "USD", "CNY"))
         assertEquals("+$12.00", KairoFormats.formatPlainSignedAmount(120_000L, "USD", "CNY"))
@@ -86,8 +88,53 @@ class ListRowFormattersTest {
         assertEquals("-12.00 CHF", KairoFormats.formatPlainSignedAmount(-120_000L, "CHF", "CNY"))
         assertEquals("+50.00 THB", KairoFormats.formatPlainSignedAmount(500_000L, "THB", "CNY"))
 
-        assertEquals("-10.00", KairoFormats.formatPlainSignedAmount(-100_000L, "USD", "USD"))
+        assertEquals("-$10.00", KairoFormats.formatPlainSignedAmount(-100_000L, "USD", "USD"))
+        assertEquals("+$10.00", KairoFormats.formatPlainSignedAmount(100_000L, "USD", "USD"))
+        assertEquals("$0.00", KairoFormats.formatPlainSignedAmount(0L, "USD", "USD", showSign = true))
+        assertEquals("-12.00 CHF", KairoFormats.formatPlainSignedAmount(-120_000L, "CHF", "CHF"))
         assertEquals("-¥10.00", KairoFormats.formatPlainSignedAmount(-100_000L, "CNY", "USD"))
+    }
+
+    @Test
+    fun buildHeaderMetaFootnote_restoresForeignCurrencySymbolsWithoutDuplicatingCode() {
+        assertEquals(
+            "USD -$53.16 · EUR -€25.00 · CHF -12.00 · 省 ¥5.00 · 费 ¥1.20",
+            buildHeaderMetaFootnote(
+                foreignCurrencySummaries = listOf(
+                    Triple("USD", 531_600L, 0L),
+                    Triple("EUR", 250_000L, 0L),
+                    Triple("CHF", 120_000L, 0L)
+                ),
+                monthDiscountBaseMicros = 50_000L,
+                monthFeeBaseMicros = 12_000L,
+                baseCurrency = "CNY",
+                privacyMasked = false
+            )
+        )
+        assertEquals(
+            "USD -$53.16 / +$12.00 · JPY +JP¥1,200 · THB +50.00",
+            buildHeaderMetaFootnote(
+                foreignCurrencySummaries = listOf(
+                    Triple("USD", 531_600L, 120_000L),
+                    Triple("JPY", 0L, 12_000_000L),
+                    Triple("THB", 0L, 500_000L)
+                ),
+                monthDiscountBaseMicros = 0L,
+                monthFeeBaseMicros = 0L,
+                baseCurrency = "CNY",
+                privacyMasked = false
+            )
+        )
+        assertEquals(
+            "USD **** · 省 ****",
+            buildHeaderMetaFootnote(
+                foreignCurrencySummaries = listOf(Triple("USD", 531_600L, 0L)),
+                monthDiscountBaseMicros = 50_000L,
+                monthFeeBaseMicros = 0L,
+                baseCurrency = "CNY",
+                privacyMasked = true
+            )
+        )
     }
 
     @Test

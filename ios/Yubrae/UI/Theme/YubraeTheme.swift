@@ -314,35 +314,31 @@ public enum YubraeTheme {
         return (dateText: dateText, subText: subText)
     }
 
-    /// 极简列表金额格式：主币种去掉冗余 `¥` 符号（如 `-1.80` / `+106.00` / `50.00` / `1,280.50`），外币保留清晰币种符号。
+    /// 全币种清晰带符号金额格式：所有币种（含主币种）均保留清晰货币符号（如 `-¥1.80` / `+¥106.00` / `¥50.00` / `¥1,280.50` / `¥0.00` / `-$53.16` / `+$12.00` / `-JP¥1,200` / `-12.00 CHF`）。
     public static func formatPlainSignedAmount(
         _ micros: Int64,
         currencyCode: String,
-        baseCurrency: String,
+        baseCurrency: String = CurrencyCatalog.defaultBaseCurrency,
         showSign: Bool = true
     ) -> String {
+        _ = baseCurrency
         let normCurrency = CurrencyCatalog.normalize(currencyCode)
-        let normBase = CurrencyCatalog.normalize(baseCurrency)
-        if normCurrency == normBase {
-            let info = CurrencyCatalog.find(normCurrency)
-            let sign: String
-            if micros < 0 {
-                sign = "-"
-            } else if showSign && micros > 0 {
-                sign = "+"
-            } else {
-                sign = ""
-            }
-            let absMicros: Int64 = micros == Int64.min ? Int64.max : abs(micros)
-            let numberStr = MoneyAmount.formatPlain(absMicros, minorDigits: info.minorDigits, grouping: true)
-            return "\(sign)\(numberStr)"
+        let info = CurrencyCatalog.find(normCurrency)
+        let sign: String
+        if micros < 0 {
+            sign = "-"
+        } else if showSign && micros > 0 {
+            sign = "+"
+        } else {
+            sign = ""
         }
-        return MoneyAmount.format(
-            micros,
-            currencyCode: normCurrency,
-            showSign: showSign,
-            showCurrencyCode: false
-        )
+        let absMicros: Int64 = micros == Int64.min ? Int64.max : abs(micros)
+        let numberStr = MoneyAmount.formatPlain(absMicros, minorDigits: info.minorDigits, grouping: true)
+        let trimmedSymbol = info.symbol.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmedSymbol.isEmpty || trimmedSymbol.caseInsensitiveCompare(info.code) == .orderedSame {
+            return "\(sign)\(numberStr) \(info.code)"
+        }
+        return "\(sign)\(trimmedSymbol)\(numberStr)"
     }
 
     private static func isNoiseNoteClause(_ text: String) -> Bool {

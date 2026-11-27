@@ -989,8 +989,9 @@ object KairoFormats {
     }
 
     /**
-     * 主币种去冗余货币符号输出干净等宽金额（规避第三方字体 `-¥` 重叠），外币保留清晰币种符号或代码。
+     * 输出带符号与货币单位的等宽金额（无论是否为主币种均统一展示货币符号或币种代码）。
      */
+    @Suppress("UNUSED_PARAMETER")
     fun formatPlainSignedAmount(
         amountMicros: Long,
         currencyCode: String,
@@ -998,8 +999,6 @@ object KairoFormats {
         showSign: Boolean = true
     ): String {
         val normalizedCurrency = currencyCode.trim().uppercase(Locale.ROOT)
-            .ifEmpty { CurrencyCatalog.DEFAULT_BASE_CURRENCY }
-        val normalizedBase = baseCurrency.trim().uppercase(Locale.ROOT)
             .ifEmpty { CurrencyCatalog.DEFAULT_BASE_CURRENCY }
         val info = CurrencyCatalog.find(normalizedCurrency)
         val absVal = kotlin.math.abs(amountMicros)
@@ -1009,9 +1008,6 @@ object KairoFormats {
             else -> ""
         }
         val numberStr = MoneyAmount.formatPlain(absVal, info.minorDigits, grouping = true)
-        if (normalizedCurrency == normalizedBase) {
-            return "$sign$numberStr"
-        }
         return if (info.symbol.isBlank() || info.symbol.equals(info.code, ignoreCase = true)) {
             "$sign$numberStr ${info.code}"
         } else {

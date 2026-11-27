@@ -151,17 +151,12 @@ internal struct TransactionRowView: View {
         guard tx.discountAmountMicros > 0 || tx.feeAmountMicros > 0 || toCur != origCur || toAmt != tx.origAmountMicros else {
             return nil
         }
-        let formatted: String
-        if toCur != origCur {
-            formatted = MoneyAmount.format(toAmt, currencyCode: toCur, showSign: false, showCurrencyCode: false)
-        } else {
-            formatted = YubraeTheme.formatPlainSignedAmount(
-                toAmt,
-                currencyCode: toCur,
-                baseCurrency: baseCurrency,
-                showSign: false
-            )
-        }
+        let formatted = YubraeTheme.formatPlainSignedAmount(
+            toAmt,
+            currencyCode: toCur,
+            baseCurrency: baseCurrency,
+            showSign: false
+        )
         return "到账 \(YubraeTheme.masked(formatted, isMasked: isMasked))"
     }
 

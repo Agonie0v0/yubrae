@@ -4,27 +4,27 @@ import UIKit
 // MARK: - Period Calculation & Formatting Helpers
 
 public enum YubraePeriodHelper {
-    public static func mondayCalendar(timeZone: TimeZone = .current) -> Calendar {
+    public static func sundayCalendar(timeZone: TimeZone = .current) -> Calendar {
         var cal = Calendar(identifier: .gregorian)
         cal.timeZone = timeZone
-        cal.firstWeekday = 2 // Monday
-        cal.minimumDaysInFirstWeek = 4
+        cal.firstWeekday = 1 // Sunday
+        cal.minimumDaysInFirstWeek = 1
         return cal
     }
 
     public static func weekBounds(
         for date: Date,
-        calendar: Calendar = mondayCalendar()
+        calendar: Calendar = sundayCalendar()
     ) -> (start: Date, end: Date) {
         let startOfDay = calendar.startOfDay(for: date)
         let weekday = calendar.component(.weekday, from: startOfDay) // 1 = Sun, 2 = Mon ... 7 = Sat
-        let daysFromMonday = (weekday + 5) % 7
-        let rawMonday = calendar.date(byAdding: .day, value: -daysFromMonday, to: startOfDay) ?? startOfDay
-        let monday = calendar.startOfDay(for: rawMonday)
-        let rawNextMonday = calendar.date(byAdding: .day, value: 7, to: monday) ?? monday
-        let nextMonday = calendar.startOfDay(for: rawNextMonday)
-        let sundayEnd = nextMonday.addingTimeInterval(-0.001)
-        return (start: monday, end: max(monday, sundayEnd))
+        let daysFromSunday = (weekday - 1 + 7) % 7
+        let rawSunday = calendar.date(byAdding: .day, value: -daysFromSunday, to: startOfDay) ?? startOfDay
+        let sunday = calendar.startOfDay(for: rawSunday)
+        let rawNextSunday = calendar.date(byAdding: .day, value: 7, to: sunday) ?? sunday
+        let nextSunday = calendar.startOfDay(for: rawNextSunday)
+        let saturdayEnd = nextSunday.addingTimeInterval(-0.001)
+        return (start: sunday, end: max(sunday, saturdayEnd))
     }
 
     public static func yearGridRange(for anchorYear: Int) -> [Int] {
@@ -37,7 +37,7 @@ public enum YubraePeriodHelper {
 
     public static func formatWeekRangeText(
         for date: Date,
-        calendar: Calendar = mondayCalendar()
+        calendar: Calendar = sundayCalendar()
     ) -> String {
         let bounds = weekBounds(for: date, calendar: calendar)
         let startFormatter = DateFormatter()
@@ -499,7 +499,7 @@ public struct YubraeWeekPickerSheet: View {
                                 .font(.title3.weight(.semibold))
                                 .foregroundColor(palette.primary)
                             VStack(alignment: .leading, spacing: 2) {
-                                Text("所选自然周（周一至周日）")
+                                Text("所选自然周（周日至周六）")
                                     .font(.caption)
                                     .foregroundColor(palette.textSecondary)
                                 Text(weekPreview)
@@ -521,7 +521,7 @@ public struct YubraeWeekPickerSheet: View {
                         .datePickerStyle(.graphical)
                         .labelsHidden()
                         .tint(palette.primary)
-                        .environment(\.calendar, YubraePeriodHelper.mondayCalendar())
+                        .environment(\.calendar, YubraePeriodHelper.sundayCalendar())
                         .environment(\.locale, Locale(identifier: "zh_CN"))
                     }
 

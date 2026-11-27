@@ -29,9 +29,6 @@ import androidx.compose.material.icons.rounded.EventRepeat
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DatePicker
-import androidx.compose.material3.DatePickerDefaults
-import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButton
@@ -46,7 +43,6 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
-import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
@@ -71,16 +67,14 @@ import com.yubrae.app.ui.components.CurrencyPickerDialog
 import com.yubrae.app.ui.components.EmptyStateCard
 import com.yubrae.app.ui.components.KairoFormats
 import com.yubrae.app.ui.components.QuickCurrencySelectorRow
+import com.yubrae.app.ui.components.YubraeCalendarDatePickerDialog
 import com.yubrae.app.ui.components.YubraeDialog
-import com.yubrae.app.ui.components.YubraeDialogShape
 import com.yubrae.app.ui.components.transactionAmountColor
-import com.yubrae.app.ui.components.yubraeDialogContainerColor
 import com.yubrae.app.ui.theme.tabular
 import com.yubrae.app.ui.viewmodel.KairoMainViewModel
 import java.time.Instant
 import java.time.LocalTime
 import java.time.ZoneId
-import java.time.ZoneOffset
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -566,32 +560,13 @@ private fun RecurringRuleEditorDialog(
     if (showDatePicker) {
         val zone = ZoneId.systemDefault()
         val currentLocal = Instant.ofEpochMilli(nextRunMillis).atZone(zone).toLocalDate()
-        val utcMillis = currentLocal.atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
-        val pickerState = rememberDatePickerState(initialSelectedDateMillis = utcMillis)
-        DatePickerDialog(
-            onDismissRequest = { showDatePicker = false },
-            shape = YubraeDialogShape,
-            colors = DatePickerDefaults.colors(containerColor = yubraeDialogContainerColor()),
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        pickerState.selectedDateMillis?.let { selectedUtc ->
-                            val pickedDate = Instant.ofEpochMilli(selectedUtc).atZone(ZoneOffset.UTC).toLocalDate()
-                            nextRunMillis = pickedDate.atTime(LocalTime.of(9, 0)).atZone(zone).toInstant().toEpochMilli()
-                        }
-                        showDatePicker = false
-                    },
-                    shape = RoundedCornerShape(12.dp)
-                ) { Text("确定") }
+        YubraeCalendarDatePickerDialog(
+            initialDate = currentLocal,
+            title = "选择下次执行日期",
+            onSelectDate = { pickedDate ->
+                nextRunMillis = pickedDate.atTime(LocalTime.of(9, 0)).atZone(zone).toInstant().toEpochMilli()
             },
-            dismissButton = {
-                TextButton(
-                    onClick = { showDatePicker = false },
-                    shape = RoundedCornerShape(12.dp)
-                ) { Text("取消") }
-            }
-        ) {
-            DatePicker(state = pickerState)
-        }
+            onDismiss = { showDatePicker = false }
+        )
     }
 }

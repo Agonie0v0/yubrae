@@ -50,9 +50,6 @@ import androidx.compose.material.icons.rounded.PieChart
 import androidx.compose.material.icons.rounded.Visibility
 import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material3.Button
-import androidx.compose.material3.DatePicker
-import androidx.compose.material3.DatePickerDefaults
-import androidx.compose.material3.DatePickerDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -68,7 +65,6 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.derivedStateOf
@@ -140,11 +136,10 @@ import com.yubrae.app.ui.components.WeekPickerDialog
 import com.yubrae.app.ui.components.YearMonthPickerDialog
 import com.yubrae.app.ui.components.YearPickerDialog
 import com.yubrae.app.ui.components.YimuCard
+import com.yubrae.app.ui.components.YubraeCalendarDatePickerDialog
 import com.yubrae.app.ui.components.YubraeDialog
-import com.yubrae.app.ui.components.YubraeDialogShape
 import com.yubrae.app.ui.components.YubraeSheetShape
 import com.yubrae.app.ui.components.formatPrivacyAmount
-import com.yubrae.app.ui.components.yubraeDialogContainerColor
 import com.yubrae.app.ui.components.yubraeSheetContainerColor
 import com.yubrae.app.ui.theme.KairoTheme
 import com.yubrae.app.ui.theme.tabular
@@ -154,7 +149,6 @@ import java.time.Instant
 import java.time.LocalDate
 import java.time.YearMonth
 import java.time.ZoneId
-import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 import java.time.temporal.TemporalAdjusters
 import java.time.temporal.WeekFields
@@ -777,59 +771,34 @@ fun StatsScreen(
         )
     }
 
-    // 自定义起止日期 DatePickerDialog
+    // 自定义起止日期选择器（周日至周六）
     customPickTarget?.let { target ->
         key(target) {
             val currentMillis = if (target == CustomDatePickTarget.START) timeWindow.first else timeWindow.second
             val currentLocalDate = Instant.ofEpochMilli(currentMillis).atZone(zone).toLocalDate()
-            val utcInitMillis = currentLocalDate.atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli()
-            val datePickerState = rememberDatePickerState(initialSelectedDateMillis = utcInitMillis)
-
-            DatePickerDialog(
-                onDismissRequest = { customPickTarget = null },
-                shape = YubraeDialogShape,
-                colors = DatePickerDefaults.colors(containerColor = yubraeDialogContainerColor()),
-                confirmButton = {
-                    TextButton(
-                        onClick = {
-                            val selectedUtc = datePickerState.selectedDateMillis
-                            if (selectedUtc != null) {
-                                val pickedDate = Instant.ofEpochMilli(selectedUtc).atZone(ZoneOffset.UTC).toLocalDate()
-                                val currentStartDate = Instant.ofEpochMilli(timeWindow.first).atZone(zone).toLocalDate()
-                                val currentEndDate = Instant.ofEpochMilli(timeWindow.second).atZone(zone).toLocalDate()
-                                val (newStartDate, newEndDate) = if (target == CustomDatePickTarget.START) {
-                                    val s = pickedDate
-                                    val e = if (pickedDate.isAfter(currentEndDate)) pickedDate else currentEndDate
-                                    s to e
-                                } else {
-                                    val e = pickedDate
-                                    val s = if (pickedDate.isBefore(currentStartDate)) pickedDate else currentStartDate
-                                    s to e
-                                }
-                                val startMs = newStartDate.atStartOfDay(zone).toInstant().toEpochMilli()
-                                val endMs = newEndDate.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli() - 1L
-                                localCustomStart = startMs
-                                localCustomEnd = endMs
-                                onCustomDateRangeChange(startMs, endMs)
-                            }
-                            customPickTarget = null
-                        },
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Text("确定")
+            YubraeCalendarDatePickerDialog(
+                initialDate = currentLocalDate,
+                title = if (target == CustomDatePickTarget.START) "选择开始日期" else "选择结束日期",
+                onSelectDate = { pickedDate ->
+                    val currentStartDate = Instant.ofEpochMilli(timeWindow.first).atZone(zone).toLocalDate()
+                    val currentEndDate = Instant.ofEpochMilli(timeWindow.second).atZone(zone).toLocalDate()
+                    val (newStartDate, newEndDate) = if (target == CustomDatePickTarget.START) {
+                        val s = pickedDate
+                        val e = if (pickedDate.isAfter(currentEndDate)) pickedDate else currentEndDate
+                        s to e
+                    } else {
+                        val e = pickedDate
+                        val s = if (pickedDate.isBefore(currentStartDate)) pickedDate else currentStartDate
+                        s to e
                     }
+                    val startMs = newStartDate.atStartOfDay(zone).toInstant().toEpochMilli()
+                    val endMs = newEndDate.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli() - 1L
+                    localCustomStart = startMs
+                    localCustomEnd = endMs
+                    onCustomDateRangeChange(startMs, endMs)
                 },
-                dismissButton = {
-                    TextButton(
-                        onClick = { customPickTarget = null },
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Text("取消")
-                    }
-                }
-            ) {
-                DatePicker(state = datePickerState)
-            }
+                onDismiss = { customPickTarget = null }
+            )
         }
     }
 
@@ -3066,10 +3035,10 @@ private fun resolveStatsTimeWindow(
             if (trendBuckets.isNotEmpty()) {
                 trendBuckets.first().startMillis to trendBuckets.last().endMillis
             } else {
-                val monday = anchorDate.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY))
-                val sunday = monday.plusDays(6)
-                val start = monday.atStartOfDay(zone).toInstant().toEpochMilli()
-                val end = sunday.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli() - 1L
+                val sunday = anchorDate.with(TemporalAdjusters.previousOrSame(DayOfWeek.SUNDAY))
+                val saturday = sunday.plusDays(6)
+                val start = sunday.atStartOfDay(zone).toInstant().toEpochMilli()
+                val end = saturday.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli() - 1L
                 start to end
             }
         }
@@ -3113,7 +3082,7 @@ private fun formatStatsPeriodTitle(
     return when (granularity) {
         StatsGranularity.WEEKLY -> {
             val startDate = Instant.ofEpochMilli(windowStartMillis).atZone(zone).toLocalDate()
-            val wf = WeekFields.ISO
+            val wf = WeekFields.SUNDAY_START
             val weekYear = startDate.get(wf.weekBasedYear())
             val weekNum = startDate.get(wf.weekOfWeekBasedYear())
             "${weekYear}年第${weekNum}周"
