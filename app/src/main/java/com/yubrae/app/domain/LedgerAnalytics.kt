@@ -25,6 +25,15 @@ import java.time.ZoneId
 import java.time.temporal.ChronoUnit
 import java.time.temporal.TemporalAdjusters
 
+data class CreditBillingCycleSummary(
+    val cycleStartMillis: Long,
+    val cycleEndMillis: Long,
+    val cycleSpendMicros: Long,
+    val cycleRepaidMicros: Long,
+    val billingDay: Int?,
+    val repaymentDay: Int?
+)
+
 /**
  * 账本净资产与多维报表计算引擎：
  * - 所有金额运算均以微元 Long 定点数累加，严禁使用 Float/Double 累加金额
@@ -584,5 +593,81 @@ object LedgerAnalytics {
                 incomeBaseMicros = inc
             )
         }
+    }
+
+    /**
+     * 按信用卡账单日计算当前账单周期起止区间，并统计周期内消费与还款总额（均为账户币种微元）。
+     */
+    fun computeCreditBillingCycleSummary(
+        account: AccountEntity,
+        transactions: List<TransactionEntity>,
+        nowMillis: Long = System.currentTimeMillis(),
+        zone: ZoneId = ZoneId.systemDefault()
+    ): CreditBillingCycleSummary {
+        val today = Instant.ofEpochMilli(nowMillis).atZone(zone).toLocalDate()
+        val currentYm = YearMonth.from(today)
+        val billingDay = account.billingDay?.takeIf { it in 1..31 }
+        val repaymentDay = account.repaymentDay?.takeIf { it in 1..31 }
+
+        val (cycleStartMillis, cycleEndMillis) = if (billingDay != null) {
+            val thisMonthBillDay = minOf(billingDay, currentYm.lengthOfMonth())
+            val (startDate, endDate) = if (today.dayOfMonth > thisMonthBillDay) {
+                val start = currentYm.atDay(thisMonthBillDay).plusDays(1)
+                val nextYm = currentYm.plusMonths(1)
+                val end = nextYm.atDay(minOf(billingDay, nextYm.lengthOfMonth()))
+                start to end
+            } else {
+                val prevYm = currentYm.minusMonths(1)
+                val start = prevYm.atDay(minOf(billingDay, prevYm.lengthOfMonth())).plusDays(1)
+                val end = currentYm.atDay(thisMonthBillDay)
+                start to end
+            }
+            val startMs = startDate.atStartOfDay(zone).toInstant().toEpochMilli()
+            val endMs = endDate.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli() - 1L
+            startMs to endMs
+        } else {
+            monthRangeMillis(currentYm.year, currentYm.monthValue, zone)
+        }
+
+        var cycleSpend = 0L
+        var cycleRepaid = 0L
+        for (tx in transactions) {
+            if (tx.status != TransactionStatus.CONFIRMED) continue
+            if (tx.timestamp !in cycleStartMillis..cycleEndMillis) continue
+
+            when (tx.type) {
+                TransactionType.EXPENSE -> {
+                    if (tx.accountId == account.id) {
+                        cycleSpend += tx.accountAmountMicros
+                    }
+                }
+                TransactionType.INCOME -> {
+                    if (tx.accountId == account.id) {
+                        if (tx.refundOfTxId != null) {
+                            cycleSpend -= tx.accountAmountMicros
+                        } else {
+                            cycleRepaid += tx.accountAmountMicros
+                        }
+                    }
+                }
+                TransactionType.TRANSFER -> {
+                    if (tx.accountId == account.id) {
+                        cycleSpend += tx.accountAmountMicros
+                    }
+                    if (tx.toAccountId == account.id) {
+                        cycleRepaid += tx.toAmountMicros ?: tx.accountAmountMicros
+                    }
+                }
+            }
+        }
+
+        return CreditBillingCycleSummary(
+            cycleStartMillis = cycleStartMillis,
+            cycleEndMillis = cycleEndMillis,
+            cycleSpendMicros = cycleSpend.coerceAtLeast(0L),
+            cycleRepaidMicros = cycleRepaid.coerceAtLeast(0L),
+            billingDay = billingDay,
+            repaymentDay = repaymentDay
+        )
     }
 }

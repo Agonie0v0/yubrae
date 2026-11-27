@@ -17,6 +17,7 @@ import com.yubrae.app.data.db.RecurringRuleEntity
 import com.yubrae.app.data.db.ReimburseStatus
 import com.yubrae.app.data.db.StatsGranularity
 import com.yubrae.app.data.db.TagEntity
+import com.yubrae.app.data.db.TransactionEntity
 import com.yubrae.app.data.db.TransactionStatus
 import com.yubrae.app.data.db.TransactionType
 import com.yubrae.app.data.network.ExchangeRateApi
@@ -1248,5 +1249,364 @@ class LedgerRepositoryTest {
         val delLast = repoWithAlias.deleteAccount(accB, migrateToAccountId = null)
         assertTrue(delLast.isSuccess)
         assertTrue(accountDao.getAll().isEmpty())
+    }
+
+    @Test
+    fun reorderAccounts_persistsSortOrderAtomicallyInMultiplesOfTen() = runTest {
+        val accA = accountDao.insert(
+            AccountEntity(name = "微信零钱", groupType = AccountGroup.WALLET, currencyCode = "CNY", sortOrder = 0)
+        )
+        val accB = accountDao.insert(
+            AccountEntity(name = "招行储蓄卡", groupType = AccountGroup.DEBIT, currencyCode = "CNY", sortOrder = 0)
+        )
+        val accC = accountDao.insert(
+            AccountEntity(name = "招行信用卡", groupType = AccountGroup.CREDIT, currencyCode = "CNY", sortOrder = 0)
+        )
+
+        val emptyRes = ledger.reorderAccounts(emptyList())
+        assertTrue(emptyRes.isSuccess)
+
+        nowMillis = millisOf(2026, 11, 25, 16, 30)
+        val res = ledger.reorderAccounts(listOf(accC, accA, accB, accA))
+        assertTrue(res.isSuccess)
+
+        val ordered = accountDao.getAll()
+        assertEquals(listOf(accC, accA, accB), ordered.map { it.id })
+        assertEquals(listOf(0, 10, 20), ordered.map { it.sortOrder })
+        assertTrue(ordered.all { it.updatedAt == nowMillis })
+    }
+
+    @Test
+    fun batchMoveTransactionsAccount_handlesSameCurrencyCrossCurrencyAndTransferSelfGuard() = runTest {
+        val cnyA = accountDao.insert(
+            AccountEntity(
+                name = "招行储蓄卡",
+                groupType = AccountGroup.DEBIT,
+                currencyCode = "CNY",
+                balanceMicros = MoneyAmount.parseToMicros("1000.00")!!
+            )
+        )
+        val cnyB = accountDao.insert(
+            AccountEntity(
+                name = "微信零钱",
+                groupType = AccountGroup.WALLET,
+                currencyCode = "CNY",
+                balanceMicros = MoneyAmount.parseToMicros("500.00")!!
+            )
+        )
+        val usdC = accountDao.insert(
+            AccountEntity(
+                name = "美元账户",
+                groupType = AccountGroup.FOREIGN,
+                currencyCode = "USD",
+                balanceMicros = MoneyAmount.parseToMicros("200.00")!!
+            )
+        )
+        val archivedAcc = accountDao.insert(
+            AccountEntity(
+                name = "归档旧卡",
+                groupType = AccountGroup.DEBIT,
+                currencyCode = "CNY",
+                archived = true
+            )
+        )
+        exchangeRateDao.upsert(
+            ExchangeRateEntity(
+                baseCurrency = "USD",
+                targetCurrency = "CNY",
+                rateMicros = 8_000_000L, // 1 USD = 8.00 CNY => 1 CNY = 0.125 USD exact
+                date = "2026-11-22",
+                source = "CUSTOM"
+            )
+        )
+
+        val expCny = ledger.saveTransaction(
+            RecordTransactionRequest(
+                type = TransactionType.EXPENSE,
+                timestamp = millisOf(2026, 11, 22, 10, 0),
+                origAmountMicros = MoneyAmount.parseToMicros("100.00")!!,
+                origCurrency = "CNY",
+                accountId = cnyA
+            )
+        ).getOrThrow()
+        val incCny = ledger.saveTransaction(
+            RecordTransactionRequest(
+                type = TransactionType.INCOME,
+                timestamp = millisOf(2026, 11, 22, 11, 0),
+                origAmountMicros = MoneyAmount.parseToMicros("50.00")!!,
+                origCurrency = "CNY",
+                accountId = cnyA
+            )
+        ).getOrThrow()
+        val expAlreadyInB = ledger.saveTransaction(
+            RecordTransactionRequest(
+                type = TransactionType.EXPENSE,
+                timestamp = millisOf(2026, 11, 22, 11, 30),
+                origAmountMicros = MoneyAmount.parseToMicros("20.00")!!,
+                origCurrency = "CNY",
+                accountId = cnyB
+            )
+        ).getOrThrow()
+        val transferAToB = ledger.saveTransaction(
+            RecordTransactionRequest(
+                type = TransactionType.TRANSFER,
+                timestamp = millisOf(2026, 11, 22, 12, 0),
+                origAmountMicros = MoneyAmount.parseToMicros("40.00")!!,
+                origCurrency = "CNY",
+                accountId = cnyA,
+                toAccountId = cnyB
+            )
+        ).getOrThrow()
+
+        // Archived / nonexistent targets must fail without changing balances
+        assertTrue(ledger.batchMoveTransactionsAccount(listOf(expCny.id), archivedAcc).isFailure)
+        assertTrue(ledger.batchMoveTransactionsAccount(listOf(expCny.id), 99999L).isFailure)
+        assertEquals(MoneyAmount.parseToMicros("910.00")!!, accountDao.getById(cnyA)!!.balanceMicros)
+        assertEquals(MoneyAmount.parseToMicros("520.00")!!, accountDao.getById(cnyB)!!.balanceMicros)
+
+        // 1. Same-currency batch move to cnyB:
+        //    expCny & incCny move; expAlreadyInB skipped; transferAToB skipped (toAccountId == cnyB anti-self-transfer)
+        val sameCurMoved = ledger.batchMoveTransactionsAccount(
+            txIds = listOf(expCny.id, incCny.id, expAlreadyInB.id, transferAToB.id),
+            targetAccountId = cnyB
+        ).getOrThrow()
+        assertEquals(2, sameCurMoved)
+        assertEquals(MoneyAmount.parseToMicros("960.00")!!, accountDao.getById(cnyA)!!.balanceMicros)
+        assertEquals(MoneyAmount.parseToMicros("470.00")!!, accountDao.getById(cnyB)!!.balanceMicros)
+        assertEquals(cnyB, transactionDao.getById(expCny.id)!!.accountId)
+        assertEquals(cnyB, transactionDao.getById(incCny.id)!!.accountId)
+        assertEquals(cnyA, transactionDao.getById(transferAToB.id)!!.accountId)
+        assertEquals(cnyB, transactionDao.getById(transferAToB.id)!!.toAccountId)
+
+        // 2. Cross-currency move to usdC (1 CNY = 0.125 USD):
+        //    expCny (100 CNY -> 12.50 USD) and transferAToB source (40 CNY -> 5.00 USD, toAccountId stays cnyB)
+        val crossCurMoved = ledger.batchMoveTransactionsAccount(
+            txIds = listOf(expCny.id, transferAToB.id),
+            targetAccountId = usdC
+        ).getOrThrow()
+        assertEquals(2, crossCurMoved)
+        assertEquals(MoneyAmount.parseToMicros("1000.00")!!, accountDao.getById(cnyA)!!.balanceMicros)
+        assertEquals(MoneyAmount.parseToMicros("570.00")!!, accountDao.getById(cnyB)!!.balanceMicros)
+        assertEquals(MoneyAmount.parseToMicros("182.50")!!, accountDao.getById(usdC)!!.balanceMicros)
+
+        val movedExp = transactionDao.getById(expCny.id)!!
+        assertEquals(usdC, movedExp.accountId)
+        assertEquals("USD", movedExp.accountCurrency)
+        assertEquals(MoneyAmount.parseToMicros("12.50")!!, movedExp.accountAmountMicros)
+        assertEquals(125_000L, movedExp.rateToAccountMicros)
+
+        val movedTransfer = transactionDao.getById(transferAToB.id)!!
+        assertEquals(usdC, movedTransfer.accountId)
+        assertEquals(cnyB, movedTransfer.toAccountId)
+        assertEquals("USD", movedTransfer.accountCurrency)
+        assertEquals(MoneyAmount.parseToMicros("5.00")!!, movedTransfer.accountAmountMicros)
+        assertEquals(MoneyAmount.parseToMicros("40.00")!!, movedTransfer.toAmountMicros)
+
+        // 3. Move a USD-originated expense paid from CNY card to USD card -> restores exact origAmountMicros & 1:1 rate
+        val usdOrigOnCny = ledger.saveTransaction(
+            RecordTransactionRequest(
+                type = TransactionType.EXPENSE,
+                timestamp = millisOf(2026, 11, 22, 13, 0),
+                origAmountMicros = MoneyAmount.parseToMicros("10.00")!!,
+                origCurrency = "USD",
+                accountId = cnyA,
+                manualAccountAmountMicros = MoneyAmount.parseToMicros("79.50")!!
+            )
+        ).getOrThrow()
+        assertEquals(MoneyAmount.parseToMicros("920.50")!!, accountDao.getById(cnyA)!!.balanceMicros)
+
+        val movedToOrigCur = ledger.batchMoveTransactionsAccount(listOf(usdOrigOnCny.id), usdC).getOrThrow()
+        assertEquals(1, movedToOrigCur)
+        assertEquals(MoneyAmount.parseToMicros("1000.00")!!, accountDao.getById(cnyA)!!.balanceMicros)
+        assertEquals(MoneyAmount.parseToMicros("172.50")!!, accountDao.getById(usdC)!!.balanceMicros)
+        val updatedUsdTx = transactionDao.getById(usdOrigOnCny.id)!!
+        assertEquals(MoneyAmount.parseToMicros("10.00")!!, updatedUsdTx.accountAmountMicros)
+        assertEquals(MoneyAmount.RATE_SCALE, updatedUsdTx.rateToAccountMicros)
+        assertEquals("USD", updatedUsdTx.accountCurrency)
+    }
+
+    @Test
+    fun computeCreditBillingCycleSummary_handlesCrossMonthBoundariesLeapMonthAndSpendRepaid() {
+        val creditAccount = AccountEntity(
+            id = 10L,
+            name = "招行信用卡",
+            groupType = AccountGroup.CREDIT,
+            currencyCode = "CNY",
+            balanceMicros = MoneyAmount.parseToMicros("-500.00")!!,
+            creditLimitMicros = MoneyAmount.parseToMicros("20000.00")!!,
+            billingDay = 10,
+            repaymentDay = 28
+        )
+
+        val txs = listOf(
+            // Out-of-cycle (Nov 10 23:59) -> must be excluded when now = Nov 15
+            TransactionEntity(
+                id = 1L,
+                type = TransactionType.EXPENSE,
+                timestamp = millisOf(2026, 11, 10, 23, 59),
+                origAmountMicros = MoneyAmount.parseToMicros("500.00")!!,
+                origCurrency = "CNY",
+                accountId = 10L,
+                accountAmountMicros = MoneyAmount.parseToMicros("500.00")!!,
+                accountCurrency = "CNY",
+                status = TransactionStatus.CONFIRMED
+            ),
+            // In-cycle EXPENSE 200.00
+            TransactionEntity(
+                id = 2L,
+                type = TransactionType.EXPENSE,
+                timestamp = millisOf(2026, 11, 11, 0, 1),
+                origAmountMicros = MoneyAmount.parseToMicros("200.00")!!,
+                origCurrency = "CNY",
+                accountId = 10L,
+                accountAmountMicros = MoneyAmount.parseToMicros("200.00")!!,
+                accountCurrency = "CNY",
+                status = TransactionStatus.CONFIRMED
+            ),
+            // In-cycle TRANSFER out 50.00
+            TransactionEntity(
+                id = 3L,
+                type = TransactionType.TRANSFER,
+                timestamp = millisOf(2026, 11, 14, 12, 0),
+                origAmountMicros = MoneyAmount.parseToMicros("50.00")!!,
+                origCurrency = "CNY",
+                accountId = 10L,
+                accountAmountMicros = MoneyAmount.parseToMicros("50.00")!!,
+                accountCurrency = "CNY",
+                toAccountId = 20L,
+                toAmountMicros = MoneyAmount.parseToMicros("50.00")!!,
+                status = TransactionStatus.CONFIRMED
+            ),
+            // In-cycle Refund 30.00 -> offsets spend (200 + 50 - 30 = 220.00), NOT repaid
+            TransactionEntity(
+                id = 4L,
+                type = TransactionType.INCOME,
+                timestamp = millisOf(2026, 11, 15, 9, 0),
+                origAmountMicros = MoneyAmount.parseToMicros("30.00")!!,
+                origCurrency = "CNY",
+                accountId = 10L,
+                accountAmountMicros = MoneyAmount.parseToMicros("30.00")!!,
+                accountCurrency = "CNY",
+                refundOfTxId = 2L,
+                status = TransactionStatus.CONFIRMED
+            ),
+            // In-cycle PENDING expense -> ignored
+            TransactionEntity(
+                id = 5L,
+                type = TransactionType.EXPENSE,
+                timestamp = millisOf(2026, 11, 15, 10, 0),
+                origAmountMicros = MoneyAmount.parseToMicros("999.00")!!,
+                origCurrency = "CNY",
+                accountId = 10L,
+                accountAmountMicros = MoneyAmount.parseToMicros("999.00")!!,
+                accountCurrency = "CNY",
+                status = TransactionStatus.PENDING
+            ),
+            // In-cycle Repayment TRANSFER into credit card (uses toAmountMicros = 120.00)
+            TransactionEntity(
+                id = 6L,
+                type = TransactionType.TRANSFER,
+                timestamp = millisOf(2026, 11, 20, 18, 0),
+                origAmountMicros = MoneyAmount.parseToMicros("15.00")!!,
+                origCurrency = "USD",
+                accountId = 20L,
+                accountAmountMicros = MoneyAmount.parseToMicros("15.00")!!,
+                accountCurrency = "USD",
+                toAccountId = 10L,
+                toAmountMicros = MoneyAmount.parseToMicros("120.00")!!,
+                toCurrency = "CNY",
+                status = TransactionStatus.CONFIRMED
+            ),
+            // In-cycle non-refund INCOME cashback 25.00 -> counts toward repaid (120 + 25 = 145.00)
+            TransactionEntity(
+                id = 7L,
+                type = TransactionType.INCOME,
+                timestamp = millisOf(2026, 12, 10, 23, 0),
+                origAmountMicros = MoneyAmount.parseToMicros("25.00")!!,
+                origCurrency = "CNY",
+                accountId = 10L,
+                accountAmountMicros = MoneyAmount.parseToMicros("25.00")!!,
+                accountCurrency = "CNY",
+                status = TransactionStatus.CONFIRMED
+            ),
+            // In-cycle ADJUST -> neither spend nor repaid
+            TransactionEntity(
+                id = 8L,
+                type = TransactionType.ADJUST,
+                timestamp = millisOf(2026, 11, 21, 10, 0),
+                origAmountMicros = MoneyAmount.parseToMicros("10.00")!!,
+                origCurrency = "CNY",
+                accountId = 10L,
+                accountAmountMicros = MoneyAmount.parseToMicros("10.00")!!,
+                accountCurrency = "CNY",
+                status = TransactionStatus.CONFIRMED
+            )
+        )
+
+        // 1. After billing day (Nov 15): cycle is Nov 11 00:00 .. Dec 10 23:59:59.999
+        val afterBillSummary = LedgerAnalytics.computeCreditBillingCycleSummary(
+            account = creditAccount,
+            transactions = txs,
+            nowMillis = millisOf(2026, 11, 15, 10, 0),
+            zone = zoneId
+        )
+        assertEquals(millisOf(2026, 11, 11, 0, 0), afterBillSummary.cycleStartMillis)
+        assertEquals(millisOf(2026, 12, 11, 0, 0) - 1L, afterBillSummary.cycleEndMillis)
+        assertEquals(MoneyAmount.parseToMicros("220.00")!!, afterBillSummary.cycleSpendMicros)
+        assertEquals(MoneyAmount.parseToMicros("145.00")!!, afterBillSummary.cycleRepaidMicros)
+        assertEquals(10, afterBillSummary.billingDay)
+        assertEquals(28, afterBillSummary.repaymentDay)
+
+        // 2. On billing day (Nov 10): cycle is Oct 11 00:00 .. Nov 10 23:59:59.999 -> includes tx #1 (500.00)
+        val onBillSummary = LedgerAnalytics.computeCreditBillingCycleSummary(
+            account = creditAccount,
+            transactions = txs,
+            nowMillis = millisOf(2026, 11, 10, 18, 0),
+            zone = zoneId
+        )
+        assertEquals(millisOf(2026, 10, 11, 0, 0), onBillSummary.cycleStartMillis)
+        assertEquals(millisOf(2026, 11, 11, 0, 0) - 1L, onBillSummary.cycleEndMillis)
+        assertEquals(MoneyAmount.parseToMicros("500.00")!!, onBillSummary.cycleSpendMicros)
+        assertEquals(0L, onBillSummary.cycleRepaidMicros)
+
+        // 3. Month-end clamping (billingDay = 31 in non-leap Feb 2025): Feb 1 .. Feb 28
+        val endOfMonthCard = creditAccount.copy(billingDay = 31, repaymentDay = 20)
+        val febSummary = LedgerAnalytics.computeCreditBillingCycleSummary(
+            account = endOfMonthCard,
+            transactions = emptyList(),
+            nowMillis = millisOf(2025, 2, 20, 12, 0),
+            zone = zoneId
+        )
+        assertEquals(millisOf(2025, 2, 1, 0, 0), febSummary.cycleStartMillis)
+        assertEquals(millisOf(2025, 3, 1, 0, 0) - 1L, febSummary.cycleEndMillis)
+
+        // 4. Missing billingDay falls back to calendar month and clamps oversized refund to 0
+        val noBillCard = creditAccount.copy(billingDay = null, repaymentDay = null)
+        val bigRefundOnly = listOf(
+            TransactionEntity(
+                id = 9L,
+                type = TransactionType.INCOME,
+                timestamp = millisOf(2026, 11, 12, 10, 0),
+                origAmountMicros = MoneyAmount.parseToMicros("99.00")!!,
+                origCurrency = "CNY",
+                accountId = 10L,
+                accountAmountMicros = MoneyAmount.parseToMicros("99.00")!!,
+                accountCurrency = "CNY",
+                refundOfTxId = 1L,
+                status = TransactionStatus.CONFIRMED
+            )
+        )
+        val fallbackSummary = LedgerAnalytics.computeCreditBillingCycleSummary(
+            account = noBillCard,
+            transactions = bigRefundOnly,
+            nowMillis = millisOf(2026, 11, 15, 10, 0),
+            zone = zoneId
+        )
+        assertEquals(millisOf(2026, 11, 1, 0, 0), fallbackSummary.cycleStartMillis)
+        assertEquals(millisOf(2026, 12, 1, 0, 0) - 1L, fallbackSummary.cycleEndMillis)
+        assertEquals(0L, fallbackSummary.cycleSpendMicros)
+        assertEquals(0L, fallbackSummary.cycleRepaidMicros)
+        assertNull(fallbackSummary.billingDay)
+        assertNull(fallbackSummary.repaymentDay)
     }
 }

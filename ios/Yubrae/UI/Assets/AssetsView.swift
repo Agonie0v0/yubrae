@@ -1,9 +1,52 @@
 import SwiftUI
 import UIKit
 
-private struct AccountEditContext: Identifiable {
+private enum AssetActiveSheet: Identifiable {
+    case editAccount(AccountDto?, String)
+    case calibrate(AccountDto)
+    case deleteAccount(AccountDto)
+    case reorder
+    case hiddenManager
+    case addDebt
+    case settleDebt(DebtRecordDto)
+    case settleReimburse
+
+    var id: String {
+        switch self {
+        case .editAccount(let acc, let group):
+            return "edit-\(acc?.id ?? 0)-\(group)"
+        case .calibrate(let acc):
+            return "cal-\(acc.id)"
+        case .deleteAccount(let acc):
+            return "del-\(acc.id)"
+        case .reorder:
+            return "reorder"
+        case .hiddenManager:
+            return "hidden"
+        case .addDebt:
+            return "addDebt"
+        case .settleDebt(let debt):
+            return "settleDebt-\(debt.id)"
+        case .settleReimburse:
+            return "settleReimburse"
+        }
+    }
+}
+
+private struct AssetQuickRecordPreset: Identifiable {
     let id = UUID()
-    let account: AccountDto?
+    let type: String
+    let accountId: Int64?
+    let toAccountId: Int64?
+    let amountMicros: Int64?
+}
+
+private struct AssetCompositionSlice: Identifiable {
+    let id: String
+    let title: String
+    let amountMicros: Int64
+    let ratio: Double
+    let color: Color
 }
 
 public struct AssetsView: View {
@@ -12,14 +55,11 @@ public struct AssetsView: View {
 
     @State private var displayCurrencyOverride: String?
     @State private var showHiddenAccounts = false
-    @State private var accountEditContext: AccountEditContext?
-    @State private var calibratingAccount: AccountDto?
-    @State private var deletingAccount: AccountDto?
-    @State private var showHiddenManagerSheet = false
-    @State private var showAddDebtSheet = false
-    @State private var settlingDebt: DebtRecordDto?
-    @State private var showSettleReimburseSheet = false
+    @State private var showSearchBar = false
+    @State private var searchQuery = ""
     @State private var showArchivedSection = false
+    @State private var activeSheet: AssetActiveSheet?
+    @State private var quickRecordPreset: AssetQuickRecordPreset?
 
     public init(store: LedgerStore) {
         self.store = store
@@ -45,6 +85,33 @@ public struct AssetsView: View {
         Set(store.settings.hiddenAssetModules)
     }
 
+    private var collapsedGroupSet: Set<String> {
+        Set(store.settings.collapsedAssetGroups.map { $0.uppercased() })
+    }
+
+    private var orderedGroups: [AccountGroup] {
+        var seen = Set<AccountGroup>()
+        var result: [AccountGroup] = []
+        for raw in store.settings.assetGroupOrder {
+            if let group = AccountGroup(rawValue: raw.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()),
+               seen.insert(group).inserted {
+                result.append(group)
+            }
+        }
+        for group in AccountGroup.allCases where seen.insert(group).inserted {
+            result.append(group)
+        }
+        return result
+    }
+
+    private var trimmedSearchQuery: String {
+        searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var isSearching: Bool {
+        !trimmedSearchQuery.isEmpty
+    }
+
     private var pendingReimburseTxs: [TransactionDto] {
         store.transactions.filter { $0.reimburseStatus == ReimburseStatus.PENDING }
     }
@@ -53,8 +120,78 @@ public struct AssetsView: View {
         store.debts.filter { $0.status == DebtStatus.OPEN }
     }
 
+    private var visibleActiveAccounts: [AccountDto] {
+        let base = store.activeAccounts.filter { acc in
+            if !showHiddenAccounts && hiddenAccountIdSet.contains(acc.id) {
+                return false
+            }
+            if acc.groupType.uppercased() == AccountGroup.INVEST
+                && hiddenModuleSet.contains(AssetHiddenModule.INVEST)
+                && !showHiddenAccounts {
+                return false
+            }
+            return true
+        }
+        let sorted = base.sorted { lhs, rhs in
+            if lhs.sortOrder != rhs.sortOrder { return lhs.sortOrder < rhs.sortOrder }
+            return lhs.id < rhs.id
+        }
+        guard isSearching else { return sorted }
+        return sorted.filter { matchesAccountSearch($0, query: trimmedSearchQuery) }
+    }
+
     private var archivedAccounts: [AccountDto] {
-        store.accounts.filter(\.archived)
+        let base = store.accounts.filter(\.archived).sorted { lhs, rhs in
+            if lhs.sortOrder != rhs.sortOrder { return lhs.sortOrder < rhs.sortOrder }
+            return lhs.id < rhs.id
+        }
+        guard isSearching else { return base }
+        return base.filter { matchesAccountSearch($0, query: trimmedSearchQuery) }
+    }
+
+    private var totalSearchHitCount: Int {
+        visibleActiveAccounts.count + archivedAccounts.count
+    }
+
+    /// 资产构成比例（仅统计计入净资产且折算余额 > 0 的活跃账户）
+    private var assetCompositionSlices: [AssetCompositionSlice] {
+        let baseCur = CurrencyCatalog.normalize(store.settings.baseCurrency)
+        var liquidMicros: Int64 = 0
+        var investMicros: Int64 = 0
+        var foreignMicros: Int64 = 0
+
+        for acc in store.activeAccounts where acc.includeInNetWorth {
+            let converted = netWorth.accountConvertedBalances[acc.id] ?? 0
+            guard converted > 0 else { continue }
+            let groupUpper = acc.groupType.uppercased()
+            let curUpper = CurrencyCatalog.normalize(acc.currencyCode)
+            if groupUpper == AccountGroup.INVEST {
+                investMicros += converted
+            } else if groupUpper == AccountGroup.FOREIGN || curUpper != baseCur {
+                foreignMicros += converted
+            } else {
+                liquidMicros += converted
+            }
+        }
+
+        let total = liquidMicros + investMicros + foreignMicros
+        guard total > 0 else { return [] }
+
+        let raw: [(String, String, Int64, Color)] = [
+            ("liquid", "流动资金", liquidMicros, Color(argbHex: 0xFF6EE7B7)),
+            ("invest", "理财投资", investMicros, Color(argbHex: 0xFFFCD34D)),
+            ("foreign", "外币资产", foreignMicros, Color(argbHex: 0xFF93C5FD))
+        ]
+        return raw.compactMap { item in
+            guard item.2 > 0 else { return nil }
+            return AssetCompositionSlice(
+                id: item.0,
+                title: item.1,
+                amountMicros: item.2,
+                ratio: Double(item.2) / Double(total),
+                color: item.3
+            )
+        }
     }
 
     public var body: some View {
@@ -63,13 +200,20 @@ public struct AssetsView: View {
                 LazyVStack(spacing: 14) {
                     netWorthHeroCard
 
-                    quickActionStrip
+                    if showSearchBar || isSearching {
+                        searchBarCard
+                            .transition(.move(edge: .top).combined(with: .opacity))
+                    }
 
-                    if !hiddenModuleSet.contains(AssetHiddenModule.REIMBURSE) && !pendingReimburseTxs.isEmpty {
+                    if !hiddenAccountIdSet.isEmpty || !hiddenModuleSet.isEmpty {
+                        hiddenVisibilityStrip
+                    }
+
+                    if !isSearching && !hiddenModuleSet.contains(AssetHiddenModule.REIMBURSE) && !pendingReimburseTxs.isEmpty {
                         reimbursementModuleCard
                     }
 
-                    if !hiddenModuleSet.contains(AssetHiddenModule.DEBT) {
+                    if !isSearching && !hiddenModuleSet.contains(AssetHiddenModule.DEBT) {
                         debtModuleCard
                     }
 
@@ -89,7 +233,7 @@ public struct AssetsView: View {
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Button {
-                        showHiddenManagerSheet = true
+                        activeSheet = .hiddenManager
                     } label: {
                         Image(systemName: "eye.trianglebadge.exclamationmark")
                             .foregroundColor(palette.textPrimary)
@@ -104,49 +248,60 @@ public struct AssetsView: View {
                             Image(systemName: store.settings.privacyMaskEnabled ? "eye.slash" : "eye")
                                 .foregroundColor(palette.textPrimary)
                         }
+                        .accessibilityLabel("切换隐私遮罩")
                         Button {
-                            accountEditContext = AccountEditContext(account: nil)
+                            activeSheet = .editAccount(nil, AccountGroup.WALLET)
                         } label: {
                             Image(systemName: "plus.circle.fill")
                                 .foregroundColor(palette.primary)
                         }
+                        .accessibilityLabel("新建账户")
                     }
                 }
             }
-            .sheet(item: $accountEditContext) { ctx in
-                AccountEditorSheet(store: store, editingAccount: ctx.account)
+            .sheet(item: $activeSheet) { sheet in
+                sheetDestination(for: sheet)
                     .yubraeSheetStyle(palette: palette)
             }
-            .sheet(item: $calibratingAccount) { acc in
-                BalanceCalibrationSheet(store: store, account: acc)
-                    .yubraeSheetStyle(palette: palette)
-            }
-            .sheet(item: $deletingAccount) { acc in
-                DeleteAccountConfirmSheet(store: store, account: acc) {
-                    deletingAccount = nil
-                }
+            .fullScreenCover(item: $quickRecordPreset) { preset in
+                QuickRecordSheet(
+                    store: store,
+                    editingTransaction: nil,
+                    initialType: preset.type,
+                    initialAccountId: preset.accountId,
+                    initialToAccountId: preset.toAccountId,
+                    initialAmountMicros: preset.amountMicros
+                )
                 .yubraeSheetStyle(palette: palette)
-            }
-            .sheet(isPresented: $showHiddenManagerSheet) {
-                HiddenAssetsManagerSheet(store: store)
-                    .yubraeSheetStyle(palette: palette)
-            }
-            .sheet(isPresented: $showAddDebtSheet) {
-                AddDebtSheet(store: store)
-                    .yubraeSheetStyle(palette: palette)
-            }
-            .sheet(item: $settlingDebt) { debt in
-                SettleDebtSheet(store: store, debt: debt)
-                    .yubraeSheetStyle(palette: palette)
-            }
-            .sheet(isPresented: $showSettleReimburseSheet) {
-                SettleReimburseSheet(store: store, pendingTxs: pendingReimburseTxs)
-                    .yubraeSheetStyle(palette: palette)
             }
         }
     }
 
-    // MARK: - Hero Card
+    @ViewBuilder
+    private func sheetDestination(for sheet: AssetActiveSheet) -> some View {
+        switch sheet {
+        case .editAccount(let account, let initialGroup):
+            AccountEditorSheet(store: store, editingAccount: account, initialGroupType: initialGroup)
+        case .calibrate(let account):
+            BalanceCalibrationSheet(store: store, account: account)
+        case .deleteAccount(let account):
+            AccountDeleteSheet(store: store, account: account) {
+                activeSheet = nil
+            }
+        case .reorder:
+            AssetReorderSheet(store: store, initialGroupOrder: orderedGroups)
+        case .hiddenManager:
+            HiddenAssetsManagerSheet(store: store)
+        case .addDebt:
+            AddDebtSheet(store: store)
+        case .settleDebt(let debt):
+            SettleDebtSheet(store: store, debt: debt)
+        case .settleReimburse:
+            SettleReimburseSheet(store: store, pendingTxs: pendingReimburseTxs)
+        }
+    }
+
+    // MARK: - Hero Card (Net Worth + Composition Bar + 4-Action Quick Strip)
 
     private var netWorthHeroCard: some View {
         let masked = store.settings.privacyMaskEnabled
@@ -154,6 +309,7 @@ public struct AssetsView: View {
         let nwStr = YubraeTheme.masked(MoneyAmount.format(netWorth.netWorthMicros, currencyCode: cur), isMasked: masked)
         let assetsStr = YubraeTheme.masked(MoneyAmount.format(netWorth.totalAssetsMicros, currencyCode: cur), isMasked: masked)
         let liabStr = YubraeTheme.masked(MoneyAmount.format(netWorth.totalLiabilitiesMicros, currencyCode: cur), isMasked: masked)
+        let slices = assetCompositionSlices
 
         return VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 8) {
@@ -187,12 +343,12 @@ public struct AssetsView: View {
             }
 
             Text(nwStr)
-                .font(.system(size: 32, weight: .bold, design: .rounded))
+                .font(.system(size: 32, weight: .bold, design: .rounded).monospacedDigit())
                 .foregroundColor(.white)
-                .minimumScaleFactor(0.7)
+                .minimumScaleFactor(0.55)
                 .lineLimit(1)
 
-            HStack(spacing: 20) {
+            HStack(spacing: 16) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("总资产")
                         .font(.caption2)
@@ -203,11 +359,14 @@ public struct AssetsView: View {
                         .font(.subheadline.weight(.semibold).monospacedDigit())
                         .foregroundColor(.white)
                         .lineLimit(1)
-                        .minimumScaleFactor(0.75)
+                        .minimumScaleFactor(0.65)
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
                 Divider()
                     .frame(height: 24)
                     .background(Color.white.opacity(0.3))
+
                 VStack(alignment: .leading, spacing: 2) {
                     Text("总负债")
                         .font(.caption2)
@@ -218,10 +377,16 @@ public struct AssetsView: View {
                         .font(.subheadline.weight(.semibold).monospacedDigit())
                         .foregroundColor(.white)
                         .lineLimit(1)
-                        .minimumScaleFactor(0.75)
+                        .minimumScaleFactor(0.65)
                 }
-                Spacer(minLength: 0)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
+
+            if !slices.isEmpty {
+                assetCompositionBar(slices: slices, masked: masked)
+            }
+
+            heroQuickActionStrip
         }
         .padding(18)
         .background(
@@ -231,57 +396,219 @@ public struct AssetsView: View {
         )
     }
 
-    private var quickActionStrip: some View {
-        HStack(spacing: 10) {
-            Button {
-                accountEditContext = AccountEditContext(account: nil)
-            } label: {
-                Label("新建账户", systemImage: "plus.circle")
-                    .font(.caption.weight(.semibold))
-                    .foregroundColor(palette.primary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 10)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(RoundedRectangle(cornerRadius: 12).fill(palette.surface))
-                    .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(palette.outline, lineWidth: 0.8))
+    private func assetCompositionBar(slices: [AssetCompositionSlice], masked: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            GeometryReader { geo in
+                let gap: CGFloat = slices.count > 1 ? 2 : 0
+                let usableWidth = max(0, geo.size.width - gap * CGFloat(max(0, slices.count - 1)))
+                HStack(spacing: gap) {
+                    ForEach(slices) { slice in
+                        RoundedRectangle(cornerRadius: 4, style: .continuous)
+                            .fill(slice.color)
+                            .frame(width: max(6, usableWidth * CGFloat(slice.ratio)))
+                    }
+                }
+            }
+            .frame(height: 7)
+            .padding(2)
+            .background(Capsule().fill(Color.white.opacity(0.14)))
+
+            HStack(spacing: 12) {
+                ForEach(slices) { slice in
+                    let pctText = masked ? "••%" : "\(Int((slice.ratio * 100).rounded()))%"
+                    HStack(spacing: 4) {
+                        Circle()
+                            .fill(slice.color)
+                            .frame(width: 6, height: 6)
+                        Text("\(slice.title) \(pctText)")
+                            .font(.system(size: 11, weight: .medium).monospacedDigit())
+                            .foregroundColor(.white.opacity(0.88))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+        }
+    }
+
+    private var heroQuickActionStrip: some View {
+        HStack(spacing: 8) {
+            heroQuickActionButton(
+                title: "搜索",
+                systemImage: showSearchBar ? "magnifyingglass.circle.fill" : "magnifyingglass",
+                highlighted: showSearchBar || isSearching
+            ) {
+                withAnimation(.spring(response: 0.28, dampingFraction: 0.86)) {
+                    if showSearchBar && !isSearching {
+                        showSearchBar = false
+                    } else if showSearchBar && isSearching {
+                        searchQuery = ""
+                        showSearchBar = false
+                    } else {
+                        showSearchBar = true
+                    }
+                }
             }
 
+            heroQuickActionButton(
+                title: "排序",
+                systemImage: "arrow.up.arrow.down",
+                highlighted: false
+            ) {
+                activeSheet = .reorder
+            }
+
+            heroQuickActionButton(
+                title: "转账",
+                systemImage: "arrow.left.arrow.right",
+                highlighted: false
+            ) {
+                quickRecordPreset = AssetQuickRecordPreset(
+                    type: TransactionType.TRANSFER,
+                    accountId: nil,
+                    toAccountId: nil,
+                    amountMicros: nil
+                )
+            }
+
+            heroQuickActionButton(
+                title: "新建账户",
+                systemImage: "plus.circle",
+                highlighted: false
+            ) {
+                activeSheet = .editAccount(nil, AccountGroup.WALLET)
+            }
+        }
+    }
+
+    private func heroQuickActionButton(
+        title: String,
+        systemImage: String,
+        highlighted: Bool,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            VStack(spacing: 4) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 15, weight: .semibold))
+                Text(title)
+                    .font(.system(size: 11, weight: .semibold))
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+            }
+            .foregroundColor(.white)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 8)
+            .padding(.horizontal, 4)
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color.white.opacity(highlighted ? 0.28 : 0.15))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(Color.white.opacity(highlighted ? 0.45 : 0.14), lineWidth: 0.7)
+            )
+        }
+        .buttonStyle(.plain)
+    }
+
+    // MARK: - Search Bar & Hidden Strip
+
+    private var searchBarCard: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .font(.subheadline)
+                .foregroundColor(palette.textTertiary)
+            TextField("搜索账户名称、备注、币种或分组", text: $searchQuery)
+                .font(.subheadline)
+                .submitLabel(.search)
+            if isSearching {
+                Text("命中 \(totalSearchHitCount)")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundColor(palette.primary)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 3)
+                    .background(Capsule().fill(palette.accentSoftFill))
+                Button {
+                    searchQuery = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundColor(palette.textTertiary)
+                }
+                .buttonStyle(.plain)
+            } else {
+                Button("收起") {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        showSearchBar = false
+                    }
+                }
+                .font(.caption.weight(.semibold))
+                .foregroundColor(palette.textSecondary)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(palette.surface)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .strokeBorder(palette.outline, lineWidth: 0.8)
+                )
+        )
+    }
+
+    private var hiddenVisibilityStrip: some View {
+        HStack(spacing: 10) {
             Button {
-                showHiddenAccounts.toggle()
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    showHiddenAccounts.toggle()
+                }
             } label: {
                 Label(
-                    showHiddenAccounts ? "隐藏私密项" : "含隐藏(\(hiddenAccountIdSet.count))",
+                    showHiddenAccounts ? "收起隐藏资产" : "显示隐藏项 (\(hiddenAccountIdSet.count + hiddenModuleSet.count))",
                     systemImage: showHiddenAccounts ? "eye.slash" : "eye"
                 )
                 .font(.caption.weight(.semibold))
-                .foregroundColor(palette.textPrimary)
+                .foregroundColor(showHiddenAccounts ? palette.primary : palette.textSecondary)
                 .lineLimit(1)
-                .minimumScaleFactor(0.8)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 10)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(RoundedRectangle(cornerRadius: 12).fill(palette.surface))
-                .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(palette.outline, lineWidth: 0.8))
+                .fixedSize(horizontal: true, vertical: false)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 7)
+                .background(
+                    Capsule().fill(showHiddenAccounts ? palette.accentSoftFill : palette.surface)
+                )
+                .overlay(
+                    Capsule().strokeBorder(showHiddenAccounts ? palette.primary.opacity(0.4) : palette.outline, lineWidth: 0.8)
+                )
+            }
+            .buttonStyle(.plain)
+
+            if hiddenModuleSet.contains(AssetHiddenModule.DEBT) {
+                Button {
+                    activeSheet = .addDebt
+                } label: {
+                    Label("记借贷", systemImage: "person.2")
+                        .font(.caption.weight(.semibold))
+                        .foregroundColor(palette.textSecondary)
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 7)
+                        .background(Capsule().fill(palette.surface))
+                        .overlay(Capsule().strokeBorder(palette.outline, lineWidth: 0.8))
+                }
+                .buttonStyle(.plain)
             }
 
-            Button {
-                showAddDebtSheet = true
-            } label: {
-                Label("记借贷", systemImage: "arrow.left.arrow.right.circle")
-                    .font(.caption.weight(.semibold))
-                    .foregroundColor(palette.textPrimary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 10)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(RoundedRectangle(cornerRadius: 12).fill(palette.surface))
-                    .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(palette.outline, lineWidth: 0.8))
-            }
+            Spacer(minLength: 0)
         }
-        .fixedSize(horizontal: false, vertical: true)
     }
 
     // MARK: - Modules (Reimbursements & Debts)
@@ -308,7 +635,7 @@ public struct AssetsView: View {
                 }
                 Spacer(minLength: 8)
                 Button {
-                    showSettleReimburseSheet = true
+                    activeSheet = .settleReimburse
                 } label: {
                     Text("去核销")
                         .font(.caption.weight(.semibold))
@@ -319,6 +646,7 @@ public struct AssetsView: View {
                         .padding(.vertical, 7)
                         .background(Capsule().fill(palette.primary))
                 }
+                .buttonStyle(.plain)
                 .fixedSize(horizontal: true, vertical: false)
             }
         }
@@ -336,12 +664,13 @@ public struct AssetsView: View {
                         .minimumScaleFactor(0.85)
                     Spacer(minLength: 8)
                     Button("+ 新增") {
-                        showAddDebtSheet = true
+                        activeSheet = .addDebt
                     }
                     .font(.caption.weight(.semibold))
                     .foregroundColor(palette.primary)
                     .lineLimit(1)
                     .fixedSize(horizontal: true, vertical: false)
+                    .buttonStyle(.plain)
                 }
 
                 if openDebts.isEmpty {
@@ -383,12 +712,13 @@ public struct AssetsView: View {
                                     .lineLimit(1)
                                     .fixedSize(horizontal: true, vertical: false)
                                 Button("核销/还款") {
-                                    settlingDebt = debt
+                                    activeSheet = .settleDebt(debt)
                                 }
                                 .font(.caption2.weight(.semibold))
                                 .foregroundColor(palette.primary)
                                 .lineLimit(1)
                                 .fixedSize(horizontal: true, vertical: false)
+                                .buttonStyle(.plain)
                             }
                             .layoutPriority(1)
                         }
@@ -402,28 +732,28 @@ public struct AssetsView: View {
     // MARK: - Grouped Accounts
 
     private var groupedAccountsSection: some View {
-        let visibleAccounts = store.activeAccounts.filter { acc in
-            if !showHiddenAccounts && hiddenAccountIdSet.contains(acc.id) {
-                return false
-            }
-            if acc.groupType == AccountGroup.INVEST && hiddenModuleSet.contains(AssetHiddenModule.INVEST) && !showHiddenAccounts {
-                return false
-            }
-            return true
-        }
+        let visibleAccounts = visibleActiveAccounts
 
         return Group {
-            if visibleAccounts.isEmpty {
+            if visibleAccounts.isEmpty && (!isSearching || archivedAccounts.isEmpty) {
                 YubraeEmptyStateView(
-                    icon: "creditcard",
-                    title: "暂无可展示的账户",
-                    subtitle: "你可以新建账户，或在「隐藏资产管理」中取消隐藏。",
+                    icon: isSearching ? "magnifyingglass" : "creditcard",
+                    title: isSearching ? "未找到匹配的账户" : "暂无可展示的账户",
+                    subtitle: isSearching
+                        ? "试试搜索账户名、备注、币种（如 USD）或分组名称。"
+                        : "你可以新建账户，或在「隐藏资产管理」中取消隐藏。",
                     palette: palette,
-                    actionTitle: "新建账户",
-                    action: { accountEditContext = AccountEditContext(account: nil) }
+                    actionTitle: isSearching ? "清空搜索" : "新建账户",
+                    action: {
+                        if isSearching {
+                            searchQuery = ""
+                        } else {
+                            activeSheet = .editAccount(nil, AccountGroup.WALLET)
+                        }
+                    }
                 )
             } else {
-                ForEach(AccountGroup.allCases) { group in
+                ForEach(orderedGroups) { group in
                     let groupAccounts = visibleAccounts.filter { $0.groupType.uppercased() == group.rawValue }
                     if !groupAccounts.isEmpty {
                         accountGroupCard(group: group, accounts: groupAccounts)
@@ -438,118 +768,106 @@ public struct AssetsView: View {
         let groupSubtotal = accounts.reduce(Int64(0)) { sum, acc in
             sum + (netWorth.accountConvertedBalances[acc.id] ?? 0)
         }
+        let isCollapsed = !isSearching && collapsedGroupSet.contains(group.rawValue)
 
         return VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 8) {
-                Label(group.labelZh, systemImage: group.sfSymbol)
-                    .font(.caption.weight(.semibold))
-                    .foregroundColor(palette.textSecondary)
-                    .lineLimit(1)
-                Spacer(minLength: 8)
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        store.toggleAssetGroupCollapsed(group.rawValue)
+                    }
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: isCollapsed ? "chevron.right" : "chevron.down")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundColor(palette.textTertiary)
+                            .frame(width: 12)
+                        Image(systemName: group.sfSymbol)
+                            .font(.caption.weight(.semibold))
+                            .foregroundColor(palette.primary)
+                        Text(group.labelZh)
+                            .font(.caption.weight(.semibold))
+                            .foregroundColor(palette.textSecondary)
+                            .lineLimit(1)
+                        Text("\(accounts.count)")
+                            .font(.system(size: 10, weight: .semibold).monospacedDigit())
+                            .foregroundColor(palette.textTertiary)
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 1.5)
+                            .background(Capsule().fill(palette.surfaceSecondary))
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+
+                Spacer(minLength: 6)
+
                 Text(YubraeTheme.masked(MoneyAmount.format(groupSubtotal, currencyCode: activeDisplayCurrency), isMasked: masked))
                     .font(.caption.weight(.semibold).monospacedDigit())
-                    .foregroundColor(palette.textSecondary)
+                    .foregroundColor(groupSubtotal < 0 ? palette.expenseColor : palette.textSecondary)
                     .lineLimit(1)
                     .fixedSize(horizontal: true, vertical: false)
+
+                Button {
+                    activeSheet = .editAccount(nil, group.rawValue)
+                } label: {
+                    Image(systemName: "plus.circle.fill")
+                        .font(.system(size: 16))
+                        .foregroundColor(palette.primary.opacity(0.85))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("在\(group.labelZh)新建账户")
             }
             .padding(.horizontal, 4)
 
-            YubraeCard(palette: palette, padding: 0) {
-                VStack(spacing: 0) {
-                    ForEach(accounts) { acc in
-                        accountRow(acc)
-                        if acc.id != accounts.last?.id {
-                            Divider().padding(.leading, 64)
+            if !isCollapsed {
+                YubraeCard(palette: palette, padding: 0) {
+                    VStack(spacing: 0) {
+                        ForEach(accounts) { acc in
+                            accountRowLink(acc)
+                            if acc.id != accounts.last?.id {
+                                Divider().padding(.leading, 64)
+                            }
                         }
                     }
                 }
+                .transition(.opacity.combined(with: .move(edge: .top)))
             }
         }
     }
 
-    private func accountRow(_ acc: AccountDto) -> some View {
-        let masked = store.settings.privacyMaskEnabled
+    private func accountRowLink(_ acc: AccountDto) -> some View {
         let isHidden = hiddenAccountIdSet.contains(acc.id)
-        let origFmt = MoneyAmount.format(acc.balanceMicros, currencyCode: acc.currencyCode, showCurrencyCode: true)
-        let convertedMicros = netWorth.accountConvertedBalances[acc.id] ?? acc.balanceMicros
+        let isCredit = acc.groupType.uppercased() == AccountGroup.CREDIT
 
-        return HStack(spacing: 12) {
-            YubraeCategoryIconBadge(iconKey: acc.icon, colorHex: acc.colorHex, size: 40)
-
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 6) {
-                    Text(acc.name)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundColor(palette.textPrimary)
-                        .lineLimit(1)
-                    if isHidden {
-                        Text("已隐藏")
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundColor(palette.textSecondary)
-                            .lineLimit(1)
-                            .fixedSize(horizontal: true, vertical: false)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(Capsule().fill(palette.surfaceSecondary))
-                    }
-                    if !acc.includeInNetWorth {
-                        Text("不计净资产")
-                            .font(.system(size: 10, weight: .medium))
-                            .foregroundColor(palette.textTertiary)
-                            .lineLimit(1)
-                            .fixedSize(horizontal: true, vertical: false)
-                    }
-                }
-
-                if acc.groupType == AccountGroup.CREDIT {
-                    let limitStr = MoneyAmount.format(acc.creditLimitMicros, currencyCode: acc.currencyCode)
-                    let billText = acc.billingDay.map { "账单日\($0)日" } ?? ""
-                    let repayText = acc.repaymentDay.map { "还款日\($0)日" } ?? ""
-                    Text("额度 \(YubraeTheme.masked(limitStr, isMasked: masked)) \(billText) \(repayText)")
-                        .font(.caption2)
-                        .foregroundColor(palette.textSecondary)
-                        .lineLimit(1)
-                } else {
-                    Text(CurrencyCatalog.find(acc.currencyCode).nameZh + " · " + acc.currencyCode)
-                        .font(.caption2)
-                        .foregroundColor(palette.textSecondary)
-                        .lineLimit(1)
-                }
-            }
-
-            Spacer(minLength: 6)
-
-            VStack(alignment: .trailing, spacing: 2) {
-                Text(YubraeTheme.masked(origFmt, isMasked: masked))
-                    .font(.subheadline.weight(.bold).monospacedDigit())
-                    .foregroundColor(acc.balanceMicros < 0 ? palette.expenseColor : palette.textPrimary)
-                    .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
-                if acc.currencyCode != activeDisplayCurrency {
-                    let convFmt = MoneyAmount.format(convertedMicros, currencyCode: activeDisplayCurrency)
-                    Text("≈ \(YubraeTheme.masked(convFmt, isMasked: masked))")
-                        .font(.caption2)
-                        .foregroundColor(palette.textTertiary)
-                        .lineLimit(1)
-                        .fixedSize(horizontal: true, vertical: false)
-                }
-            }
-            .layoutPriority(1)
+        return NavigationLink {
+            AccountDetailView(store: store, accountId: acc.id)
+        } label: {
+            accountRowContent(acc, isHidden: isHidden, isCredit: isCredit)
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 12)
-        .contentShape(Rectangle())
-        .onTapGesture {
-            accountEditContext = AccountEditContext(account: acc)
-        }
+        .buttonStyle(.plain)
         .contextMenu {
+            if isCredit {
+                Button {
+                    quickRecordPreset = AssetQuickRecordPreset(
+                        type: TransactionType.TRANSFER,
+                        accountId: nil,
+                        toAccountId: acc.id,
+                        amountMicros: max(0, -acc.balanceMicros)
+                    )
+                } label: {
+                    Label("还信用卡", systemImage: "arrow.uturn.left.circle")
+                }
+            }
             Button {
-                calibratingAccount = acc
+                activeSheet = .calibrate(acc)
             } label: {
                 Label("余额校准", systemImage: "slider.horizontal.3")
             }
             Button {
-                accountEditContext = AccountEditContext(account: acc)
+                activeSheet = .editAccount(acc, acc.groupType)
             } label: {
                 Label("编辑账户", systemImage: "pencil")
             }
@@ -565,25 +883,218 @@ public struct AssetsView: View {
                 Label("归档账户", systemImage: "archivebox")
             }
             Button(role: .destructive) {
-                deletingAccount = acc
+                activeSheet = .deleteAccount(acc)
             } label: {
                 Label("删除账户", systemImage: "trash")
             }
         }
     }
 
+    private func accountRowContent(_ acc: AccountDto, isHidden: Bool, isCredit: Bool) -> some View {
+        let masked = store.settings.privacyMaskEnabled
+        let origFmt = MoneyAmount.format(acc.balanceMicros, currencyCode: acc.currencyCode, showCurrencyCode: true)
+        let convertedMicros = netWorth.accountConvertedBalances[acc.id] ?? acc.balanceMicros
+        let trimmedNote = acc.note.trimmingCharacters(in: .whitespacesAndNewlines)
+        let creditCycle: CreditBillingCycleSummary? = isCredit
+            ? store.computeCreditBillingCycleSummary(account: acc)
+            : nil
+        let usedMicros = max(Int64(0), -acc.balanceMicros)
+        let limitMicros = acc.creditLimitMicros
+        let availMicros = max(Int64(0), limitMicros - usedMicros)
+        let usageRatio: Double = limitMicros > 0 ? min(1.0, max(0.0, Double(usedMicros) / Double(limitMicros))) : 0.0
+
+        return VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 12) {
+                YubraeCategoryIconBadge(iconKey: acc.icon, colorHex: acc.colorHex, size: 40)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 5) {
+                        Text(acc.name)
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundColor(palette.textPrimary)
+                            .lineLimit(1)
+                        if isHidden {
+                            Text("已隐藏")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundColor(palette.textSecondary)
+                                .lineLimit(1)
+                                .fixedSize(horizontal: true, vertical: false)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Capsule().fill(palette.surfaceSecondary))
+                        }
+                        if !acc.includeInNetWorth {
+                            Text("不计净资产")
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundColor(palette.textTertiary)
+                                .lineLimit(1)
+                                .fixedSize(horizontal: true, vertical: false)
+                                .padding(.horizontal, 5)
+                                .padding(.vertical, 1.5)
+                                .background(Capsule().fill(palette.surfaceSecondary))
+                        }
+                    }
+
+                    if !trimmedNote.isEmpty {
+                        Text(trimmedNote)
+                            .font(.caption2)
+                            .foregroundColor(palette.textSecondary)
+                            .lineLimit(1)
+                    } else if !isCredit {
+                        Text(CurrencyCatalog.find(acc.currencyCode).nameZh + " · " + acc.currencyCode)
+                            .font(.caption2)
+                            .foregroundColor(palette.textSecondary)
+                            .lineLimit(1)
+                    } else {
+                        creditInlineMetaRow(acc: acc, cycle: creditCycle, availMicros: availMicros, masked: masked)
+                    }
+                }
+
+                Spacer(minLength: 6)
+
+                HStack(spacing: 6) {
+                    VStack(alignment: .trailing, spacing: 2) {
+                        Text(YubraeTheme.masked(origFmt, isMasked: masked))
+                            .font(.subheadline.weight(.bold).monospacedDigit())
+                            .foregroundColor(acc.balanceMicros < 0 ? palette.expenseColor : palette.textPrimary)
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
+                        if acc.currencyCode.uppercased() != activeDisplayCurrency.uppercased() {
+                            let convFmt = MoneyAmount.format(convertedMicros, currencyCode: activeDisplayCurrency)
+                            Text("≈ \(YubraeTheme.masked(convFmt, isMasked: masked))")
+                                .font(.caption2.monospacedDigit())
+                                .foregroundColor(palette.textTertiary)
+                                .lineLimit(1)
+                                .fixedSize(horizontal: true, vertical: false)
+                        }
+                    }
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(palette.textTertiary.opacity(0.75))
+                }
+                .layoutPriority(1)
+            }
+
+            if isCredit {
+                VStack(alignment: .leading, spacing: 5) {
+                    if !trimmedNote.isEmpty {
+                        creditInlineMetaRow(acc: acc, cycle: creditCycle, availMicros: availMicros, masked: masked)
+                    }
+                    if limitMicros > 0 {
+                        HStack(spacing: 8) {
+                            GeometryReader { geo in
+                                ZStack(alignment: .leading) {
+                                    Capsule().fill(palette.surfaceSecondary)
+                                    Capsule()
+                                        .fill(creditUsageColor(ratio: usageRatio))
+                                        .frame(width: max(usageRatio > 0 ? 4 : 0, geo.size.width * CGFloat(usageRatio)))
+                                }
+                            }
+                            .frame(height: 4)
+                            Text(masked ? "已用 ••%" : "已用 \(Int((usageRatio * 100).rounded()))%")
+                                .font(.system(size: 10, weight: .medium).monospacedDigit())
+                                .foregroundColor(palette.textTertiary)
+                                .lineLimit(1)
+                                .fixedSize(horizontal: true, vertical: false)
+                        }
+                    }
+                }
+                .padding(.leading, 52)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .contentShape(Rectangle())
+    }
+
+    private func creditInlineMetaRow(
+        acc: AccountDto,
+        cycle: CreditBillingCycleSummary?,
+        availMicros: Int64,
+        masked: Bool
+    ) -> some View {
+        HStack(spacing: 6) {
+            if acc.creditLimitMicros > 0 {
+                let availStr = YubraeTheme.masked(
+                    MoneyAmount.format(availMicros, currencyCode: acc.currencyCode),
+                    isMasked: masked
+                )
+                Text("可用 \(availStr)")
+                    .font(.caption2.monospacedDigit())
+                    .foregroundColor(palette.textSecondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
+            if let dBill = cycle?.daysUntilBilling {
+                Text(dBill == 0 ? "今日出账" : "\(dBill)天后出账")
+                    .font(.system(size: 10, weight: .medium).monospacedDigit())
+                    .foregroundColor(palette.primary)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 1.5)
+                    .background(Capsule().fill(palette.accentSoftFill))
+            }
+            if let dRepay = cycle?.daysUntilRepayment {
+                let urgent = dRepay <= 5
+                Text(dRepay == 0 ? "今日还款" : "\(dRepay)天后还款")
+                    .font(.system(size: 10, weight: .semibold).monospacedDigit())
+                    .foregroundColor(urgent ? palette.warningColor : palette.textSecondary)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 1.5)
+                    .background(Capsule().fill(urgent ? palette.warningColor.opacity(0.16) : palette.surfaceSecondary))
+            }
+        }
+    }
+
+    private func creditUsageColor(ratio: Double) -> Color {
+        if ratio >= 0.85 { return palette.dangerColor }
+        if ratio >= 0.60 { return palette.warningColor }
+        return palette.primary
+    }
+
+    // MARK: - Archived Accounts Section
+
     private var archivedAccountsCard: some View {
-        YubraeCard(palette: palette) {
-            DisclosureGroup("已归档账户（\(archivedAccounts.count)）", isExpanded: $showArchivedSection) {
+        let masked = store.settings.privacyMaskEnabled
+        let expandedBinding = Binding<Bool>(
+            get: { isSearching ? true : showArchivedSection },
+            set: { showArchivedSection = $0 }
+        )
+        return YubraeCard(palette: palette) {
+            DisclosureGroup("已归档账户（\(archivedAccounts.count)）", isExpanded: expandedBinding) {
                 VStack(spacing: 10) {
                     ForEach(archivedAccounts) { acc in
                         HStack(spacing: 10) {
-                            Text(acc.name)
-                                .font(.subheadline)
-                                .foregroundColor(palette.textSecondary)
-                                .lineLimit(1)
-                            Spacer(minLength: 8)
-                            Button("恢复活跃") {
+                            NavigationLink {
+                                AccountDetailView(store: store, accountId: acc.id)
+                            } label: {
+                                HStack(spacing: 10) {
+                                    YubraeCategoryIconBadge(iconKey: acc.icon, colorHex: acc.colorHex, size: 32)
+                                        .opacity(0.7)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(acc.name)
+                                            .font(.subheadline.weight(.medium))
+                                            .foregroundColor(palette.textSecondary)
+                                            .lineLimit(1)
+                                        let balText = YubraeTheme.masked(
+                                            MoneyAmount.format(acc.balanceMicros, currencyCode: acc.currencyCode, showCurrencyCode: true),
+                                            isMasked: masked
+                                        )
+                                        Text(acc.note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? balText : "\(balText) · \(acc.note)")
+                                            .font(.caption2.monospacedDigit())
+                                            .foregroundColor(palette.textTertiary)
+                                            .lineLimit(1)
+                                    }
+                                    Spacer(minLength: 4)
+                                }
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+
+                            Button("恢复") {
                                 store.archiveAccount(id: acc.id, archived: false)
                                 store.toastMessage = "已恢复账户「\(acc.name)」"
                             }
@@ -592,22 +1103,28 @@ public struct AssetsView: View {
                             .foregroundColor(palette.primary)
                             .lineLimit(1)
                             .fixedSize(horizontal: true, vertical: false)
+
                             Button("删除", role: .destructive) {
-                                deletingAccount = acc
+                                activeSheet = .deleteAccount(acc)
                             }
                             .buttonStyle(.borderless)
                             .font(.caption.weight(.semibold))
                             .lineLimit(1)
                             .fixedSize(horizontal: true, vertical: false)
                         }
+                        if acc.id != archivedAccounts.last?.id {
+                            Divider()
+                        }
                     }
                 }
-                .padding(.top, 8)
+                .padding(.top, 10)
             }
             .font(.subheadline.weight(.medium))
             .foregroundColor(palette.textSecondary)
         }
     }
+
+    // MARK: - Helpers
 
     private func toggleAccountHidden(_ accountId: Int64) {
         store.updateSettings { s in
@@ -618,11 +1135,232 @@ public struct AssetsView: View {
             }
         }
     }
+
+    private func matchesAccountSearch(_ acc: AccountDto, query: String) -> Bool {
+        let curName = CurrencyCatalog.find(acc.currencyCode).nameZh
+        let groupName = AccountGroup.labelZh(for: acc.groupType)
+        return acc.name.localizedCaseInsensitiveContains(query)
+            || acc.note.localizedCaseInsensitiveContains(query)
+            || acc.currencyCode.localizedCaseInsensitiveContains(query)
+            || curName.localizedCaseInsensitiveContains(query)
+            || groupName.localizedCaseInsensitiveContains(query)
+            || acc.groupType.localizedCaseInsensitiveContains(query)
+    }
 }
 
-// MARK: - Account Editor Sheet
+// MARK: - Native Drag-and-Drop Asset Reorder Sheet
 
-private struct AccountEditorSheet: View {
+private enum AssetReorderTab: Int, CaseIterable, Identifiable {
+    case accounts = 0
+    case groups = 1
+
+    var id: Int { rawValue }
+    var title: String {
+        switch self {
+        case .accounts: return "账户排序"
+        case .groups: return "分组顺序"
+        }
+    }
+}
+
+private struct AssetReorderSheet: View {
+    @ObservedObject var store: LedgerStore
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.colorScheme) private var colorScheme
+
+    @State private var activeTab: AssetReorderTab = .accounts
+    @State private var draftGroupOrder: [String]
+    @State private var draftAccountsByGroup: [String: [AccountDto]]
+
+    private var palette: YubraePalette {
+        YubraeTheme.palette(for: store.settings, colorScheme: colorScheme)
+    }
+
+    init(store: LedgerStore, initialGroupOrder: [AccountGroup]) {
+        self.store = store
+        let groupKeys = initialGroupOrder.map(\.rawValue)
+        _draftGroupOrder = State(initialValue: groupKeys)
+
+        var map: [String: [AccountDto]] = [:]
+        let sortedActive = store.activeAccounts.sorted { lhs, rhs in
+            if lhs.sortOrder != rhs.sortOrder { return lhs.sortOrder < rhs.sortOrder }
+            return lhs.id < rhs.id
+        }
+        for key in groupKeys {
+            map[key] = sortedActive.filter { $0.groupType.uppercased() == key }
+        }
+        _draftAccountsByGroup = State(initialValue: map)
+    }
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 0) {
+                Picker("排序维度", selection: $activeTab) {
+                    ForEach(AssetReorderTab.allCases) { tab in
+                        Text(tab.title).tag(tab)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .padding(.horizontal, 16)
+                .padding(.top, 10)
+                .padding(.bottom, 6)
+                .background(palette.background)
+
+                HStack(spacing: 6) {
+                    Image(systemName: "line.3.horizontal")
+                        .font(.caption2)
+                        .foregroundColor(palette.primary)
+                    Text(activeTab == .accounts
+                        ? "按住右侧把手上下拖动，调整组内账户顺序"
+                        : "按住右侧把手上下拖动，调整资产分组顺序")
+                        .font(.caption)
+                        .foregroundColor(palette.textSecondary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 18)
+                .padding(.bottom, 6)
+                .background(palette.background)
+
+                if activeTab == .accounts {
+                    accountsReorderList
+                } else {
+                    groupsReorderList
+                }
+            }
+            .background(palette.background.ignoresSafeArea())
+            .navigationTitle("资产排序")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("取消") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("保存") {
+                        saveOrder()
+                    }
+                    .fontWeight(.semibold)
+                }
+            }
+        }
+    }
+
+    private var accountsReorderList: some View {
+        let nonEmptyGroups = draftGroupOrder.filter { !(draftAccountsByGroup[$0] ?? []).isEmpty }
+        return List {
+            if nonEmptyGroups.isEmpty {
+                Text("暂无可排序的活跃账户")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+            } else {
+                ForEach(nonEmptyGroups, id: \.self) { groupKey in
+                    let items = draftAccountsByGroup[groupKey] ?? []
+                    Section(header: Text(AccountGroup.labelZh(for: groupKey))) {
+                        ForEach(items) { acc in
+                            HStack(spacing: 10) {
+                                YubraeCategoryIconBadge(iconKey: acc.icon, colorHex: acc.colorHex, size: 32)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(acc.name)
+                                        .font(.subheadline.weight(.semibold))
+                                        .foregroundColor(palette.textPrimary)
+                                        .lineLimit(1)
+                                    Text(acc.note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? acc.currencyCode : acc.note)
+                                        .font(.caption2)
+                                        .foregroundColor(palette.textSecondary)
+                                        .lineLimit(1)
+                                }
+                                Spacer(minLength: 8)
+                                Text(MoneyAmount.format(acc.balanceMicros, currencyCode: acc.currencyCode, showCurrencyCode: true))
+                                    .font(.caption.weight(.semibold).monospacedDigit())
+                                    .foregroundColor(palette.textSecondary)
+                                    .lineLimit(1)
+                                    .fixedSize(horizontal: true, vertical: false)
+                            }
+                            .deleteDisabled(true)
+                        }
+                        .onMove { source, destination in
+                            var list = draftAccountsByGroup[groupKey] ?? []
+                            list.move(fromOffsets: source, toOffset: destination)
+                            draftAccountsByGroup[groupKey] = list
+                        }
+                    }
+                }
+            }
+        }
+        .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
+        .environment(\.editMode, .constant(.active))
+    }
+
+    private var groupsReorderList: some View {
+        List {
+            Section(
+                header: Text("资产分组展示顺序"),
+                footer: Text("拖动右侧把手调整各账户分组在资产首页的上下顺序。")
+            ) {
+                ForEach(draftGroupOrder, id: \.self) { groupKey in
+                    let group = AccountGroup(rawValue: groupKey)
+                    let count = (draftAccountsByGroup[groupKey] ?? []).count
+                    HStack(spacing: 12) {
+                        Image(systemName: group?.sfSymbol ?? "folder.fill")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundColor(palette.primary)
+                            .frame(width: 24)
+                        Text(AccountGroup.labelZh(for: groupKey))
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundColor(palette.textPrimary)
+                            .lineLimit(1)
+                        Spacer(minLength: 8)
+                        Text("\(count) 个账户")
+                            .font(.caption)
+                            .foregroundColor(palette.textTertiary)
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
+                    }
+                    .deleteDisabled(true)
+                }
+                .onMove { source, destination in
+                    draftGroupOrder.move(fromOffsets: source, toOffset: destination)
+                }
+            }
+
+            Section {
+                Button("恢复默认分组顺序") {
+                    draftGroupOrder = AccountGroup.allCases.map(\.rawValue)
+                }
+                .buttonStyle(.borderless)
+                .foregroundColor(palette.primary)
+            }
+        }
+        .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
+        .environment(\.editMode, .constant(.active))
+    }
+
+    private func saveOrder() {
+        var orderedIds: [Int64] = []
+        var seen = Set<Int64>()
+        for groupKey in draftGroupOrder {
+            for acc in (draftAccountsByGroup[groupKey] ?? []) {
+                if seen.insert(acc.id).inserted {
+                    orderedIds.append(acc.id)
+                }
+            }
+        }
+        for acc in store.accounts where seen.insert(acc.id).inserted {
+            orderedIds.append(acc.id)
+        }
+        store.reorderAccounts(orderedIds: orderedIds)
+        store.updateAssetGroupOrder(draftGroupOrder)
+        store.toastMessage = "已保存资产排序"
+        dismiss()
+    }
+}
+
+// MARK: - Account Editor Sheet (Internal - Shared with AccountDetailView)
+
+struct AccountEditorSheet: View {
     @ObservedObject var store: LedgerStore
     let editingAccount: AccountDto?
 
@@ -637,6 +1375,7 @@ private struct AccountEditorSheet: View {
     @State private var groupType: String
     @State private var currencyCode: String
     @State private var balanceText: String
+    @State private var note: String
     @State private var creditLimitText: String
     @State private var billingDayText: String
     @State private var repaymentDayText: String
@@ -649,7 +1388,7 @@ private struct AccountEditorSheet: View {
     private let iconOptions = ["wallet", "chat", "account_balance_wallet", "account_balance", "credit_card", "payments", "directions_bus", "attach_money", "euro", "currency_pound", "trending_up", "savings"]
     private let colorOptions: [Int64] = [0xFF2AA876, 0xFF07C160, 0xFF1677FF, 0xFF0B57D0, 0xFFDC2626, 0xFFD97706, 0xFF7C3AED, 0xFF0F766E, 0xFF475569]
 
-    init(store: LedgerStore, editingAccount: AccountDto?) {
+    init(store: LedgerStore, editingAccount: AccountDto?, initialGroupType: String = AccountGroup.WALLET) {
         self.store = store
         self.editingAccount = editingAccount
         if let acc = editingAccount {
@@ -658,6 +1397,7 @@ private struct AccountEditorSheet: View {
             _groupType = State(initialValue: acc.groupType)
             _currencyCode = State(initialValue: acc.currencyCode)
             _balanceText = State(initialValue: MoneyAmount.formatPlain(acc.balanceMicros, minorDigits: digits, grouping: false))
+            _note = State(initialValue: acc.note)
             _creditLimitText = State(initialValue: acc.creditLimitMicros > 0 ? MoneyAmount.formatPlain(acc.creditLimitMicros, minorDigits: digits, grouping: false) : "")
             _billingDayText = State(initialValue: acc.billingDay.map(String.init) ?? "")
             _repaymentDayText = State(initialValue: acc.repaymentDay.map(String.init) ?? "")
@@ -665,14 +1405,25 @@ private struct AccountEditorSheet: View {
             _selectedColorHex = State(initialValue: acc.colorHex)
             _includeInNetWorth = State(initialValue: acc.includeInNetWorth)
         } else {
+            let resolvedGroup = AccountGroup(rawValue: initialGroupType.uppercased())?.rawValue ?? AccountGroup.WALLET
+            let defaultIcon: String
+            switch resolvedGroup {
+            case AccountGroup.DEBIT: defaultIcon = "account_balance"
+            case AccountGroup.CREDIT: defaultIcon = "credit_card"
+            case AccountGroup.FOREIGN: defaultIcon = "attach_money"
+            case AccountGroup.INVEST: defaultIcon = "trending_up"
+            case AccountGroup.DEBT: defaultIcon = "payments"
+            default: defaultIcon = "wallet"
+            }
             _name = State(initialValue: "")
-            _groupType = State(initialValue: AccountGroup.WALLET)
-            _currencyCode = State(initialValue: store.settings.baseCurrency)
+            _groupType = State(initialValue: resolvedGroup)
+            _currencyCode = State(initialValue: resolvedGroup == AccountGroup.FOREIGN ? "USD" : store.settings.baseCurrency)
             _balanceText = State(initialValue: "0.00")
+            _note = State(initialValue: "")
             _creditLimitText = State(initialValue: "")
             _billingDayText = State(initialValue: "")
             _repaymentDayText = State(initialValue: "")
-            _selectedIcon = State(initialValue: "wallet")
+            _selectedIcon = State(initialValue: defaultIcon)
             _selectedColorHex = State(initialValue: 0xFF2AA876)
             _includeInNetWorth = State(initialValue: true)
         }
@@ -683,6 +1434,7 @@ private struct AccountEditorSheet: View {
             Form {
                 Section("基本信息") {
                     TextField("账户名称（如 招商银行储蓄卡）", text: $name)
+                    TextField("账户备注（可选，如 卡号后四位 / 用途）", text: $note)
                     Picker("账户分组", selection: $groupType) {
                         ForEach(AccountGroup.allCases) { group in
                             Text(group.labelZh).tag(group.rawValue)
@@ -770,18 +1522,20 @@ private struct AccountEditorSheet: View {
                     }
                 }
 
-                if let existing = editingAccount {
+                if editingAccount != nil {
                     Section("快捷操作") {
                         Button {
                             showCalibration = true
                         } label: {
-                            Label("余额校准", systemImage: "slider.horizontal.3")
+                            Label("校准余额", systemImage: "slider.horizontal.3")
                         }
+                        .buttonStyle(.borderless)
                         Button(role: .destructive) {
                             showDeleteConfirm = true
                         } label: {
                             Label("删除该账户", systemImage: "trash")
                         }
+                        .buttonStyle(.borderless)
                     }
                 }
             }
@@ -806,14 +1560,14 @@ private struct AccountEditorSheet: View {
                 }
             }
             .sheet(isPresented: $showCalibration) {
-                if let existing = editingAccount {
+                if let existing = editingAccount.flatMap({ store.account(byId: $0.id) }) ?? editingAccount {
                     BalanceCalibrationSheet(store: store, account: existing)
                         .yubraeSheetStyle(palette: palette)
                 }
             }
             .sheet(isPresented: $showDeleteConfirm) {
-                if let existing = editingAccount {
-                    DeleteAccountConfirmSheet(store: store, account: existing) {
+                if let existing = editingAccount.flatMap({ store.account(byId: $0.id) }) ?? editingAccount {
+                    AccountDeleteSheet(store: store, account: existing) {
                         showDeleteConfirm = false
                         dismiss()
                     }
@@ -826,12 +1580,13 @@ private struct AccountEditorSheet: View {
     private func save() {
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedName.isEmpty else { return }
+        let trimmedNote = note.trimmingCharacters(in: .whitespacesAndNewlines)
         let balMicros = MoneyAmount.parseToMicros(balanceText) ?? (editingAccount?.balanceMicros ?? 0)
         let limitMicros = MoneyAmount.parseToMicros(creditLimitText) ?? 0
         let billDay = Int(billingDayText).flatMap { (1...31).contains($0) ? $0 : nil }
         let repayDay = Int(repaymentDayText).flatMap { (1...31).contains($0) ? $0 : nil }
 
-        let dto = AccountDto(
+        var dto = AccountDto(
             id: editingAccount?.id ?? 0,
             name: trimmedName,
             groupType: groupType,
@@ -848,15 +1603,16 @@ private struct AccountEditorSheet: View {
             createdAt: editingAccount?.createdAt ?? 0,
             updatedAt: 0
         )
+        dto.note = trimmedNote
         _ = store.saveAccount(dto)
         store.toastMessage = editingAccount == nil ? "已创建账户「\(trimmedName)」" : "已保存账户修改"
         dismiss()
     }
 }
 
-// MARK: - Balance Calibration Sheet
+// MARK: - Balance Calibration Sheet (Internal - Shared with AccountDetailView)
 
-private struct BalanceCalibrationSheet: View {
+struct BalanceCalibrationSheet: View {
     @ObservedObject var store: LedgerStore
     let account: AccountDto
 
@@ -881,33 +1637,49 @@ private struct BalanceCalibrationSheet: View {
         NavigationStack {
             Form {
                 Section("账户信息") {
-                    HStack {
+                    HStack(spacing: 8) {
                         Text("账户")
-                        Spacer()
-                        Text(account.name).foregroundColor(.secondary)
+                        Spacer(minLength: 8)
+                        Text(account.name)
+                            .foregroundColor(.secondary)
+                            .lineLimit(1)
                     }
-                    HStack {
+                    HStack(spacing: 8) {
                         Text("校准前账面余额")
-                        Spacer()
+                            .lineLimit(1)
+                        Spacer(minLength: 8)
                         Text(MoneyAmount.format(account.balanceMicros, currencyCode: account.currencyCode, showCurrencyCode: true))
                             .fontWeight(.semibold)
+                            .monospacedDigit()
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
                     }
                 }
                 Section {
-                    TextField("输入当前实际余额", text: $targetBalanceText)
-                        .keyboardType(.numbersAndPunctuation)
+                    HStack(spacing: 8) {
+                        Text("实际余额")
+                            .lineLimit(1)
+                        Spacer(minLength: 8)
+                        TextField("输入当前实际余额", text: $targetBalanceText)
+                            .keyboardType(.numbersAndPunctuation)
+                            .multilineTextAlignment(.trailing)
+                    }
                     if let delta = deltaMicros {
-                        HStack {
-                            Text("差额变动")
-                            Spacer()
+                        HStack(spacing: 8) {
+                            Text("差额变动预览")
+                                .lineLimit(1)
+                            Spacer(minLength: 8)
                             Text(MoneyAmount.format(delta, currencyCode: account.currencyCode, showSign: true, showCurrencyCode: true))
                                 .foregroundColor(delta > 0 ? .green : (delta < 0 ? .red : .secondary))
                                 .fontWeight(.semibold)
+                                .monospacedDigit()
+                                .lineLimit(1)
+                                .fixedSize(horizontal: true, vertical: false)
                         }
                     }
                     Toggle("生成差额变动记录", isOn: $createRecord)
                     if createRecord {
-                        TextField("备注", text: $noteText)
+                        TextField("备注（如 对账调平）", text: $noteText)
                     }
                 } header: {
                     Text("目标实际余额")
@@ -954,6 +1726,101 @@ private struct BalanceCalibrationSheet: View {
     }
 }
 
+// MARK: - Account Delete Sheet (Internal - Shared with AccountDetailView)
+
+struct AccountDeleteSheet: View {
+    @ObservedObject var store: LedgerStore
+    let account: AccountDto
+    let onDeleted: () -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var migrateTargetId: Int64 = 0
+    @State private var initialized = false
+
+    private var linkedCount: Int {
+        store.transactions.filter { $0.accountId == account.id || $0.toAccountId == account.id }.count
+    }
+
+    private var migrateTargets: [AccountDto] {
+        store.activeAccounts.filter { $0.id != account.id }
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(account.name)
+                            .font(.headline)
+                        Text(CurrencyCatalog.find(account.currencyCode).nameZh + " · " + account.currencyCode)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+
+                if linkedCount == 0 {
+                    Section(footer: Text("当前账户暂无关联账单，删除后将清理识别别名，重启也不会自动重建。")) {
+                        Text("当前余额：\(MoneyAmount.format(account.balanceMicros, currencyCode: account.currencyCode, showCurrencyCode: true))")
+                            .foregroundColor(.secondary)
+                    }
+                } else {
+                    Section(
+                        header: Text("该账户存在 \(linkedCount) 笔关联账单"),
+                        footer: Text(migrateTargetId > 0
+                            ? "将把该账户的历史账单、余额及周期/分期/借贷关联迁移到目标账户后再删除。"
+                            : "将删除该账户及全部关联账单，并自动回滚跨账户转账对方账户的余额。")
+                    ) {
+                        Picker("处理方式", selection: $migrateTargetId) {
+                            Text("直接删除账户及关联账单").tag(Int64(0))
+                            ForEach(migrateTargets) { target in
+                                Text("迁移至「\(target.name) (\(target.currencyCode))」").tag(target.id)
+                            }
+                        }
+                    }
+                }
+
+                Section {
+                    Button(
+                        linkedCount > 0 && migrateTargetId > 0
+                            ? "迁移并删除「\(account.name)」"
+                            : "确认删除「\(account.name)」",
+                        role: .destructive
+                    ) {
+                        do {
+                            let target: Int64? = (linkedCount > 0 && migrateTargetId > 0) ? migrateTargetId : nil
+                            try store.deleteAccount(id: account.id, migrateToAccountId: target)
+                            store.toastMessage = target != nil
+                                ? "已迁移账单并删除账户「\(account.name)」"
+                                : "已删除账户「\(account.name)」"
+                            onDeleted()
+                            dismiss()
+                        } catch {
+                            store.lastErrorMessage = error.localizedDescription
+                        }
+                    }
+                    .buttonStyle(.borderless)
+                }
+            }
+            .navigationTitle("删除账户")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("取消") { dismiss() }
+                }
+            }
+            .onAppear {
+                if !initialized {
+                    initialized = true
+                    if linkedCount > 0, let firstTarget = migrateTargets.first {
+                        migrateTargetId = firstTarget.id
+                    }
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+    }
+}
+
 // MARK: - Hidden Assets Manager Sheet
 
 private struct HiddenAssetsManagerSheet: View {
@@ -988,10 +1855,13 @@ private struct HiddenAssetsManagerSheet: View {
                         )) {
                             HStack {
                                 Text(acc.name)
+                                    .lineLimit(1)
                                 Spacer()
                                 Text(acc.currencyCode)
                                     .font(.caption)
                                     .foregroundColor(.secondary)
+                                    .lineLimit(1)
+                                    .fixedSize(horizontal: true, vertical: false)
                             }
                         }
                     }
@@ -1237,6 +2107,7 @@ private struct SettleReimburseSheet: View {
                                     .layoutPriority(1)
                             }
                         }
+                        .buttonStyle(.plain)
                     }
                 }
             }
@@ -1264,97 +2135,5 @@ private struct SettleReimburseSheet: View {
                 }
             }
         }
-    }
-}
-
-private struct DeleteAccountConfirmSheet: View {
-    @ObservedObject var store: LedgerStore
-    let account: AccountDto
-    let onDeleted: () -> Void
-
-    @Environment(\.dismiss) private var dismiss
-    @State private var migrateTargetId: Int64 = 0
-    @State private var initialized = false
-
-    private var linkedCount: Int {
-        store.transactions.filter { $0.accountId == account.id || $0.toAccountId == account.id }.count
-    }
-
-    private var migrateTargets: [AccountDto] {
-        store.activeAccounts.filter { $0.id != account.id }
-    }
-
-    var body: some View {
-        NavigationStack {
-            Form {
-                Section {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(account.name)
-                            .font(.headline)
-                        Text(CurrencyCatalog.find(account.currencyCode).nameZh + " · " + account.currencyCode)
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-                    }
-                }
-
-                if linkedCount == 0 {
-                    Section(footer: Text("当前账户暂无关联账单，删除后将清理识别别名，重启也不会自动重建。")) {
-                        Text("当前余额：\(MoneyAmount.format(account.balanceMicros, currencyCode: account.currencyCode, showCurrencyCode: true))")
-                            .foregroundColor(.secondary)
-                    }
-                } else {
-                    Section(
-                        header: Text("该账户存在 \(linkedCount) 笔关联账单"),
-                        footer: Text(migrateTargetId > 0
-                            ? "将把该账户的历史账单、余额及周期/分期/借贷关联迁移到目标账户后再删除。"
-                            : "将删除该账户及全部关联账单，并自动回滚跨账户转账对方账户的余额。")
-                    ) {
-                        Picker("处理方式", selection: $migrateTargetId) {
-                            Text("直接删除账户及关联账单").tag(Int64(0))
-                            ForEach(migrateTargets) { target in
-                                Text("迁移至「\(target.name) (\(target.currencyCode))」").tag(target.id)
-                            }
-                        }
-                    }
-                }
-
-                Section {
-                    Button(
-                        linkedCount > 0 && migrateTargetId > 0
-                            ? "迁移并删除「\(account.name)」"
-                            : "确认删除「\(account.name)」",
-                        role: .destructive
-                    ) {
-                        do {
-                            let target: Int64? = (linkedCount > 0 && migrateTargetId > 0) ? migrateTargetId : nil
-                            try store.deleteAccount(id: account.id, migrateToAccountId: target)
-                            store.toastMessage = target != nil
-                                ? "已迁移账单并删除账户「\(account.name)」"
-                                : "已删除账户「\(account.name)」"
-                            onDeleted()
-                            dismiss()
-                        } catch {
-                            store.lastErrorMessage = error.localizedDescription
-                        }
-                    }
-                }
-            }
-            .navigationTitle("删除账户")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("取消") { dismiss() }
-                }
-            }
-            .onAppear {
-                if !initialized {
-                    initialized = true
-                    if linkedCount > 0, let firstTarget = migrateTargets.first {
-                        migrateTargetId = firstTarget.id
-                    }
-                }
-            }
-        }
-        .presentationDetents([.medium, .large])
     }
 }

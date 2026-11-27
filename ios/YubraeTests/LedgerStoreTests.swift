@@ -747,4 +747,401 @@ final class LedgerStoreTests: XCTestCase {
         XCTAssertFalse(store.matchesSearchQuery("不存在的关键字xyz", for: diningOutTx))
         XCTAssertFalse(store.matchesSearchQuery("不存在的关键字xyz", for: transferTx))
     }
+
+    @MainActor
+    func testAccountNoteAndSettingsBackwardCompatibleDecoding() throws {
+        // 1. 模拟缺少 note / assetGroupOrder / collapsedAssetGroups 的旧版 JSON 解码
+        let legacyAccountJson = """
+        {
+          "id": 42,
+          "name": "旧版招商卡",
+          "groupType": "DEBIT",
+          "currencyCode": "CNY",
+          "balanceMicros": 1200000
+        }
+        """
+        let decodedLegacyAcc = try JSONDecoder().decode(AccountDto.self, from: Data(legacyAccountJson.utf8))
+        XCTAssertEqual(decodedLegacyAcc.id, 42)
+        XCTAssertEqual(decodedLegacyAcc.name, "旧版招商卡")
+        XCTAssertEqual(decodedLegacyAcc.note, "")
+        XCTAssertTrue(decodedLegacyAcc.includeInNetWorth)
+        XCTAssertFalse(decodedLegacyAcc.archived)
+
+        let legacySettingsJson = """
+        {
+          "baseCurrency": "CNY",
+          "themeMode": "DARK",
+          "themeStyle": "PRISM_TEAL"
+        }
+        """
+        let decodedLegacySettings = try JSONDecoder().decode(AppSettings.self, from: Data(legacySettingsJson.utf8))
+        XCTAssertEqual(decodedLegacySettings.themeMode, .dark)
+        XCTAssertEqual(decodedLegacySettings.assetGroupOrder, [])
+        XCTAssertEqual(decodedLegacySettings.collapsedAssetGroups, [])
+
+        let legacySnapshotDto = try JSONDecoder().decode(SettingsSnapshotDto.self, from: Data(legacySettingsJson.utf8))
+        XCTAssertEqual(legacySnapshotDto.assetGroupOrder, [])
+        XCTAssertEqual(legacySnapshotDto.collapsedAssetGroups, [])
+
+        // 2. 带新字段编码往返 + 本地持久化 + .klbk 加密备份往返
+        let dir = makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = LedgerStore(storageDirectory: dir, useKeychain: false, timeZone: TimeZone(secondsFromGMT: 8 * 3600)!)
+
+        var debit = try XCTUnwrap(store.accounts.first(where: { $0.name == "银行储蓄卡" }))
+        debit.note = "工资卡 · 尾号 8821"
+        _ = store.saveAccount(debit)
+
+        store.updateAssetGroupOrder([AccountGroup.CREDIT, AccountGroup.DEBIT, AccountGroup.WALLET, AccountGroup.CREDIT])
+        XCTAssertEqual(store.settings.assetGroupOrder, [AccountGroup.CREDIT, AccountGroup.DEBIT, AccountGroup.WALLET])
+
+        store.toggleAssetGroupCollapsed(AccountGroup.FOREIGN)
+        XCTAssertEqual(store.settings.collapsedAssetGroups, [AccountGroup.FOREIGN])
+        store.toggleAssetGroupCollapsed(AccountGroup.CREDIT)
+        XCTAssertTrue(store.settings.collapsedAssetGroups.contains(AccountGroup.CREDIT))
+        store.toggleAssetGroupCollapsed(AccountGroup.FOREIGN)
+        XCTAssertEqual(store.settings.collapsedAssetGroups, [AccountGroup.CREDIT])
+
+        // 本地重载验证
+        let reloaded = LedgerStore(storageDirectory: dir, useKeychain: false, timeZone: TimeZone(secondsFromGMT: 8 * 3600)!)
+        XCTAssertEqual(reloaded.account(byId: debit.id)?.note, "工资卡 · 尾号 8821")
+        XCTAssertEqual(reloaded.settings.assetGroupOrder, [AccountGroup.CREDIT, AccountGroup.DEBIT, AccountGroup.WALLET])
+        XCTAssertEqual(reloaded.settings.collapsedAssetGroups, [AccountGroup.CREDIT])
+
+        // .klbk 备份导出并还原至新实例验证
+        let backupData = try reloaded.exportEncryptedBackup(passphrase: "assets-note-key")
+        let dir2 = makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir2) }
+        let restoredStore = LedgerStore(storageDirectory: dir2, useKeychain: false, timeZone: TimeZone(secondsFromGMT: 8 * 3600)!)
+        _ = try restoredStore.importEncryptedBackup(backupData, passphrase: "assets-note-key")
+        XCTAssertEqual(restoredStore.account(byId: debit.id)?.note, "工资卡 · 尾号 8821")
+        XCTAssertEqual(restoredStore.settings.assetGroupOrder, [AccountGroup.CREDIT, AccountGroup.DEBIT, AccountGroup.WALLET])
+        XCTAssertEqual(restoredStore.settings.collapsedAssetGroups, [AccountGroup.CREDIT])
+    }
+
+    @MainActor
+    func testReorderAccountsPersistsSortOrder() throws {
+        let dir = makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let tz = TimeZone(secondsFromGMT: 8 * 3600)!
+        let store = LedgerStore(storageDirectory: dir, useKeychain: false, timeZone: tz)
+
+        let originalIds = store.activeAccounts.map(\.id)
+        XCTAssertGreaterThanOrEqual(originalIds.count, 5)
+        let creditId = try XCTUnwrap(store.activeAccounts.first(where: { $0.groupType == AccountGroup.CREDIT })?.id)
+        let debitId = try XCTUnwrap(store.activeAccounts.first(where: { $0.groupType == AccountGroup.DEBIT })?.id)
+
+        // 只传部分 ID，确认传入顺序置顶（0, 10），未传入账户按原序顺延（20, 30...）
+        store.reorderAccounts(orderedIds: [creditId, debitId, creditId, 999_999])
+
+        let reordered = store.activeAccounts
+        XCTAssertEqual(reordered[0].id, creditId)
+        XCTAssertEqual(reordered[0].sortOrder, 0)
+        XCTAssertEqual(reordered[1].id, debitId)
+        XCTAssertEqual(reordered[1].sortOrder, 10)
+        let expectedRemaining = originalIds.filter { $0 != creditId && $0 != debitId }
+        XCTAssertEqual(Array(reordered.dropFirst(2).map(\.id)), expectedRemaining)
+        XCTAssertEqual(reordered[2].sortOrder, 20)
+
+        // 重启持久化后顺序完全保持
+        let reloaded = LedgerStore(storageDirectory: dir, useKeychain: false, timeZone: tz)
+        XCTAssertEqual(reloaded.activeAccounts.map(\.id), reordered.map(\.id))
+        XCTAssertEqual(reloaded.activeAccounts[0].sortOrder, 0)
+        XCTAssertEqual(reloaded.activeAccounts[1].sortOrder, 10)
+    }
+
+    @MainActor
+    func testBatchMoveTransactionsAccountRecomputesBalances() throws {
+        let dir = makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let tz = TimeZone(secondsFromGMT: 8 * 3600)!
+        let store = LedgerStore(storageDirectory: dir, useKeychain: false, timeZone: tz)
+
+        let wechatId = try XCTUnwrap(store.accounts.first(where: { $0.name == "微信零钱" })?.id)
+        let alipayId = try XCTUnwrap(store.accounts.first(where: { $0.name == "支付宝" })?.id)
+        let debitId = try XCTUnwrap(store.accounts.first(where: { $0.name == "银行储蓄卡" })?.id)
+        let usdId = try XCTUnwrap(store.accounts.first(where: { $0.currencyCode == "USD" })?.id)
+        let cashId = try XCTUnwrap(store.accounts.first(where: { $0.name == "现金" })?.id)
+        store.archiveAccount(id: cashId, archived: true)
+
+        // 1. 参数校验：目标账户不存在或已归档应抛错
+        XCTAssertThrowsError(try store.batchMoveTransactionsAccount(txIds: [], targetAccountId: 999_999)) { error in
+            XCTAssertEqual(error as? LedgerStoreError, .accountNotFound(999_999))
+        }
+        XCTAssertThrowsError(try store.batchMoveTransactionsAccount(txIds: [], targetAccountId: cashId)) { error in
+            XCTAssertEqual(error as? LedgerStoreError, .cannotMigrateToArchivedAccount("现金"))
+        }
+
+        // 2. 同币种批量改账户：支出 ¥120 + 收入 ¥500 从微信零钱迁移至银行储蓄卡
+        let baseMillis = currentEpochMillis()
+        let expTx = try store.saveTransaction(
+            RecordTransactionRequest(
+                type: TransactionType.EXPENSE,
+                timestamp: baseMillis,
+                origAmountMicros: 120 * MoneyAmount.amountScale,
+                origCurrency: "CNY",
+                accountId: wechatId,
+                merchant: "盒马鲜生"
+            )
+        )
+        let incTx = try store.saveTransaction(
+            RecordTransactionRequest(
+                type: TransactionType.INCOME,
+                timestamp: baseMillis + 1_000,
+                origAmountMicros: 500 * MoneyAmount.amountScale,
+                origCurrency: "CNY",
+                accountId: wechatId,
+                merchant: "兼职稿费"
+            )
+        )
+        XCTAssertEqual(store.account(byId: wechatId)?.balanceMicros, 380 * MoneyAmount.amountScale)
+
+        let movedSameCur = try store.batchMoveTransactionsAccount(txIds: [expTx.id, incTx.id], targetAccountId: debitId)
+        XCTAssertEqual(movedSameCur, 2)
+        XCTAssertEqual(store.account(byId: wechatId)?.balanceMicros, 0)
+        XCTAssertEqual(store.account(byId: debitId)?.balanceMicros, 380 * MoneyAmount.amountScale)
+
+        // 3. 跨币种批量改账户：USD -> CNY 汇率 7.20，将 $100 USD 支出从美元账户迁至银行储蓄卡（CNY）
+        store.saveCustomRate(from: "USD", to: "CNY", rateMicros: 7_200_000)
+        let usdExpTx = try store.saveTransaction(
+            RecordTransactionRequest(
+                type: TransactionType.EXPENSE,
+                timestamp: baseMillis + 2_000,
+                origAmountMicros: 100 * MoneyAmount.amountScale,
+                origCurrency: "USD",
+                accountId: usdId,
+                merchant: "AWS"
+            )
+        )
+        XCTAssertEqual(store.account(byId: usdId)?.balanceMicros, -100 * MoneyAmount.amountScale)
+
+        let movedCrossCur = try store.batchMoveTransactionsAccount(txIds: [usdExpTx.id], targetAccountId: debitId)
+        XCTAssertEqual(movedCrossCur, 1)
+        XCTAssertEqual(store.account(byId: usdId)?.balanceMicros, 0)
+        // 储蓄卡原余额 +380 CNY，迁入 -720 CNY -> -340 CNY
+        XCTAssertEqual(store.account(byId: debitId)?.balanceMicros, -340 * MoneyAmount.amountScale)
+        let migratedUsdTx = try XCTUnwrap(store.transactions.first(where: { $0.id == usdExpTx.id }))
+        XCTAssertEqual(migratedUsdTx.accountId, debitId)
+        XCTAssertEqual(migratedUsdTx.accountCurrency, "CNY")
+        XCTAssertEqual(migratedUsdTx.accountAmountMicros, 720 * MoneyAmount.amountScale)
+        XCTAssertEqual(migratedUsdTx.rateToAccountMicros, 7_200_000)
+
+        // 4. 转账防自转保护 + 合法迁移转出方
+        let transferTx = try store.saveTransaction(
+            RecordTransactionRequest(
+                type: TransactionType.TRANSFER,
+                timestamp: baseMillis + 3_000,
+                origAmountMicros: 200 * MoneyAmount.amountScale,
+                origCurrency: "CNY",
+                accountId: wechatId,
+                toAccountId: alipayId,
+                merchant: "零钱转支付宝"
+            )
+        )
+        XCTAssertEqual(store.account(byId: wechatId)?.balanceMicros, -200 * MoneyAmount.amountScale)
+        XCTAssertEqual(store.account(byId: alipayId)?.balanceMicros, 200 * MoneyAmount.amountScale)
+
+        // 目标账户等于转入方或转出方均必须跳过，防止自转
+        XCTAssertEqual(try store.batchMoveTransactionsAccount(txIds: [transferTx.id], targetAccountId: alipayId), 0)
+        XCTAssertEqual(try store.batchMoveTransactionsAccount(txIds: [transferTx.id], targetAccountId: wechatId), 0)
+        XCTAssertEqual(store.account(byId: wechatId)?.balanceMicros, -200 * MoneyAmount.amountScale)
+        XCTAssertEqual(store.account(byId: alipayId)?.balanceMicros, 200 * MoneyAmount.amountScale)
+
+        // 迁移转出方至储蓄卡：微信回滚至 0，储蓄卡再减 200（变为 -540），支付宝仍为 +200
+        XCTAssertEqual(try store.batchMoveTransactionsAccount(txIds: [transferTx.id], targetAccountId: debitId), 1)
+        XCTAssertEqual(store.account(byId: wechatId)?.balanceMicros, 0)
+        XCTAssertEqual(store.account(byId: debitId)?.balanceMicros, -540 * MoneyAmount.amountScale)
+        XCTAssertEqual(store.account(byId: alipayId)?.balanceMicros, 200 * MoneyAmount.amountScale)
+        let migratedTransfer = try XCTUnwrap(store.transactions.first(where: { $0.id == transferTx.id }))
+        XCTAssertEqual(migratedTransfer.accountId, debitId)
+        XCTAssertEqual(migratedTransfer.toAccountId, alipayId)
+
+        // 5. duplicateTransaction 验证
+        let duplicated = try store.duplicateTransaction(id: expTx.id)
+        XCTAssertNotEqual(duplicated.id, expTx.id)
+        XCTAssertEqual(duplicated.merchant, "盒马鲜生")
+        XCTAssertEqual(duplicated.accountId, debitId)
+        XCTAssertEqual(store.account(byId: debitId)?.balanceMicros, -660 * MoneyAmount.amountScale)
+    }
+
+    @MainActor
+    func testAccountDailyBalanceTrendAndCreditBillingCycleSummary() throws {
+        let dir = makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let tz = TimeZone(secondsFromGMT: 8 * 3600)!
+        let store = LedgerStore(storageDirectory: dir, useKeychain: false, timeZone: tz)
+
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = tz
+        func millis(_ year: Int, _ month: Int, _ day: Int, _ hour: Int = 12) throws -> Int64 {
+            let date = try XCTUnwrap(cal.date(from: DateComponents(year: year, month: month, day: day, hour: hour)))
+            return Int64((date.timeIntervalSince1970 * 1000.0).rounded())
+        }
+
+        let debitId = try XCTUnwrap(store.accounts.first(where: { $0.name == "银行储蓄卡" })?.id)
+        let wechatId = try XCTUnwrap(store.accounts.first(where: { $0.name == "微信零钱" })?.id)
+        let creditAcc = try XCTUnwrap(store.accounts.first(where: { $0.groupType == AccountGroup.CREDIT }))
+
+        // 1. 余额倒推趋势（锚点 2026-03-10 15:00 +08:00）
+        let nowMillis = try millis(2026, 3, 10, 15)
+        let incDay8 = try store.saveTransaction(
+            RecordTransactionRequest(
+                type: TransactionType.INCOME,
+                timestamp: try millis(2026, 3, 8, 10),
+                origAmountMicros: 1_000 * MoneyAmount.amountScale,
+                origCurrency: "CNY",
+                accountId: debitId,
+                merchant: "入账"
+            )
+        )
+        let expDay9 = try store.saveTransaction(
+            RecordTransactionRequest(
+                type: TransactionType.EXPENSE,
+                timestamp: try millis(2026, 3, 9, 14),
+                origAmountMicros: 250 * MoneyAmount.amountScale,
+                origCurrency: "CNY",
+                accountId: debitId,
+                merchant: "采购"
+            )
+        )
+        let transferDay10 = try store.saveTransaction(
+            RecordTransactionRequest(
+                type: TransactionType.TRANSFER,
+                timestamp: try millis(2026, 3, 10, 9),
+                origAmountMicros: 100 * MoneyAmount.amountScale,
+                origCurrency: "CNY",
+                accountId: debitId,
+                toAccountId: wechatId
+            )
+        )
+        // 未来日期交易（3/12）不应混入 3/10 收盘余额
+        _ = try store.saveTransaction(
+            RecordTransactionRequest(
+                type: TransactionType.EXPENSE,
+                timestamp: try millis(2026, 3, 12, 9),
+                origAmountMicros: 50 * MoneyAmount.amountScale,
+                origCurrency: "CNY",
+                accountId: debitId,
+                merchant: "预扣计划"
+            )
+        )
+
+        // accountDeltaForTransaction 校验
+        XCTAssertEqual(store.accountDeltaForTransaction(incDay8, accountId: debitId), 1_000 * MoneyAmount.amountScale)
+        XCTAssertEqual(store.accountDeltaForTransaction(expDay9, accountId: debitId), -250 * MoneyAmount.amountScale)
+        XCTAssertEqual(store.accountDeltaForTransaction(transferDay10, accountId: debitId), -100 * MoneyAmount.amountScale)
+        XCTAssertEqual(store.accountDeltaForTransaction(transferDay10, accountId: wechatId), 100 * MoneyAmount.amountScale)
+        let selfTransfer = TransactionDto(
+            id: 8888,
+            type: TransactionType.TRANSFER,
+            timestamp: nowMillis,
+            origAmountMicros: 100 * MoneyAmount.amountScale,
+            origCurrency: "CNY",
+            accountId: debitId,
+            accountAmountMicros: 100 * MoneyAmount.amountScale,
+            accountCurrency: "CNY",
+            toAccountId: debitId,
+            toAmountMicros: 100 * MoneyAmount.amountScale,
+            toCurrency: "CNY"
+        )
+        XCTAssertEqual(store.accountDeltaForTransaction(selfTransfer, accountId: debitId), 0)
+
+        let trend = store.computeAccountDailyBalanceTrend(accountId: debitId, days: 7, nowMillis: nowMillis)
+        XCTAssertEqual(trend.count, 7)
+        XCTAssertEqual(trend.first?.id, "2026-03-04")
+        XCTAssertEqual(trend.last?.id, "2026-03-10")
+        XCTAssertEqual(trend[0].balanceMicros, 0) // 3/4
+        XCTAssertEqual(trend[3].balanceMicros, 0) // 3/7
+        XCTAssertEqual(trend[4].balanceMicros, 1_000 * MoneyAmount.amountScale) // 3/8
+        XCTAssertEqual(trend[5].balanceMicros, 750 * MoneyAmount.amountScale)   // 3/9
+        XCTAssertEqual(trend[6].balanceMicros, 650 * MoneyAmount.amountScale)   // 3/10
+
+        // 2. 信用卡账单周期消费与还款统计（账单日 5 日，还款日 23 日；当前 2026-03-10 -> 周期 3/6 ~ 4/5）
+        // 3/5 属于上一账期，不应计入本期消费
+        _ = try store.saveTransaction(
+            RecordTransactionRequest(
+                type: TransactionType.EXPENSE,
+                timestamp: try millis(2026, 3, 5, 20),
+                origAmountMicros: 500 * MoneyAmount.amountScale,
+                origCurrency: "CNY",
+                accountId: creditAcc.id,
+                merchant: "上期消费"
+            )
+        )
+        let cycleExpense = try store.saveTransaction(
+            RecordTransactionRequest(
+                type: TransactionType.EXPENSE,
+                timestamp: try millis(2026, 3, 8, 12),
+                origAmountMicros: 300 * MoneyAmount.amountScale,
+                origCurrency: "CNY",
+                accountId: creditAcc.id,
+                merchant: "本期购物"
+            )
+        )
+        // 退款冲减消费（-50）
+        _ = try store.saveTransaction(
+            RecordTransactionRequest(
+                type: TransactionType.INCOME,
+                timestamp: try millis(2026, 3, 9, 10),
+                origAmountMicros: 50 * MoneyAmount.amountScale,
+                origCurrency: "CNY",
+                accountId: creditAcc.id,
+                merchant: "部分退款",
+                refundOfTxId: cycleExpense.id
+            )
+        )
+        // 储蓄卡还信用卡 ¥120
+        _ = try store.saveTransaction(
+            RecordTransactionRequest(
+                type: TransactionType.TRANSFER,
+                timestamp: try millis(2026, 3, 9, 18),
+                origAmountMicros: 120 * MoneyAmount.amountScale,
+                origCurrency: "CNY",
+                accountId: debitId,
+                toAccountId: creditAcc.id,
+                merchant: "信用卡还款"
+            )
+        )
+
+        let summary = store.computeCreditBillingCycleSummary(account: creditAcc, nowMillis: nowMillis)
+        let expectedStart = try millis(2026, 3, 6, 0)
+        let expectedEnd = try millis(2026, 4, 6, 0) - 1
+        XCTAssertEqual(summary.cycleStartMillis, expectedStart)
+        XCTAssertEqual(summary.cycleEndMillis, expectedEnd)
+        XCTAssertEqual(summary.cycleSpendMicros, 250 * MoneyAmount.amountScale)
+        XCTAssertEqual(summary.cycleRepaidMicros, 120 * MoneyAmount.amountScale)
+        XCTAssertEqual(summary.daysUntilBilling, 26)
+        XCTAssertEqual(summary.daysUntilRepayment, 13)
+
+        // 3. 大小月与闰年（2024-02-20，账单日/还款日 31 日 -> 钳位至 2 月 29 日，倒计时 9 天）
+        let leapCard = AccountDto(
+            id: 901,
+            name: "闰年测试卡",
+            groupType: AccountGroup.CREDIT,
+            currencyCode: "CNY",
+            billingDay: 31,
+            repaymentDay: 31
+        )
+        let leapNow = try millis(2024, 2, 20, 12)
+        let leapSummary = store.computeCreditBillingCycleSummary(account: leapCard, nowMillis: leapNow)
+        XCTAssertEqual(leapSummary.cycleStartMillis, try millis(2024, 2, 1, 0))
+        XCTAssertEqual(leapSummary.cycleEndMillis, try millis(2024, 3, 1, 0) - 1)
+        XCTAssertEqual(leapSummary.daysUntilBilling, 9)
+        XCTAssertEqual(leapSummary.daysUntilRepayment, 9)
+
+        // 4. 无账单日回退自然月
+        let noBillingCard = AccountDto(
+            id: 902,
+            name: "无账单日卡",
+            groupType: AccountGroup.CREDIT,
+            currencyCode: "CNY",
+            billingDay: nil,
+            repaymentDay: nil
+        )
+        let naturalSummary = store.computeCreditBillingCycleSummary(account: noBillingCard, nowMillis: nowMillis)
+        XCTAssertEqual(naturalSummary.cycleStartMillis, try millis(2026, 3, 1, 0))
+        XCTAssertEqual(naturalSummary.cycleEndMillis, try millis(2026, 4, 1, 0) - 1)
+        XCTAssertNil(naturalSummary.daysUntilBilling)
+        XCTAssertNil(naturalSummary.daysUntilRepayment)
+    }
 }

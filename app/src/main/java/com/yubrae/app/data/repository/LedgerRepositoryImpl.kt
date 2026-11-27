@@ -349,6 +349,28 @@ class LedgerRepositoryImpl(
         }
     }
 
+    override suspend fun reorderAccounts(orderedAccountIds: List<Long>): Result<Unit> {
+        val uniqueIds = orderedAccountIds.distinct()
+        if (uniqueIds.isEmpty()) return Result.success(Unit)
+        return try {
+            runInTransaction {
+                val now = clockMillisProvider()
+                uniqueIds.forEachIndexed { index, accountId ->
+                    accountDao.updateSortOrder(
+                        accountId = accountId,
+                        sortOrder = index * 10,
+                        updatedAt = now
+                    )
+                }
+                Result.success(Unit)
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
     override suspend fun archiveAccount(accountId: Long, archived: Boolean) {
         val existing = accountDao.getById(accountId) ?: return
         accountDao.update(existing.copy(archived = archived, updatedAt = clockMillisProvider()))
@@ -842,6 +864,68 @@ class LedgerRepositoryImpl(
             runInTransaction {
                 transactionDao.updateCategoryForIds(txIds, categoryId, clockMillisProvider())
                 Result.success(txIds.size)
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    override suspend fun batchMoveTransactionsAccount(txIds: List<Long>, targetAccountId: Long): Result<Int> {
+        val uniqueTxIds = txIds.distinct()
+        if (uniqueTxIds.isEmpty()) return Result.success(0)
+        return try {
+            runInTransaction {
+                val targetAccount = accountDao.getById(targetAccountId)
+                    ?: return@runInTransaction Result.failure(
+                        IllegalArgumentException("目标账户不存在: $targetAccountId")
+                    )
+                if (targetAccount.archived) {
+                    return@runInTransaction Result.failure(
+                        IllegalArgumentException("不能迁移到已归档账户: ${targetAccount.name}")
+                    )
+                }
+                val targetCurrency = LedgerAnalytics.normalizeCurrency(targetAccount.currencyCode)
+                val now = clockMillisProvider()
+                var movedCount = 0
+
+                for (txId in uniqueTxIds) {
+                    val tx = transactionDao.getById(txId) ?: continue
+                    if (tx.accountId == targetAccountId) continue
+                    if (tx.type == TransactionType.TRANSFER && tx.toAccountId == targetAccountId) continue
+
+                    applyBalanceDelta(tx, direction = -1L, now = now)
+
+                    val origCurrency = LedgerAnalytics.normalizeCurrency(tx.origCurrency)
+                    val oldAccountCurrency = LedgerAnalytics.normalizeCurrency(tx.accountCurrency)
+                    val newRateToAccount: Long
+                    val newAccountAmount: Long
+                    if (oldAccountCurrency == targetCurrency) {
+                        newRateToAccount = tx.rateToAccountMicros
+                        newAccountAmount = tx.accountAmountMicros
+                    } else if (origCurrency == targetCurrency) {
+                        newRateToAccount = MoneyAmount.RATE_SCALE
+                        newAccountAmount = tx.origAmountMicros
+                    } else {
+                        val txDate = Instant.ofEpochMilli(tx.timestamp).atZone(zoneId).toLocalDate().toString()
+                        val quote = exchangeRateProvider.getRate(origCurrency, targetCurrency, onDate = txDate)
+                        newRateToAccount = quote.rateMicros
+                        newAccountAmount = MoneyAmount.convert(tx.origAmountMicros, newRateToAccount)
+                    }
+
+                    val updated = tx.copy(
+                        accountId = targetAccountId,
+                        accountAmountMicros = newAccountAmount,
+                        accountCurrency = targetCurrency,
+                        rateToAccountMicros = newRateToAccount,
+                        updatedAt = now
+                    )
+                    transactionDao.update(updated)
+                    applyBalanceDelta(updated, direction = 1L, now = now)
+                    movedCount++
+                }
+                Result.success(movedCount)
             }
         } catch (e: CancellationException) {
             throw e

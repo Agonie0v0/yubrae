@@ -104,6 +104,12 @@ internal class InMemorySyncDatabase {
             publish()
         }
 
+        override suspend fun updateSortOrder(accountId: Long, sortOrder: Int, updatedAt: Long) {
+            val cur = items[accountId] ?: return
+            items[accountId] = cur.copy(sortOrder = sortOrder, updatedAt = updatedAt)
+            publish()
+        }
+
         override suspend fun deleteById(id: Long) {
             items.remove(id)
             publish()

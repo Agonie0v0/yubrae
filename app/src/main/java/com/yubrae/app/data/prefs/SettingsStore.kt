@@ -100,7 +100,9 @@ data class AppSettings(
     val jsCategoryFallbackEnabled: Boolean = true,
     val cloudRuleManifestUrl: String = "",
     val lastRuleSyncMillis: Long = 0L,
-    val initialAccountsSeeded: Boolean = false
+    val initialAccountsSeeded: Boolean = false,
+    val assetGroupOrder: List<String> = emptyList(),
+    val collapsedAssetGroups: Set<String> = emptySet()
 )
 
 class SettingsStore(private val context: Context) {
@@ -152,6 +154,8 @@ class SettingsStore(private val context: Context) {
         val CLOUD_RULE_MANIFEST_URL = stringPreferencesKey("cloud_rule_manifest_url")
         val LAST_RULE_SYNC = longPreferencesKey("last_rule_sync")
         val INITIAL_ACCOUNTS_SEEDED = booleanPreferencesKey("initial_accounts_seeded")
+        val ASSET_GROUP_ORDER = stringPreferencesKey("asset_group_order")
+        val COLLAPSED_ASSET_GROUPS = stringPreferencesKey("collapsed_asset_groups")
     }
 
     val settingsFlow: Flow<AppSettings> = context.kairoDataStore.data.map { prefs ->
@@ -164,6 +168,18 @@ class SettingsStore(private val context: Context) {
             ?.toSet()
             ?: emptySet()
         val hiddenModules = prefs[Keys.HIDDEN_ASSET_MODULES]
+            ?.split(",")
+            ?.map { it.trim() }
+            ?.filter { it.isNotEmpty() }
+            ?.toSet()
+            ?: emptySet()
+        val assetGroupOrder = prefs[Keys.ASSET_GROUP_ORDER]
+            ?.split(",")
+            ?.map { it.trim() }
+            ?.filter { it.isNotEmpty() }
+            ?.distinct()
+            ?: emptyList()
+        val collapsedAssetGroups = prefs[Keys.COLLAPSED_ASSET_GROUPS]
             ?.split(",")
             ?.map { it.trim() }
             ?.filter { it.isNotEmpty() }
@@ -217,7 +233,9 @@ class SettingsStore(private val context: Context) {
             jsCategoryFallbackEnabled = prefs[Keys.JS_CATEGORY_FALLBACK_ENABLED] ?: true,
             cloudRuleManifestUrl = prefs[Keys.CLOUD_RULE_MANIFEST_URL] ?: "",
             lastRuleSyncMillis = prefs[Keys.LAST_RULE_SYNC] ?: 0L,
-            initialAccountsSeeded = prefs[Keys.INITIAL_ACCOUNTS_SEEDED] ?: false
+            initialAccountsSeeded = prefs[Keys.INITIAL_ACCOUNTS_SEEDED] ?: false,
+            assetGroupOrder = assetGroupOrder,
+            collapsedAssetGroups = collapsedAssetGroups
         )
     }
 
@@ -277,6 +295,16 @@ class SettingsStore(private val context: Context) {
             prefs[Keys.CLOUD_RULE_MANIFEST_URL] = settings.cloudRuleManifestUrl
             prefs[Keys.LAST_RULE_SYNC] = settings.lastRuleSyncMillis
             prefs[Keys.INITIAL_ACCOUNTS_SEEDED] = settings.initialAccountsSeeded
+            prefs[Keys.ASSET_GROUP_ORDER] = settings.assetGroupOrder
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+                .distinct()
+                .joinToString(",")
+            prefs[Keys.COLLAPSED_ASSET_GROUPS] = settings.collapsedAssetGroups
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+                .sorted()
+                .joinToString(",")
         }
     }
 

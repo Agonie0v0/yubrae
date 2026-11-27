@@ -134,6 +134,18 @@ class FakeAccountDao : AccountDao {
         }
     }
 
+    override suspend fun updateSortOrder(accountId: Long, sortOrder: Int, updatedAt: Long) {
+        val index = items.indexOfFirst { it.id == accountId }
+        if (index >= 0) {
+            val current = items[index]
+            items[index] = current.copy(
+                sortOrder = sortOrder,
+                updatedAt = updatedAt
+            )
+            emit()
+        }
+    }
+
     override suspend fun deleteById(id: Long) {
         items.removeAll { it.id == id }
         emit()

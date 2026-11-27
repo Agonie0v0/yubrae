@@ -1,7 +1,9 @@
 package com.yubrae.app.ui.screens.assets
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
@@ -16,12 +18,16 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.automirrored.rounded.TrendingUp
 import androidx.compose.material.icons.rounded.AccountBalanceWallet
+import androidx.compose.material.icons.rounded.CreditCard
 import androidx.compose.material.icons.rounded.ExpandLess
 import androidx.compose.material.icons.rounded.ExpandMore
+import androidx.compose.material.icons.rounded.Handshake
 import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -40,7 +46,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
@@ -48,6 +56,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.yubrae.app.core.model.CurrencyCatalog
 import com.yubrae.app.core.model.MoneyAmount
 import com.yubrae.app.data.db.AccountEntity
 import com.yubrae.app.data.db.AccountGroup
@@ -65,36 +74,74 @@ import com.yubrae.app.ui.viewmodel.KairoMainViewModel
 internal data class AssetSectionSpec(
     val id: String,
     val title: String,
-    val groupCodes: Set<String>
+    val groupCodes: Set<String>,
+    val defaultGroupType: String,
+    val icon: ImageVector,
+    val accentColorHex: Long
 )
 
 internal val YimuAssetSections: List<AssetSectionSpec> = listOf(
     AssetSectionSpec(
         id = "cash_funds",
         title = "资金账户",
-        groupCodes = setOf(AccountGroup.WALLET, AccountGroup.DEBIT, AccountGroup.FOREIGN)
+        groupCodes = setOf(AccountGroup.WALLET, AccountGroup.DEBIT, AccountGroup.FOREIGN),
+        defaultGroupType = AccountGroup.WALLET,
+        icon = Icons.Rounded.AccountBalanceWallet,
+        accentColorHex = 0xFF2AA876L
     ),
     AssetSectionSpec(
         id = "credit_accounts",
         title = "信用账户",
-        groupCodes = setOf(AccountGroup.CREDIT)
+        groupCodes = setOf(AccountGroup.CREDIT),
+        defaultGroupType = AccountGroup.CREDIT,
+        icon = Icons.Rounded.CreditCard,
+        accentColorHex = 0xFFE05252L
     ),
     AssetSectionSpec(
         id = "invest_accounts",
         title = "理财账户",
-        groupCodes = setOf(AccountGroup.INVEST)
+        groupCodes = setOf(AccountGroup.INVEST),
+        defaultGroupType = AccountGroup.INVEST,
+        icon = Icons.AutoMirrored.Rounded.TrendingUp,
+        accentColorHex = 0xFF3B82F6L
     ),
     AssetSectionSpec(
         id = "debt_accounts",
         title = "借贷往来",
-        groupCodes = setOf(AccountGroup.DEBT)
+        groupCodes = setOf(AccountGroup.DEBT),
+        defaultGroupType = AccountGroup.DEBT,
+        icon = Icons.Rounded.Handshake,
+        accentColorHex = 0xFFE89B2DL
     )
 )
+
+internal fun resolveOrderedAssetSections(savedOrder: List<String>): List<AssetSectionSpec> {
+    if (savedOrder.isEmpty()) return YimuAssetSections
+    val byId = YimuAssetSections.associateBy { it.id }
+    val seen = LinkedHashSet<String>(YimuAssetSections.size)
+    val ordered = ArrayList<AssetSectionSpec>(YimuAssetSections.size)
+    savedOrder.forEach { rawId ->
+        val id = rawId.trim()
+        val spec = byId[id]
+        if (spec != null && seen.add(id)) {
+            ordered.add(spec)
+        }
+    }
+    YimuAssetSections.forEach { spec ->
+        if (seen.add(spec.id)) {
+            ordered.add(spec)
+        }
+    }
+    return ordered
+}
+
+internal fun findAssetSectionForGroup(groupType: String): AssetSectionSpec =
+    YimuAssetSections.firstOrNull { groupType in it.groupCodes } ?: YimuAssetSections.first()
 
 /**
  * 资产隐藏页（复刻一木记账「资产隐藏」体验）：
  * - 上方 2 列模块卡（报销 / 债务 / 理财）与下方全量账户卡均可长按切换在资产主页的显隐；
- * - 隐藏项在本页仍可正常查阅真实余额与进入详情，便于私密核账。
+ * - 隐藏项在本页仍可正常查阅真实余额、账户备注与进入详情，便于私密核账。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -105,11 +152,18 @@ fun HiddenAssetsScreen(
 ) {
     val uiState by viewModel.assetsUiState.collectAsStateWithLifecycle()
     val allAccounts by viewModel.allAccounts.collectAsStateWithLifecycle()
+    val settings by viewModel.settings.collectAsStateWithLifecycle()
     val privacyMasked = LocalPrivacyMasked.current
     val haptic = LocalHapticFeedback.current
     val semantic = KairoTheme.semantic
     var collapsedSections by remember { mutableStateOf<Set<String>>(emptySet()) }
 
+    val orderedSections = remember(settings.assetGroupOrder) {
+        resolveOrderedAssetSections(settings.assetGroupOrder)
+    }
+    val displayDigits = remember(uiState.displayCurrency) {
+        CurrencyCatalog.find(uiState.displayCurrency).minorDigits
+    }
     val activeAccounts = remember(allAccounts) {
         allAccounts.filter { !it.archived }.sortedWith(compareBy({ it.sortOrder }, { it.id }))
     }
@@ -129,7 +183,9 @@ fun HiddenAssetsScreen(
                 title = {
                     Text(
                         text = "资产隐藏",
-                        fontWeight = FontWeight.SemiBold
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 },
                 actions = {
@@ -145,7 +201,11 @@ fun HiddenAssetsScreen(
                                 viewModel.showMessage("已全部恢复显示")
                             }
                         ) {
-                            Text("全部显示")
+                            Text(
+                                text = "全部显示",
+                                maxLines = 1,
+                                softWrap = false
+                            )
                         }
                     }
                 }
@@ -161,7 +221,7 @@ fun HiddenAssetsScreen(
         ) {
             item(key = "hidden_hint") {
                 Text(
-                    text = "提示：长按资产可进行隐藏或显示",
+                    text = "提示：长按卡片或账户可切换在资产主页的隐藏/显示状态",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(horizontal = 4.dp)
@@ -184,12 +244,12 @@ fun HiddenAssetsScreen(
                             firstLabel = "可报",
                             firstValue = formatPrivacyAmount(
                                 privacyMasked,
-                                MoneyAmount.formatPlain(uiState.pendingReimburseMicros, 2, grouping = true)
+                                MoneyAmount.formatPlain(uiState.pendingReimburseMicros, displayDigits, grouping = true)
                             ),
                             secondLabel = "已报",
                             secondValue = formatPrivacyAmount(
                                 privacyMasked,
-                                MoneyAmount.formatPlain(uiState.reimbursedMicros, 2, grouping = true)
+                                MoneyAmount.formatPlain(uiState.reimbursedMicros, displayDigits, grouping = true)
                             ),
                             firstValueColor = MaterialTheme.colorScheme.onSurface,
                             secondValueColor = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -205,12 +265,12 @@ fun HiddenAssetsScreen(
                             firstLabel = "应付",
                             firstValue = formatPrivacyAmount(
                                 privacyMasked,
-                                MoneyAmount.formatPlain(uiState.debtPayableMicros, 2, grouping = true)
+                                MoneyAmount.formatPlain(uiState.debtPayableMicros, displayDigits, grouping = true)
                             ),
                             secondLabel = "应收",
                             secondValue = formatPrivacyAmount(
                                 privacyMasked,
-                                MoneyAmount.formatPlain(uiState.debtReceivableMicros, 2, grouping = true)
+                                MoneyAmount.formatPlain(uiState.debtReceivableMicros, displayDigits, grouping = true)
                             ),
                             firstValueColor = if (uiState.debtPayableMicros > 0L) semantic.expense else MaterialTheme.colorScheme.onSurfaceVariant,
                             secondValueColor = semantic.income,
@@ -232,12 +292,12 @@ fun HiddenAssetsScreen(
                             firstLabel = "总额",
                             firstValue = formatPrivacyAmount(
                                 privacyMasked,
-                                MoneyAmount.formatPlain(uiState.investTotalMicros, 2, grouping = true)
+                                MoneyAmount.formatPlain(uiState.investTotalMicros, displayDigits, grouping = true)
                             ),
                             secondLabel = "盈亏",
                             secondValue = formatPrivacyAmount(
                                 privacyMasked,
-                                "$investProfitPrefix${MoneyAmount.formatPlain(uiState.investProfitMicros, 2, grouping = true)}"
+                                "$investProfitPrefix${MoneyAmount.formatPlain(uiState.investProfitMicros, displayDigits, grouping = true)}"
                             ),
                             firstValueColor = MaterialTheme.colorScheme.onSurface,
                             secondValueColor = if (uiState.investProfitMicros < 0L) semantic.expense else semantic.income,
@@ -261,7 +321,7 @@ fun HiddenAssetsScreen(
                     )
                 }
             } else {
-                YimuAssetSections.forEach { section ->
+                orderedSections.forEach { section ->
                     val sectionAccounts = activeAccounts.filter { it.groupType in section.groupCodes }
                     if (sectionAccounts.isNotEmpty()) {
                         item(key = "hidden_sec_${section.id}") {
@@ -269,6 +329,13 @@ fun HiddenAssetsScreen(
                             val subtotalMicros = sectionAccounts.sumOf { acc ->
                                 uiState.netWorth.accountConvertedBalances[acc.id] ?: acc.balanceMicros
                             }
+                            val subtotalFormatted = if (uiState.displayCurrency.equals("CNY", ignoreCase = true)) {
+                                MoneyAmount.formatPlain(subtotalMicros, displayDigits, grouping = true)
+                            } else {
+                                MoneyAmount.format(subtotalMicros, uiState.displayCurrency, showCurrencyCode = false)
+                            }
+                            val sectionAccent = Color(section.accentColorHex)
+
                             YimuCard(cornerRadius = 16.dp) {
                                 Column {
                                     Row(
@@ -281,29 +348,59 @@ fun HiddenAssetsScreen(
                                                     collapsedSections + section.id
                                                 }
                                             }
-                                            .padding(horizontal = 16.dp, vertical = 14.dp),
+                                            .padding(horizontal = 14.dp, vertical = 13.dp),
                                         verticalAlignment = Alignment.CenterVertically,
                                         horizontalArrangement = Arrangement.SpaceBetween
                                     ) {
-                                        Text(
-                                            text = section.title,
-                                            style = MaterialTheme.typography.titleSmall,
-                                            fontWeight = FontWeight.Bold,
-                                            color = MaterialTheme.colorScheme.onSurface,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis,
-                                            modifier = Modifier.weight(1f, fill = false)
-                                        )
+                                        Row(
+                                            modifier = Modifier.weight(1f),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                        ) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(24.dp)
+                                                    .clip(RoundedCornerShape(7.dp))
+                                                    .background(sectionAccent.copy(alpha = 0.14f)),
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Icon(
+                                                    imageVector = section.icon,
+                                                    contentDescription = null,
+                                                    tint = sectionAccent,
+                                                    modifier = Modifier.size(14.dp)
+                                                )
+                                            }
+                                            Text(
+                                                text = section.title,
+                                                style = MaterialTheme.typography.titleSmall,
+                                                fontWeight = FontWeight.Bold,
+                                                color = MaterialTheme.colorScheme.onSurface,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                                modifier = Modifier.weight(1f, fill = false)
+                                            )
+                                            Surface(
+                                                shape = CircleShape,
+                                                color = MaterialTheme.colorScheme.surfaceContainerHigh
+                                            ) {
+                                                Text(
+                                                    text = "${sectionAccounts.size}",
+                                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp).tabular(),
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    maxLines = 1,
+                                                    softWrap = false,
+                                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp)
+                                                )
+                                            }
+                                        }
                                         Spacer(modifier = Modifier.width(8.dp))
                                         Row(
                                             verticalAlignment = Alignment.CenterVertically,
                                             horizontalArrangement = Arrangement.spacedBy(4.dp)
                                         ) {
                                             Text(
-                                                text = formatPrivacyAmount(
-                                                    privacyMasked,
-                                                    MoneyAmount.formatPlain(subtotalMicros, 2, grouping = true)
-                                                ),
+                                                text = formatPrivacyAmount(privacyMasked, subtotalFormatted),
                                                 style = MaterialTheme.typography.titleSmall.tabular(),
                                                 fontWeight = FontWeight.SemiBold,
                                                 color = MaterialTheme.colorScheme.onSurface,
@@ -312,30 +409,34 @@ fun HiddenAssetsScreen(
                                             )
                                             Icon(
                                                 imageVector = if (collapsed) Icons.Rounded.ExpandMore else Icons.Rounded.ExpandLess,
-                                                contentDescription = null,
+                                                contentDescription = if (collapsed) "展开分组" else "收起分组",
                                                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                                 modifier = Modifier.size(18.dp)
                                             )
                                         }
                                     }
 
-                                    if (!collapsed) {
-                                        sectionAccounts.forEachIndexed { idx, acc ->
-                                            CompactHairlineDivider(
-                                                startIndent = if (idx == 0) 16.dp else 56.dp,
-                                                modifier = Modifier.padding(end = 16.dp)
-                                            )
-                                            val isHidden = acc.id in uiState.hiddenAccountIds
-                                            HiddenAccountRow(
-                                                account = acc,
-                                                hidden = isHidden,
-                                                privacyMasked = privacyMasked,
-                                                onClick = { onOpenAccountDetail(acc) },
-                                                onLongClick = {
-                                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                                    viewModel.toggleAccountHidden(acc.id, acc.name)
-                                                }
-                                            )
+                                    AnimatedVisibility(visible = !collapsed) {
+                                        Column {
+                                            sectionAccounts.forEachIndexed { idx, acc ->
+                                                CompactHairlineDivider(
+                                                    startIndent = if (idx == 0) 14.dp else 58.dp,
+                                                    modifier = Modifier.padding(end = 14.dp)
+                                                )
+                                                val isHidden = acc.id in uiState.hiddenAccountIds
+                                                HiddenAccountRow(
+                                                    account = acc,
+                                                    displayCurrency = uiState.displayCurrency,
+                                                    convertedBalanceMicros = uiState.netWorth.accountConvertedBalances[acc.id],
+                                                    hidden = isHidden,
+                                                    privacyMasked = privacyMasked,
+                                                    onClick = { onOpenAccountDetail(acc) },
+                                                    onLongClick = {
+                                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                                        viewModel.toggleAccountHidden(acc.id, acc.name)
+                                                    }
+                                                )
+                                            }
                                         }
                                     }
                                 }
@@ -483,88 +584,140 @@ private fun HiddenModuleCard(
 @Composable
 private fun HiddenAccountRow(
     account: AccountEntity,
+    displayCurrency: String,
+    convertedBalanceMicros: Long?,
     hidden: Boolean,
     privacyMasked: Boolean,
     onClick: () -> Unit,
     onLongClick: () -> Unit
 ) {
     val semantic = KairoTheme.semantic
+    val isForeign = !account.currencyCode.equals(displayCurrency, ignoreCase = true)
     val formattedAmount = formatPrivacyAmount(
         privacyMasked,
         MoneyAmount.format(
             amountMicros = account.balanceMicros,
             currencyCode = account.currencyCode,
-            showCurrencyCode = false
+            showCurrencyCode = isForeign
         )
     )
-    val amountColor = if (account.balanceMicros < 0L) semantic.expense else semantic.income
+    val amountColor = when {
+        account.balanceMicros < 0L -> semantic.expense
+        account.balanceMicros > 0L -> semantic.income
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
 
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .alpha(if (hidden) 0.48f else 1f)
+            .alpha(if (hidden) 0.54f else 1f)
             .combinedClickable(
                 onClick = onClick,
                 onLongClick = onLongClick
             )
-            .padding(horizontal = 16.dp, vertical = 13.dp),
+            .padding(horizontal = 14.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         CartoonAccountIcon(
             iconKey = account.icon,
             accountName = account.name,
             colorHex = account.colorHex,
-            size = 28.dp
+            size = 32.dp
         )
         Spacer(modifier = Modifier.width(12.dp))
-        Row(
+        Column(
             modifier = Modifier.weight(1f),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
+            verticalArrangement = Arrangement.spacedBy(2.dp)
         ) {
-            Text(
-                text = account.name,
-                style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.5.sp),
-                fontWeight = FontWeight.Medium,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f, fill = false)
-            )
-            if (hidden) {
-                Surface(
-                    shape = RoundedCornerShape(4.dp),
-                    color = MaterialTheme.colorScheme.surfaceContainerHighest
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(2.dp)
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(5.dp)
+            ) {
+                Text(
+                    text = account.name,
+                    style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.5.sp),
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false)
+                )
+                if (hidden) {
+                    Surface(
+                        shape = RoundedCornerShape(4.dp),
+                        color = MaterialTheme.colorScheme.surfaceContainerHighest
                     ) {
-                        Icon(
-                            imageVector = Icons.Rounded.VisibilityOff,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(10.dp)
-                        )
+                        Row(
+                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(2.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.VisibilityOff,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(10.dp)
+                            )
+                            Text(
+                                text = "已隐藏",
+                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.5.sp),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                softWrap = false
+                            )
+                        }
+                    }
+                }
+                if (!account.includeInNetWorth) {
+                    Surface(
+                        shape = RoundedCornerShape(4.dp),
+                        color = MaterialTheme.colorScheme.surfaceContainerHigh
+                    ) {
                         Text(
-                            text = "已隐藏",
-                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                            text = "不计净资产",
+                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 9.5.sp),
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 1,
-                            softWrap = false
+                            softWrap = false,
+                            modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
                         )
                     }
                 }
             }
+            if (account.note.isNotBlank()) {
+                Text(
+                    text = account.note,
+                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.5.sp),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
         }
         Spacer(modifier = Modifier.width(8.dp))
-        Text(
-            text = formattedAmount,
-            style = MaterialTheme.typography.titleSmall.copy(fontSize = 14.5.sp).tabular(),
-            fontWeight = FontWeight.SemiBold,
-            color = amountColor,
-            maxLines = 1,
-            softWrap = false
-        )
+        Column(
+            horizontalAlignment = Alignment.End,
+            verticalArrangement = Arrangement.spacedBy(1.dp)
+        ) {
+            Text(
+                text = formattedAmount,
+                style = MaterialTheme.typography.titleSmall.copy(fontSize = 14.5.sp).tabular(),
+                fontWeight = FontWeight.SemiBold,
+                color = amountColor,
+                maxLines = 1,
+                softWrap = false
+            )
+            if (isForeign && convertedBalanceMicros != null) {
+                Text(
+                    text = formatPrivacyAmount(
+                        privacyMasked,
+                        "≈ ${MoneyAmount.format(convertedBalanceMicros, displayCurrency, showCurrencyCode = false)}"
+                    ),
+                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.5.sp).tabular(),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    softWrap = false
+                )
+            }
+        }
     }
 }

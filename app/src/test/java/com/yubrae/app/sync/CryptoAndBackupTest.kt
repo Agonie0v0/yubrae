@@ -521,4 +521,88 @@ class CryptoAndBackupTest {
         assertFalse(db.settings.hideRecentsPreviewEnabled)
         assertTrue(db.settings.biometricLockEnabled)
     }
+
+    @Test
+    fun backupSerializer_roundTripsAccountNoteAndAssetGroupPreferences() = runTest {
+        val db = InMemorySyncDatabase()
+        val accWithNote = AccountEntity(
+            id = 101L,
+            name = "招行信用卡",
+            groupType = AccountGroup.CREDIT,
+            currencyCode = "CNY",
+            balanceMicros = -1_250_000L,
+            creditLimitMicros = 50_000_000L,
+            billingDay = 8,
+            repaymentDay = 26,
+            sortOrder = 10,
+            note = "尾号 8821 · 年消费满 6 笔免年费"
+        )
+        db.accountDao.insert(accWithNote)
+        db.settings = AppSettings(
+            assetGroupOrder = listOf(AccountGroup.CREDIT, AccountGroup.DEBIT, AccountGroup.WALLET),
+            collapsedAssetGroups = setOf(AccountGroup.INVEST, AccountGroup.DEBT)
+        )
+
+        val serializer = db.createSerializer()
+        val json = serializer.exportToJson()
+        val decoded = serializer.decodeFromJson(json)
+        assertEquals("尾号 8821 · 年消费满 6 笔免年费", decoded.accounts.single().note)
+        assertEquals(listOf(AccountGroup.CREDIT, AccountGroup.DEBIT, AccountGroup.WALLET), decoded.settings.assetGroupOrder)
+        assertEquals(listOf(AccountGroup.DEBT, AccountGroup.INVEST), decoded.settings.collapsedAssetGroups)
+
+        db.clearAllTables()
+        db.settings = AppSettings(
+            assetGroupOrder = emptyList(),
+            collapsedAssetGroups = emptySet()
+        )
+
+        serializer.restoreFromJson(json)
+        val restoredAcc = db.accountDao.getAll().single()
+        assertEquals(accWithNote, restoredAcc)
+        assertEquals("尾号 8821 · 年消费满 6 笔免年费", restoredAcc.note)
+        assertEquals(listOf(AccountGroup.CREDIT, AccountGroup.DEBIT, AccountGroup.WALLET), db.settings.assetGroupOrder)
+        assertEquals(setOf(AccountGroup.INVEST, AccountGroup.DEBT), db.settings.collapsedAssetGroups)
+    }
+
+    @Test
+    fun backupSerializer_legacySnapshotWithoutAccountNoteAndAssetGroupPrefsDefaultsCleanly() = runTest {
+        val db = InMemorySyncDatabase()
+        db.settings = AppSettings(
+            assetGroupOrder = listOf(AccountGroup.CREDIT, AccountGroup.WALLET),
+            collapsedAssetGroups = setOf(AccountGroup.INVEST)
+        )
+        val serializer = db.createSerializer()
+
+        val legacyJson = """
+            {
+              "formatVersion": 3,
+              "exportedAtMillis": 1795290000000,
+              "appName": "Yubrae",
+              "settings": {
+                "baseCurrency": "CNY"
+              },
+              "accounts": [
+                {
+                  "id": 7,
+                  "name": "旧版储蓄卡",
+                  "groupType": "DEBIT",
+                  "currencyCode": "CNY",
+                  "balanceMicros": 500000
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val decoded = serializer.decodeFromJson(legacyJson)
+        assertEquals("", decoded.accounts.single().note)
+        assertTrue(decoded.settings.assetGroupOrder.isEmpty())
+        assertTrue(decoded.settings.collapsedAssetGroups.isEmpty())
+
+        serializer.restoreFromJson(legacyJson)
+        val restoredAcc = db.accountDao.getAll().single()
+        assertEquals("旧版储蓄卡", restoredAcc.name)
+        assertEquals("", restoredAcc.note)
+        assertTrue(db.settings.assetGroupOrder.isEmpty())
+        assertTrue(db.settings.collapsedAssetGroups.isEmpty())
+    }
 }

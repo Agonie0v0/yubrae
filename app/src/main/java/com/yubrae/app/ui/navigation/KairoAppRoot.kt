@@ -93,6 +93,8 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.yubrae.app.AppContainer
+import com.yubrae.app.data.db.AccountEntity
+import com.yubrae.app.data.db.AccountGroup
 import com.yubrae.app.data.db.TagEntity
 import com.yubrae.app.data.db.TransactionEntity
 import com.yubrae.app.data.db.TransactionType
@@ -218,6 +220,8 @@ fun KairoAppRoot(
     var refundOriginTransaction by remember { mutableStateOf<TransactionEntity?>(null) }
     var quickRecordInitialType by remember { mutableStateOf(TransactionType.EXPENSE) }
     var quickRecordInitialAccountId by remember { mutableStateOf<Long?>(null) }
+    var quickRecordInitialToAccountId by remember { mutableStateOf<Long?>(null) }
+    var quickRecordInitialAmountMicros by remember { mutableStateOf<Long?>(null) }
     var showLedgerSheet by remember { mutableStateOf(false) }
     var showSmartInput by remember { mutableStateOf(false) }
     var smartInputImagePath by remember { mutableStateOf<String?>(null) }
@@ -324,6 +328,8 @@ fun KairoAppRoot(
             if (found != null) {
                 editingTransaction = found
                 refundOriginTransaction = null
+                quickRecordInitialToAccountId = null
+                quickRecordInitialAmountMicros = null
                 showQuickRecord = true
             } else {
                 viewModel.showMessage("未找到指定交易 #$initialEditTransactionId")
@@ -342,6 +348,8 @@ fun KairoAppRoot(
             refundOriginTransaction = null
             quickRecordInitialType = TransactionType.EXPENSE
             quickRecordInitialAccountId = null
+            quickRecordInitialToAccountId = null
+            quickRecordInitialAmountMicros = null
             showQuickRecord = true
             consumed = true
         }
@@ -370,6 +378,28 @@ fun KairoAppRoot(
         {
             viewModel.updateSettings { it.copy(privacyMaskEnabled = !it.privacyMaskEnabled) }
         }
+    }
+
+    val openCreditRepay: (AccountEntity) -> Unit = { creditAccount ->
+        val candidates = viewModel.activeAccounts.value
+            .ifEmpty { viewModel.allAccounts.value.filter { !it.archived } }
+            .filter { it.id != creditAccount.id }
+        val preferredPayer = candidates.firstOrNull {
+            (it.groupType == AccountGroup.DEBIT || it.groupType == AccountGroup.WALLET) &&
+                it.currencyCode.equals(creditAccount.currencyCode, ignoreCase = true)
+        } ?: candidates.firstOrNull {
+            it.groupType == AccountGroup.DEBIT || it.groupType == AccountGroup.WALLET
+        } ?: candidates.firstOrNull {
+            it.groupType != AccountGroup.CREDIT
+        } ?: candidates.firstOrNull()
+
+        editingTransaction = null
+        refundOriginTransaction = null
+        quickRecordInitialType = TransactionType.TRANSFER
+        quickRecordInitialAccountId = preferredPayer?.id
+        quickRecordInitialToAccountId = creditAccount.id
+        quickRecordInitialAmountMicros = (-creditAccount.balanceMicros).takeIf { it > 0L }
+        showQuickRecord = true
     }
 
     YubraeTheme(
@@ -448,6 +478,8 @@ fun KairoAppRoot(
                                         refundOriginTransaction = null
                                         quickRecordInitialType = TransactionType.EXPENSE
                                         quickRecordInitialAccountId = accountId
+                                        quickRecordInitialToAccountId = null
+                                        quickRecordInitialAmountMicros = null
                                         showQuickRecord = true
                                     },
                                     onQuickTransfer = { accountId ->
@@ -455,12 +487,36 @@ fun KairoAppRoot(
                                         refundOriginTransaction = null
                                         quickRecordInitialType = TransactionType.TRANSFER
                                         quickRecordInitialAccountId = accountId
+                                        quickRecordInitialToAccountId = null
+                                        quickRecordInitialAmountMicros = null
                                         showQuickRecord = true
+                                    },
+                                    onQuickRepayCredit = { creditAccount ->
+                                        openCreditRepay(creditAccount)
                                     },
                                     onEditTransaction = { tx ->
                                         editingTransaction = tx
                                         refundOriginTransaction = null
+                                        quickRecordInitialToAccountId = null
+                                        quickRecordInitialAmountMicros = null
                                         showQuickRecord = true
+                                    },
+                                    onRefundTransaction = { tx ->
+                                        editingTransaction = null
+                                        refundOriginTransaction = tx
+                                        quickRecordInitialType = TransactionType.INCOME
+                                        quickRecordInitialAccountId = tx.accountId
+                                        quickRecordInitialToAccountId = null
+                                        quickRecordInitialAmountMicros = null
+                                        showQuickRecord = true
+                                    },
+                                    onOpenAccountAliases = {
+                                        overlayKind = OverlayRouteKinds.NONE
+                                        selectedTab = 3
+                                        settingsSubRoute = SettingsRoutes.RULES
+                                        scope.launch {
+                                            pagerState.scrollToPage(3)
+                                        }
                                     }
                                 )
                                 OverlayRouteKinds.HIDDEN_ASSETS -> HiddenAssetsScreen(
@@ -478,6 +534,8 @@ fun KairoAppRoot(
                                     onClickTransaction = { tx ->
                                         editingTransaction = tx
                                         refundOriginTransaction = null
+                                        quickRecordInitialToAccountId = null
+                                        quickRecordInitialAmountMicros = null
                                         showQuickRecord = true
                                     }
                                 )
@@ -516,6 +574,8 @@ fun KairoAppRoot(
                                             if (found != null) {
                                                 editingTransaction = found
                                                 refundOriginTransaction = null
+                                                quickRecordInitialToAccountId = null
+                                                quickRecordInitialAmountMicros = null
                                                 showQuickRecord = true
                                             } else {
                                                 viewModel.showMessage("未找到关联交易 #$txId")
@@ -590,6 +650,8 @@ fun KairoAppRoot(
                                             refundOriginTransaction = null
                                             quickRecordInitialType = TransactionType.EXPENSE
                                             quickRecordInitialAccountId = null
+                                            quickRecordInitialToAccountId = null
+                                            quickRecordInitialAmountMicros = null
                                             showQuickRecord = true
                                         },
                                         onSmartInput = {
@@ -624,6 +686,8 @@ fun KairoAppRoot(
                                                     onEditTransaction = { tx ->
                                                         editingTransaction = tx
                                                         refundOriginTransaction = null
+                                                        quickRecordInitialToAccountId = null
+                                                        quickRecordInitialAmountMicros = null
                                                         showQuickRecord = true
                                                     },
                                                     onOpenQuickRecord = {
@@ -631,6 +695,8 @@ fun KairoAppRoot(
                                                         refundOriginTransaction = null
                                                         quickRecordInitialType = TransactionType.EXPENSE
                                                         quickRecordInitialAccountId = null
+                                                        quickRecordInitialToAccountId = null
+                                                        quickRecordInitialAmountMicros = null
                                                         showQuickRecord = true
                                                     },
                                                     contentPadding = innerPadding,
@@ -639,6 +705,8 @@ fun KairoAppRoot(
                                                         refundOriginTransaction = tx
                                                         quickRecordInitialType = TransactionType.INCOME
                                                         quickRecordInitialAccountId = tx.accountId
+                                                        quickRecordInitialToAccountId = null
+                                                        quickRecordInitialAmountMicros = null
                                                         showQuickRecord = true
                                                     },
                                                     onBatchUpdateCategory = { ids, catId ->
@@ -663,6 +731,8 @@ fun KairoAppRoot(
                                                         refundOriginTransaction = null
                                                         quickRecordInitialType = TransactionType.TRANSFER
                                                         quickRecordInitialAccountId = null
+                                                        quickRecordInitialToAccountId = null
+                                                        quickRecordInitialAmountMicros = null
                                                         showQuickRecord = true
                                                     },
                                                     onOpenQuickRecordForAccount = { accId ->
@@ -670,6 +740,8 @@ fun KairoAppRoot(
                                                         refundOriginTransaction = null
                                                         quickRecordInitialType = TransactionType.EXPENSE
                                                         quickRecordInitialAccountId = accId
+                                                        quickRecordInitialToAccountId = null
+                                                        quickRecordInitialAmountMicros = null
                                                         showQuickRecord = true
                                                     },
                                                     contentPadding = innerPadding,
@@ -696,6 +768,9 @@ fun KairoAppRoot(
                                                     },
                                                     onOpenHiddenAssets = {
                                                         overlayKind = OverlayRouteKinds.HIDDEN_ASSETS
+                                                    },
+                                                    onOpenCreditRepay = { creditAccount ->
+                                                        openCreditRepay(creditAccount)
                                                     }
                                                 )
                                                 2 -> StatsScreen(
@@ -704,6 +779,8 @@ fun KairoAppRoot(
                                                     onEditTransaction = { tx ->
                                                         editingTransaction = tx
                                                         refundOriginTransaction = null
+                                                        quickRecordInitialToAccountId = null
+                                                        quickRecordInitialAmountMicros = null
                                                         showQuickRecord = true
                                                     },
                                                     listState = statsListState,
@@ -761,6 +838,9 @@ fun KairoAppRoot(
                     showQuickRecord = false
                     editingTransaction = null
                     refundOriginTransaction = null
+                    quickRecordInitialAccountId = null
+                    quickRecordInitialToAccountId = null
+                    quickRecordInitialAmountMicros = null
                 }
                 BackHandler(enabled = showQuickRecord) {
                     dismissQuickRecord()
@@ -807,6 +887,8 @@ fun KairoAppRoot(
                         onQuickCreateCategory = { category ->
                             viewModel.createCategoryAndReturnId(category)
                         },
+                        initialToAccountId = quickRecordInitialToAccountId,
+                        initialAmountMicros = quickRecordInitialAmountMicros,
                         onDismiss = dismissQuickRecord
                     )
                 }
@@ -948,7 +1030,10 @@ private fun AccountDetailHost(
     onBack: () -> Unit,
     onQuickRecord: (Long) -> Unit,
     onQuickTransfer: (Long) -> Unit,
-    onEditTransaction: (TransactionEntity) -> Unit
+    onQuickRepayCredit: (AccountEntity) -> Unit,
+    onEditTransaction: (TransactionEntity) -> Unit,
+    onRefundTransaction: (TransactionEntity) -> Unit,
+    onOpenAccountAliases: () -> Unit
 ) {
     val allAccounts by viewModel.allAccounts.collectAsStateWithLifecycle()
     val allTransactions by viewModel.allTransactions.collectAsStateWithLifecycle()
@@ -999,7 +1084,15 @@ private fun AccountDetailHost(
         onSaveInstallment = { plan -> viewModel.saveInstallment(plan) },
         onRecordInstallmentPeriod = { planId -> viewModel.recordInstallmentPeriod(planId) },
         onDeleteInstallment = { planId -> viewModel.deleteInstallment(planId) },
-        pinnedCurrencies = settings.pinnedCurrencies
+        pinnedCurrencies = settings.pinnedCurrencies,
+        onQuickRepayCredit = { onQuickRepayCredit(targetAccount) },
+        onDeleteTransaction = { txId -> viewModel.deleteTransaction(txId) },
+        onDuplicateTransaction = { tx -> viewModel.duplicateTransaction(tx) },
+        onRefundTransaction = onRefundTransaction,
+        onBatchUpdateCategory = { ids, catId -> viewModel.batchUpdateCategory(ids, catId) },
+        onBatchMoveAccount = { ids, targetAccId -> viewModel.batchMoveTransactionsAccount(ids, targetAccId) },
+        onBatchDeleteTransactions = { ids -> viewModel.batchDeleteTransactions(ids) },
+        onOpenAccountAliases = onOpenAccountAliases
     )
 }
 

@@ -81,7 +81,9 @@ data class SettingsSnapshotDto(
     val accessibilityOrderDetailEnabled: Boolean = true,
     val hiddenAssetAccountIds: List<Long> = emptyList(),
     val hiddenAssetModules: List<String> = emptyList(),
-    val hideRecentsPreviewEnabled: Boolean = false
+    val hideRecentsPreviewEnabled: Boolean = false,
+    val assetGroupOrder: List<String> = emptyList(),
+    val collapsedAssetGroups: List<String> = emptyList()
 )
 
 @Serializable
@@ -100,7 +102,8 @@ data class AccountDto(
     val sortOrder: Int = 0,
     val archived: Boolean = false,
     val createdAt: Long = 0L,
-    val updatedAt: Long = 0L
+    val updatedAt: Long = 0L,
+    val note: String = ""
 )
 
 @Serializable
@@ -317,7 +320,9 @@ internal fun AppSettings.toSnapshotDto(): SettingsSnapshotDto = SettingsSnapshot
     accessibilityOrderDetailEnabled = accessibilityOrderDetailEnabled,
     hiddenAssetAccountIds = hiddenAssetAccountIds.sorted(),
     hiddenAssetModules = hiddenAssetModules.sorted(),
-    hideRecentsPreviewEnabled = hideRecentsPreviewEnabled
+    hideRecentsPreviewEnabled = hideRecentsPreviewEnabled,
+    assetGroupOrder = assetGroupOrder.map { it.trim() }.filter { it.isNotEmpty() }.distinct(),
+    collapsedAssetGroups = collapsedAssetGroups.map { it.trim() }.filter { it.isNotEmpty() }.sorted()
 )
 
 internal fun SettingsSnapshotDto.applyOnto(current: AppSettings): AppSettings = current.copy(
@@ -346,19 +351,21 @@ internal fun SettingsSnapshotDto.applyOnto(current: AppSettings): AppSettings = 
     accessibilityOrderDetailEnabled = accessibilityOrderDetailEnabled,
     hiddenAssetAccountIds = hiddenAssetAccountIds.toSet(),
     hiddenAssetModules = hiddenAssetModules.map { it.trim() }.filter { it.isNotEmpty() }.toSet(),
-    hideRecentsPreviewEnabled = hideRecentsPreviewEnabled
+    hideRecentsPreviewEnabled = hideRecentsPreviewEnabled,
+    assetGroupOrder = assetGroupOrder.map { it.trim() }.filter { it.isNotEmpty() }.distinct(),
+    collapsedAssetGroups = collapsedAssetGroups.map { it.trim() }.filter { it.isNotEmpty() }.toSet()
 )
 
 internal fun AccountEntity.toDto() = AccountDto(
     id, name, groupType, currencyCode, balanceMicros, creditLimitMicros,
     billingDay, repaymentDay, icon, colorHex, includeInNetWorth, sortOrder,
-    archived, createdAt, updatedAt
+    archived, createdAt, updatedAt, note
 )
 
 internal fun AccountDto.toEntity() = AccountEntity(
     id, name, groupType, currencyCode, balanceMicros, creditLimitMicros,
     billingDay, repaymentDay, icon, colorHex, includeInNetWorth, sortOrder,
-    archived, createdAt, updatedAt
+    archived, createdAt, updatedAt, note
 )
 
 internal fun TransactionEntity.toDto() = TransactionDto(

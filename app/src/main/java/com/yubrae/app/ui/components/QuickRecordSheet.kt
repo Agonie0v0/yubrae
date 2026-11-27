@@ -116,6 +116,7 @@ import com.yubrae.app.core.contract.RecordTransactionRequest
 import com.yubrae.app.core.model.CurrencyCatalog
 import com.yubrae.app.core.model.MoneyAmount
 import com.yubrae.app.data.db.AccountEntity
+import com.yubrae.app.data.db.AccountGroup
 import com.yubrae.app.data.db.CaptureChannel
 import com.yubrae.app.data.db.CategoryEntity
 import com.yubrae.app.data.db.LedgerEntity
@@ -176,6 +177,8 @@ fun QuickRecordSheet(
     availableTags: List<TagEntity> = emptyList(),
     onQuickCreateTag: ((name: String, colorHex: Long) -> Unit)? = null,
     onQuickCreateCategory: (suspend (CategoryEntity) -> Long?)? = null,
+    initialToAccountId: Long? = null,
+    initialAmountMicros: Long? = null,
     onDismiss: () -> Unit
 ) {
     val context = LocalContext.current
@@ -191,10 +194,12 @@ fun QuickRecordSheet(
         initialDraft,
         initialAttachmentPath,
         initialAccountId,
+        initialToAccountId,
+        initialAmountMicros,
         initialType,
         initialLedgerId
     ) {
-        "${existingTransaction?.id}_${refundOfTransaction?.id}_${initialDraft?.hashCode()}_${initialAttachmentPath}_${initialAccountId}_${initialType}_$initialLedgerId"
+        "${existingTransaction?.id}_${refundOfTransaction?.id}_${initialDraft?.hashCode()}_${initialAttachmentPath}_${initialAccountId}_${initialToAccountId}_${initialAmountMicros}_${initialType}_$initialLedgerId"
     }
 
     val initialAccount = remember(stateKey, accounts) {
@@ -203,6 +208,14 @@ fun QuickRecordSheet(
             refundOfTransaction != null -> accounts.firstOrNull { it.id == refundOfTransaction.accountId }
             initialDraft?.accountId != null -> accounts.firstOrNull { it.id == initialDraft.accountId }
             initialAccountId != null -> accounts.firstOrNull { it.id == initialAccountId }
+            initialToAccountId != null -> {
+                accounts.firstOrNull {
+                    it.id != initialToAccountId &&
+                        (it.groupType == AccountGroup.DEBIT || it.groupType == AccountGroup.WALLET)
+                } ?: accounts.firstOrNull {
+                    it.id != initialToAccountId && it.groupType != AccountGroup.CREDIT
+                } ?: accounts.firstOrNull { it.id != initialToAccountId }
+            }
             else -> null
         } ?: accounts.firstOrNull()
     }
@@ -233,33 +246,30 @@ fun QuickRecordSheet(
             ?: refundOfTransaction?.accountId
             ?: initialDraft?.accountId
             ?: initialAccount?.id
-        val initialTo = existingTransaction?.toAccountId
-            ?: accounts.firstOrNull { it.id != srcId }?.id
+        val initialTo = when {
+            existingTransaction != null -> existingTransaction.toAccountId
+            initialToAccountId != null && initialToAccountId != srcId ->
+                accounts.firstOrNull { it.id == initialToAccountId }?.id ?: initialToAccountId
+            initialDraft?.toAccountId != null && initialDraft.toAccountId != srcId ->
+                initialDraft.toAccountId
+            else -> accounts.firstOrNull { it.id != srcId }?.id
+        }
         mutableStateOf(initialTo)
     }
     var origCurrency by remember(stateKey) {
+        val repayTargetCurrency = if (initialToAccountId != null && initialAmountMicros != null && initialAmountMicros > 0L) {
+            accounts.firstOrNull { it.id == initialToAccountId }?.currencyCode
+        } else {
+            null
+        }
         mutableStateOf(
             existingTransaction?.origCurrency
                 ?: refundOfTransaction?.origCurrency
                 ?: initialDraft?.origCurrency?.takeIf { it.isNotBlank() }
+                ?: repayTargetCurrency
                 ?: initialAccount?.currencyCode
                 ?: baseCurrency
         )
-    }
-
-    LaunchedEffect(accounts, stateKey) {
-        if (existingTransaction == null && selectedAccountId == 0L && accounts.isNotEmpty()) {
-            val acc = accounts.firstOrNull {
-                it.id == (refundOfTransaction?.accountId ?: initialDraft?.accountId ?: initialAccountId)
-            } ?: accounts.first()
-            selectedAccountId = acc.id
-            if (refundOfTransaction == null && initialDraft == null) {
-                origCurrency = acc.currencyCode
-            }
-            if (toAccountId == null || toAccountId == acc.id) {
-                toAccountId = accounts.firstOrNull { it.id != acc.id }?.id
-            }
-        }
     }
 
     var amountExpr by remember(stateKey) {
@@ -277,9 +287,58 @@ fun QuickRecordSheet(
                     val digits = CurrencyCatalog.find(initialDraft.origCurrency).minorDigits
                     MoneyAmount.formatPlain(initialDraft.origAmountMicros, digits, grouping = false)
                 }
+                initialAmountMicros != null && initialAmountMicros > 0L -> {
+                    val targetCurrency = initialToAccountId
+                        ?.let { id -> accounts.firstOrNull { it.id == id }?.currencyCode }
+                        ?: initialAccount?.currencyCode
+                        ?: baseCurrency
+                    val digits = CurrencyCatalog.find(targetCurrency).minorDigits
+                    MoneyAmount.formatPlain(initialAmountMicros, digits, grouping = false)
+                }
                 else -> ""
             }
         )
+    }
+
+    LaunchedEffect(accounts, stateKey) {
+        if (existingTransaction == null && selectedAccountId == 0L && accounts.isNotEmpty()) {
+            val acc = when {
+                refundOfTransaction?.accountId != null -> accounts.firstOrNull { it.id == refundOfTransaction.accountId }
+                initialDraft?.accountId != null -> accounts.firstOrNull { it.id == initialDraft.accountId }
+                initialAccountId != null -> accounts.firstOrNull { it.id == initialAccountId }
+                initialToAccountId != null -> {
+                    accounts.firstOrNull {
+                        it.id != initialToAccountId &&
+                            (it.groupType == AccountGroup.DEBIT || it.groupType == AccountGroup.WALLET)
+                    } ?: accounts.firstOrNull {
+                        it.id != initialToAccountId && it.groupType != AccountGroup.CREDIT
+                    } ?: accounts.firstOrNull { it.id != initialToAccountId }
+                }
+                else -> null
+            } ?: accounts.first()
+            selectedAccountId = acc.id
+            val preferredToId = initialToAccountId
+                ?.takeIf { targetId -> targetId != acc.id && accounts.any { it.id == targetId } }
+                ?: initialDraft?.toAccountId?.takeIf { targetId -> targetId != acc.id && accounts.any { it.id == targetId } }
+            if (preferredToId != null) {
+                toAccountId = preferredToId
+            } else if (toAccountId == null || toAccountId == acc.id) {
+                toAccountId = accounts.firstOrNull { it.id != acc.id }?.id
+            }
+            if (refundOfTransaction == null && initialDraft == null) {
+                val targetToAcc = preferredToId?.let { id -> accounts.firstOrNull { it.id == id } }
+                val resolvedCurrency = if (initialAmountMicros != null && initialAmountMicros > 0L && targetToAcc != null) {
+                    targetToAcc.currencyCode
+                } else {
+                    acc.currencyCode
+                }
+                origCurrency = resolvedCurrency
+                if (initialAmountMicros != null && initialAmountMicros > 0L) {
+                    val digits = CurrencyCatalog.find(resolvedCurrency).minorDigits
+                    amountExpr = MoneyAmount.formatPlain(initialAmountMicros, digits, grouping = false)
+                }
+            }
+        }
     }
 
     var selectedCategoryId by remember(stateKey) {

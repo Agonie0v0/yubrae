@@ -82,6 +82,15 @@ internal class FakeAccountDao : AccountDao {
         }
     }
 
+    override suspend fun updateSortOrder(accountId: Long, sortOrder: Int, updatedAt: Long) {
+        val idx = items.indexOfFirst { it.id == accountId }
+        if (idx >= 0) {
+            val old = items[idx]
+            items[idx] = old.copy(sortOrder = sortOrder, updatedAt = updatedAt)
+            emit()
+        }
+    }
+
     override suspend fun deleteById(id: Long) {
         items.removeAll { it.id == id }
         emit()
@@ -560,6 +569,7 @@ internal class FakeLedgerService(
     }
 
     override suspend fun saveAccount(account: AccountEntity): Long = accountDao.insert(account)
+    override suspend fun reorderAccounts(orderedAccountIds: List<Long>): Result<Unit> = Result.success(Unit)
     override suspend fun archiveAccount(accountId: Long, archived: Boolean) {}
     override suspend fun deleteAccount(accountId: Long, migrateToAccountId: Long?): Result<Unit> = Result.success(Unit)
     override suspend fun calibrateAccountBalance(
@@ -587,6 +597,7 @@ internal class FakeLedgerService(
     override suspend fun archiveLedger(ledgerId: Long, archived: Boolean) {}
     override suspend fun deleteLedger(ledgerId: Long, migrateToLedgerId: Long?): Result<Unit> = Result.success(Unit)
     override suspend fun batchUpdateCategory(txIds: List<Long>, categoryId: Long?): Result<Int> = Result.success(0)
+    override suspend fun batchMoveTransactionsAccount(txIds: List<Long>, targetAccountId: Long): Result<Int> = Result.success(0)
     override suspend fun batchDeleteTransactions(txIds: List<Long>): Result<Int> = Result.success(0)
     override suspend fun settleReimbursements(
         txIds: List<Long>,

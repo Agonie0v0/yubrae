@@ -67,7 +67,14 @@ public struct QuickRecordSheet: View {
 
     @FocusState private var noteFocused: Bool
 
-    public init(store: LedgerStore, editingTransaction: TransactionDto? = nil) {
+    public init(
+        store: LedgerStore,
+        editingTransaction: TransactionDto? = nil,
+        initialType: String = TransactionType.EXPENSE,
+        initialAccountId: Int64? = nil,
+        initialToAccountId: Int64? = nil,
+        initialAmountMicros: Int64? = nil
+    ) {
         self.store = store
         self.editingTransaction = editingTransaction
 
@@ -93,13 +100,74 @@ public struct QuickRecordSheet: View {
             _excludeFromStats = State(initialValue: tx.excludeFromStats)
             _excludeFromBudget = State(initialValue: tx.excludeFromBudget)
         } else {
-            _txType = State(initialValue: TransactionType.EXPENSE)
-            _amountExpr = State(initialValue: "")
-            _origCurrency = State(initialValue: store.settings.baseCurrency)
-            _selectedAccountId = State(initialValue: defaultAccountId)
-            _selectedToAccountId = State(initialValue: secondAccountId)
-            let firstParent = store.parentCategories(for: TransactionType.EXPENSE).first
-            _selectedCategoryId = State(initialValue: firstParent?.id)
+            let validTypes: Set<String> = [
+                TransactionType.EXPENSE,
+                TransactionType.INCOME,
+                TransactionType.TRANSFER
+            ]
+            let resolvedType = validTypes.contains(initialType) ? initialType : TransactionType.EXPENSE
+
+            let validInitialFrom = initialAccountId.flatMap { targetId in
+                activeAccounts.first(where: { $0.id == targetId }) ?? store.accounts.first(where: { $0.id == targetId })
+            }
+            let validInitialTo = initialToAccountId.flatMap { targetId in
+                activeAccounts.first(where: { $0.id == targetId }) ?? store.accounts.first(where: { $0.id == targetId })
+            }
+
+            let resolvedFromAccount: AccountDto?
+            if let validInitialFrom {
+                resolvedFromAccount = validInitialFrom
+            } else if resolvedType == TransactionType.TRANSFER, let toAcc = validInitialTo {
+                resolvedFromAccount = activeAccounts.first(where: {
+                    $0.id != toAcc.id && ($0.groupType == AccountGroup.DEBIT || $0.groupType == AccountGroup.WALLET)
+                })
+                    ?? activeAccounts.first(where: { $0.id != toAcc.id && $0.groupType != AccountGroup.CREDIT })
+                    ?? activeAccounts.first(where: { $0.id != toAcc.id })
+                    ?? activeAccounts.first
+            } else {
+                resolvedFromAccount = activeAccounts.first
+            }
+
+            let resolvedAccountId = resolvedFromAccount?.id ?? defaultAccountId
+
+            let resolvedToAccount: AccountDto?
+            if let validInitialTo, validInitialTo.id != resolvedAccountId {
+                resolvedToAccount = validInitialTo
+            } else {
+                resolvedToAccount = activeAccounts.first(where: { $0.id != resolvedAccountId })
+            }
+            let resolvedToAccountId = resolvedToAccount?.id
+
+            let resolvedCurrency: String
+            if resolvedType == TransactionType.TRANSFER,
+               let toAcc = resolvedToAccount,
+               validInitialTo != nil,
+               (validInitialFrom == nil || toAcc.groupType == AccountGroup.CREDIT) {
+                resolvedCurrency = CurrencyCatalog.normalize(toAcc.currencyCode)
+            } else if let fromAcc = resolvedFromAccount {
+                resolvedCurrency = CurrencyCatalog.normalize(fromAcc.currencyCode)
+            } else {
+                resolvedCurrency = store.settings.baseCurrency
+            }
+
+            let resolvedAmountExpr: String
+            if let presetMicros = initialAmountMicros, presetMicros > 0 {
+                let digits = CurrencyCatalog.find(resolvedCurrency).minorDigits
+                resolvedAmountExpr = MoneyAmount.formatPlain(presetMicros, minorDigits: digits, grouping: false)
+            } else {
+                resolvedAmountExpr = ""
+            }
+
+            let resolvedCategoryId: Int64? = resolvedType == TransactionType.TRANSFER
+                ? nil
+                : store.parentCategories(for: resolvedType).first?.id
+
+            _txType = State(initialValue: resolvedType)
+            _amountExpr = State(initialValue: resolvedAmountExpr)
+            _origCurrency = State(initialValue: resolvedCurrency)
+            _selectedAccountId = State(initialValue: resolvedAccountId)
+            _selectedToAccountId = State(initialValue: resolvedToAccountId)
+            _selectedCategoryId = State(initialValue: resolvedCategoryId)
             _selectedLedgerId = State(initialValue: store.activeLedger?.id ?? store.settings.activeLedgerId)
             _merchant = State(initialValue: "")
             _note = State(initialValue: "")
@@ -120,11 +188,12 @@ public struct QuickRecordSheet: View {
     }
 
     private var selectedAccount: AccountDto? {
-        usableAccounts.first(where: { $0.id == selectedAccountId })
+        usableAccounts.first(where: { $0.id == selectedAccountId }) ?? store.account(byId: selectedAccountId)
     }
 
     private var selectedToAccount: AccountDto? {
-        usableAccounts.first(where: { $0.id == selectedToAccountId })
+        guard let toId = selectedToAccountId else { return nil }
+        return usableAccounts.first(where: { $0.id == toId }) ?? store.account(byId: toId)
     }
 
     private var selectedCategory: CategoryDto? {

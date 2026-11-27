@@ -176,6 +176,7 @@ interface LedgerService {
     suspend fun confirmAllPending(): Result<Int>
 
     suspend fun saveAccount(account: AccountEntity): Long
+    suspend fun reorderAccounts(orderedAccountIds: List<Long>): Result<Unit>
     suspend fun archiveAccount(accountId: Long, archived: Boolean)
     suspend fun deleteAccount(accountId: Long, migrateToAccountId: Long? = null): Result<Unit>
     suspend fun calibrateAccountBalance(
@@ -207,6 +208,7 @@ interface LedgerService {
     suspend fun deleteLedger(ledgerId: Long, migrateToLedgerId: Long? = null): Result<Unit>
 
     suspend fun batchUpdateCategory(txIds: List<Long>, categoryId: Long?): Result<Int>
+    suspend fun batchMoveTransactionsAccount(txIds: List<Long>, targetAccountId: Long): Result<Int>
     suspend fun batchDeleteTransactions(txIds: List<Long>): Result<Int>
     suspend fun settleReimbursements(
         txIds: List<Long>,

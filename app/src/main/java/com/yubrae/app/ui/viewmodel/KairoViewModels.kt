@@ -955,6 +955,47 @@ class KairoMainViewModel(
         }
     }
 
+    fun duplicateTransaction(tx: TransactionEntity) {
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                ledgerService.saveTransaction(
+                    RecordTransactionRequest(
+                        existingId = null,
+                        type = tx.type,
+                        timestamp = System.currentTimeMillis(),
+                        origAmountMicros = tx.origAmountMicros,
+                        origCurrency = tx.origCurrency,
+                        accountId = tx.accountId,
+                        toAccountId = tx.toAccountId,
+                        categoryId = tx.categoryId,
+                        merchant = tx.merchant,
+                        note = tx.note,
+                        tags = tx.tags,
+                        reimburseStatus = if (tx.reimburseStatus == ReimburseStatus.REIMBURSED) {
+                            ReimburseStatus.NONE
+                        } else {
+                            tx.reimburseStatus
+                        },
+                        sourceType = CaptureChannel.MANUAL,
+                        rawEventId = null,
+                        status = TransactionStatus.CONFIRMED,
+                        ledgerId = tx.ledgerId,
+                        excludeFromStats = tx.excludeFromStats,
+                        excludeFromBudget = tx.excludeFromBudget,
+                        refundOfTxId = null,
+                        attachmentPaths = "",
+                        reimbursedTxId = null
+                    )
+                )
+            }
+            result.onSuccess {
+                showMessage("已再记一笔")
+            }.onFailure { err ->
+                showMessage("再记一笔失败：${err.message ?: "未知错误"}")
+            }
+        }
+    }
+
     fun confirmTransaction(transactionId: Long) {
         viewModelScope.launch {
             withContext(Dispatchers.IO) { ledgerService.confirmTransaction(transactionId) }
@@ -1031,6 +1072,46 @@ class KairoMainViewModel(
             withContext(Dispatchers.IO) { ledgerService.saveAccount(account) }
             showMessage(if (account.id == 0L) "已新增账户「${account.name}」" else "已更新账户「${account.name}」")
             onDone()
+        }
+    }
+
+    fun reorderAccounts(orderedAccountIds: List<Long>, onDone: () -> Unit = {}) {
+        viewModelScope.launch {
+            val res = withContext(Dispatchers.IO) {
+                ledgerService.reorderAccounts(orderedAccountIds)
+            }
+            res.onSuccess {
+                showMessage("账户排序已保存")
+                onDone()
+            }.onFailure { err ->
+                showMessage("保存账户排序失败：${err.message ?: "未知错误"}")
+            }
+        }
+    }
+
+    fun updateAssetGroupOrder(groupOrder: List<String>) {
+        val normalized = groupOrder.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                settingsStore.update { cur -> cur.copy(assetGroupOrder = normalized) }
+            }
+        }
+    }
+
+    fun toggleAssetGroupCollapsed(sectionId: String) {
+        val key = sectionId.trim()
+        if (key.isEmpty()) return
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                settingsStore.update { cur ->
+                    val next = if (key in cur.collapsedAssetGroups) {
+                        cur.collapsedAssetGroups - key
+                    } else {
+                        cur.collapsedAssetGroups + key
+                    }
+                    cur.copy(collapsedAssetGroups = next)
+                }
+            }
         }
     }
 
@@ -1264,6 +1345,27 @@ class KairoMainViewModel(
             withContext(Dispatchers.IO) { ledgerService.batchUpdateCategory(txIds, categoryId) }
                 .onSuccess { count -> showMessage("已批量更新 $count 笔交易分类") }
                 .onFailure { showMessage("批量改分类失败：${it.message}") }
+        }
+    }
+
+    fun batchMoveTransactionsAccount(
+        txIds: List<Long>,
+        targetAccountId: Long,
+        onDone: () -> Unit = {}
+    ) {
+        if (txIds.isEmpty()) return
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                ledgerService.batchMoveTransactionsAccount(txIds, targetAccountId)
+            }.onSuccess { count ->
+                showMessage(
+                    if (count > 0) "已将 $count 笔交易迁移至目标账户并重算余额"
+                    else "所选交易无需迁移（已在目标账户或存在自转冲突）"
+                )
+                onDone()
+            }.onFailure { err ->
+                showMessage("批量改账户失败：${err.message ?: "未知错误"}")
+            }
         }
     }
 

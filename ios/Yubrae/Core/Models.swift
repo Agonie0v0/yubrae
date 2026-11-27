@@ -374,6 +374,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
     public var lastUpdateCheckMillis: Int64
     public var ignoredUpdateTag: String
     public var updateMirrorPrefix: String
+    public var assetGroupOrder: [String]
+    public var collapsedAssetGroups: [String]
 
     public init(
         baseCurrency: String = CurrencyCatalog.defaultBaseCurrency,
@@ -412,7 +414,9 @@ public struct AppSettings: Codable, Equatable, Sendable {
         autoCheckUpdateEnabled: Bool = true,
         lastUpdateCheckMillis: Int64 = 0,
         ignoredUpdateTag: String = "",
-        updateMirrorPrefix: String = ""
+        updateMirrorPrefix: String = "",
+        assetGroupOrder: [String] = [],
+        collapsedAssetGroups: [String] = []
     ) {
         self.baseCurrency = baseCurrency
         self.pinnedCurrencies = pinnedCurrencies
@@ -451,10 +455,12 @@ public struct AppSettings: Codable, Equatable, Sendable {
         self.lastUpdateCheckMillis = lastUpdateCheckMillis
         self.ignoredUpdateTag = ignoredUpdateTag
         self.updateMirrorPrefix = updateMirrorPrefix
+        self.assetGroupOrder = assetGroupOrder
+        self.collapsedAssetGroups = collapsedAssetGroups
     }
 
     enum CodingKeys: String, CodingKey {
-        case baseCurrency, pinnedCurrencies, themeMode, dynamicColor, themeStyle, activeLedgerId, privacyMaskEnabled, biometricLockEnabled, floatingRichEditorEnabled, notificationCaptureEnabled, smsCaptureEnabled, autoAccountingBridgeEnabled, floatingConfirmEnabled, floatingAutoConfirmSeconds, defaultPendingWhenUncertain, llmEnabled, llmBaseUrl, llmApiKey, llmModel, webDavUrl, webDavUsername, webDavPassword, webDavRemoteDir, backupPassphrase, autoBackupEnabled, lastRateSyncMillis, lastBackupSyncMillis, oledPureBlack, greenExpenseMode, accessibilityOrderDetailEnabled, hiddenAssetAccountIds, hiddenAssetModules, hideRecentsPreviewEnabled, autoCheckUpdateEnabled, lastUpdateCheckMillis, ignoredUpdateTag, updateMirrorPrefix
+        case baseCurrency, pinnedCurrencies, themeMode, dynamicColor, themeStyle, activeLedgerId, privacyMaskEnabled, biometricLockEnabled, floatingRichEditorEnabled, notificationCaptureEnabled, smsCaptureEnabled, autoAccountingBridgeEnabled, floatingConfirmEnabled, floatingAutoConfirmSeconds, defaultPendingWhenUncertain, llmEnabled, llmBaseUrl, llmApiKey, llmModel, webDavUrl, webDavUsername, webDavPassword, webDavRemoteDir, backupPassphrase, autoBackupEnabled, lastRateSyncMillis, lastBackupSyncMillis, oledPureBlack, greenExpenseMode, accessibilityOrderDetailEnabled, hiddenAssetAccountIds, hiddenAssetModules, hideRecentsPreviewEnabled, autoCheckUpdateEnabled, lastUpdateCheckMillis, ignoredUpdateTag, updateMirrorPrefix, assetGroupOrder, collapsedAssetGroups
     }
 
     public init(from decoder: Decoder) throws {
@@ -502,6 +508,20 @@ public struct AppSettings: Codable, Equatable, Sendable {
         self.lastUpdateCheckMillis = try c.decodeIfPresent(Int64.self, forKey: .lastUpdateCheckMillis) ?? d.lastUpdateCheckMillis
         self.ignoredUpdateTag = try c.decodeIfPresent(String.self, forKey: .ignoredUpdateTag) ?? d.ignoredUpdateTag
         self.updateMirrorPrefix = try c.decodeIfPresent(String.self, forKey: .updateMirrorPrefix) ?? d.updateMirrorPrefix
+        self.assetGroupOrder = try c.decodeIfPresent([String].self, forKey: .assetGroupOrder) ?? d.assetGroupOrder
+        self.collapsedAssetGroups = try c.decodeIfPresent([String].self, forKey: .collapsedAssetGroups) ?? d.collapsedAssetGroups
+    }
+
+    private static func normalizedOrderedUniqueStrings(_ raw: [String]) -> [String] {
+        var seen = Set<String>()
+        var result: [String] = []
+        for entry in raw {
+            let trimmed = entry.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty, seen.insert(trimmed).inserted {
+                result.append(trimmed)
+            }
+        }
+        return result
     }
 
     public func toSnapshotDto() -> SettingsSnapshotDto {
@@ -531,7 +551,9 @@ public struct AppSettings: Codable, Equatable, Sendable {
             accessibilityOrderDetailEnabled: accessibilityOrderDetailEnabled,
             hiddenAssetAccountIds: Array(Set(hiddenAssetAccountIds)).sorted(),
             hiddenAssetModules: Array(Set(hiddenAssetModules.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty })).sorted(),
-            hideRecentsPreviewEnabled: hideRecentsPreviewEnabled
+            hideRecentsPreviewEnabled: hideRecentsPreviewEnabled,
+            assetGroupOrder: Self.normalizedOrderedUniqueStrings(assetGroupOrder),
+            collapsedAssetGroups: Array(Set(collapsedAssetGroups.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty })).sorted()
         )
     }
 
@@ -573,6 +595,8 @@ public struct AppSettings: Codable, Equatable, Sendable {
         copy.hiddenAssetAccountIds = Array(Set(dto.hiddenAssetAccountIds)).sorted()
         copy.hiddenAssetModules = Array(Set(dto.hiddenAssetModules.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty })).sorted()
         copy.hideRecentsPreviewEnabled = dto.hideRecentsPreviewEnabled
+        copy.assetGroupOrder = Self.normalizedOrderedUniqueStrings(dto.assetGroupOrder)
+        copy.collapsedAssetGroups = Array(Set(dto.collapsedAssetGroups.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty })).sorted()
         return copy
     }
 }
@@ -693,6 +717,8 @@ public struct SettingsSnapshotDto: Codable, Equatable, Sendable {
     public var hiddenAssetAccountIds: [Int64]
     public var hiddenAssetModules: [String]
     public var hideRecentsPreviewEnabled: Bool
+    public var assetGroupOrder: [String]
+    public var collapsedAssetGroups: [String]
 
     public init(
         baseCurrency: String = CurrencyCatalog.defaultBaseCurrency,
@@ -720,7 +746,9 @@ public struct SettingsSnapshotDto: Codable, Equatable, Sendable {
         accessibilityOrderDetailEnabled: Bool = true,
         hiddenAssetAccountIds: [Int64] = [],
         hiddenAssetModules: [String] = [],
-        hideRecentsPreviewEnabled: Bool = false
+        hideRecentsPreviewEnabled: Bool = false,
+        assetGroupOrder: [String] = [],
+        collapsedAssetGroups: [String] = []
     ) {
         self.baseCurrency = baseCurrency
         self.pinnedCurrencies = pinnedCurrencies
@@ -748,10 +776,12 @@ public struct SettingsSnapshotDto: Codable, Equatable, Sendable {
         self.hiddenAssetAccountIds = hiddenAssetAccountIds
         self.hiddenAssetModules = hiddenAssetModules
         self.hideRecentsPreviewEnabled = hideRecentsPreviewEnabled
+        self.assetGroupOrder = assetGroupOrder
+        self.collapsedAssetGroups = collapsedAssetGroups
     }
 
     enum CodingKeys: String, CodingKey {
-        case baseCurrency, pinnedCurrencies, themeMode, dynamicColor, themeStyle, activeLedgerId, privacyMaskEnabled, biometricLockEnabled, floatingRichEditorEnabled, notificationCaptureEnabled, smsCaptureEnabled, autoAccountingBridgeEnabled, floatingConfirmEnabled, floatingAutoConfirmSeconds, defaultPendingWhenUncertain, llmEnabled, llmBaseUrl, llmModel, webDavRemoteDir, autoBackupEnabled, oledPureBlack, greenExpenseMode, accessibilityOrderDetailEnabled, hiddenAssetAccountIds, hiddenAssetModules, hideRecentsPreviewEnabled
+        case baseCurrency, pinnedCurrencies, themeMode, dynamicColor, themeStyle, activeLedgerId, privacyMaskEnabled, biometricLockEnabled, floatingRichEditorEnabled, notificationCaptureEnabled, smsCaptureEnabled, autoAccountingBridgeEnabled, floatingConfirmEnabled, floatingAutoConfirmSeconds, defaultPendingWhenUncertain, llmEnabled, llmBaseUrl, llmModel, webDavRemoteDir, autoBackupEnabled, oledPureBlack, greenExpenseMode, accessibilityOrderDetailEnabled, hiddenAssetAccountIds, hiddenAssetModules, hideRecentsPreviewEnabled, assetGroupOrder, collapsedAssetGroups
     }
 
     public init(from decoder: Decoder) throws {
@@ -783,6 +813,8 @@ public struct SettingsSnapshotDto: Codable, Equatable, Sendable {
         self.hiddenAssetAccountIds = try c.decodeIfPresent([Int64].self, forKey: .hiddenAssetAccountIds) ?? d.hiddenAssetAccountIds
         self.hiddenAssetModules = try c.decodeIfPresent([String].self, forKey: .hiddenAssetModules) ?? d.hiddenAssetModules
         self.hideRecentsPreviewEnabled = try c.decodeIfPresent(Bool.self, forKey: .hideRecentsPreviewEnabled) ?? d.hideRecentsPreviewEnabled
+        self.assetGroupOrder = try c.decodeIfPresent([String].self, forKey: .assetGroupOrder) ?? d.assetGroupOrder
+        self.collapsedAssetGroups = try c.decodeIfPresent([String].self, forKey: .collapsedAssetGroups) ?? d.collapsedAssetGroups
     }
 }
 
@@ -802,6 +834,7 @@ public struct AccountDto: Identifiable, Hashable, Codable, Sendable {
     public var archived: Bool
     public var createdAt: Int64
     public var updatedAt: Int64
+    public var note: String
 
     public init(
         id: Int64 = 0,
@@ -818,7 +851,8 @@ public struct AccountDto: Identifiable, Hashable, Codable, Sendable {
         sortOrder: Int = 0,
         archived: Bool = false,
         createdAt: Int64 = 0,
-        updatedAt: Int64 = 0
+        updatedAt: Int64 = 0,
+        note: String = ""
     ) {
         self.id = id
         self.name = name
@@ -835,10 +869,11 @@ public struct AccountDto: Identifiable, Hashable, Codable, Sendable {
         self.archived = archived
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+        self.note = note
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, name, groupType, currencyCode, balanceMicros, creditLimitMicros, billingDay, repaymentDay, icon, colorHex, includeInNetWorth, sortOrder, archived, createdAt, updatedAt
+        case id, name, groupType, currencyCode, balanceMicros, creditLimitMicros, billingDay, repaymentDay, icon, colorHex, includeInNetWorth, sortOrder, archived, createdAt, updatedAt, note
     }
 
     public init(from decoder: Decoder) throws {
@@ -858,6 +893,7 @@ public struct AccountDto: Identifiable, Hashable, Codable, Sendable {
         self.archived = try c.decodeIfPresent(Bool.self, forKey: .archived) ?? false
         self.createdAt = try c.decodeIfPresent(Int64.self, forKey: .createdAt) ?? 0
         self.updatedAt = try c.decodeIfPresent(Int64.self, forKey: .updatedAt) ?? 0
+        self.note = try c.decodeIfPresent(String.self, forKey: .note) ?? ""
     }
 }
 
@@ -1847,5 +1883,44 @@ public struct ParsedBillDraft: Identifiable, Equatable, Sendable {
         self.confidence = confidence
         self.parserUsed = parserUsed
         self.tags = tags
+    }
+}
+
+public struct AccountDailyBalancePoint: Identifiable, Hashable, Sendable {
+    public let id: String
+    public let date: Date
+    public let label: String
+    public let balanceMicros: Int64
+
+    public init(id: String, date: Date, label: String, balanceMicros: Int64) {
+        self.id = id
+        self.date = date
+        self.label = label
+        self.balanceMicros = balanceMicros
+    }
+}
+
+public struct CreditBillingCycleSummary: Equatable, Sendable {
+    public let cycleStartMillis: Int64
+    public let cycleEndMillis: Int64
+    public let cycleSpendMicros: Int64
+    public let cycleRepaidMicros: Int64
+    public let daysUntilBilling: Int?
+    public let daysUntilRepayment: Int?
+
+    public init(
+        cycleStartMillis: Int64,
+        cycleEndMillis: Int64,
+        cycleSpendMicros: Int64,
+        cycleRepaidMicros: Int64,
+        daysUntilBilling: Int?,
+        daysUntilRepayment: Int?
+    ) {
+        self.cycleStartMillis = cycleStartMillis
+        self.cycleEndMillis = cycleEndMillis
+        self.cycleSpendMicros = cycleSpendMicros
+        self.cycleRepaidMicros = cycleRepaidMicros
+        self.daysUntilBilling = daysUntilBilling
+        self.daysUntilRepayment = daysUntilRepayment
     }
 }

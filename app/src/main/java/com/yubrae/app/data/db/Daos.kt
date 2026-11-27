@@ -36,6 +36,9 @@ interface AccountDao {
     @Query("UPDATE accounts SET balance_micros = balance_micros + :deltaMicros, updated_at = :updatedAt WHERE id = :accountId")
     suspend fun adjustBalance(accountId: Long, deltaMicros: Long, updatedAt: Long = System.currentTimeMillis())
 
+    @Query("UPDATE accounts SET sort_order = :sortOrder, updated_at = :updatedAt WHERE id = :accountId")
+    suspend fun updateSortOrder(accountId: Long, sortOrder: Int, updatedAt: Long = System.currentTimeMillis())
+
     @Query("DELETE FROM accounts WHERE id = :id")
     suspend fun deleteById(id: Long)
 

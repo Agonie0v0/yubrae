@@ -23,7 +23,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         InstallmentPlanEntity::class,
         TagEntity::class
     ],
-    version = 4,
+    version = 5,
     exportSchema = true
 )
 abstract class KairoDatabase : RoomDatabase() {
@@ -146,13 +146,19 @@ abstract class KairoDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_4_5: Migration = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `accounts` ADD COLUMN `note` TEXT NOT NULL DEFAULT ''")
+            }
+        }
+
         fun build(context: Context): KairoDatabase =
             Room.databaseBuilder(
                 context.applicationContext,
                 KairoDatabase::class.java,
                 DB_NAME
             )
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
                 .fallbackToDestructiveMigrationOnDowngrade()
                 .build()
     }

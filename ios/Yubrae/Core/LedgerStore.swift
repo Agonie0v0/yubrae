@@ -276,6 +276,7 @@ public final class LedgerStore: ObservableObject {
             }
         }
         ensureActiveLedgerValid()
+        sortAccountsInPlace()
         if needsPersist {
             persist()
         }
@@ -574,6 +575,101 @@ public final class LedgerStore: ObservableObject {
         return updated
     }
 
+    @discardableResult
+    public func batchMoveTransactionsAccount(txIds: [Int64], targetAccountId: Int64) throws -> Int {
+        guard let targetAccount = account(byId: targetAccountId) else {
+            throw LedgerStoreError.accountNotFound(targetAccountId)
+        }
+        if targetAccount.archived {
+            throw LedgerStoreError.cannotMigrateToArchivedAccount(targetAccount.name)
+        }
+        guard !txIds.isEmpty else { return 0 }
+
+        let targetCur = CurrencyCatalog.normalize(targetAccount.currencyCode)
+        let idSet = Set(txIds)
+        let now = currentEpochMillis()
+        var movedCount = 0
+
+        for i in transactions.indices where idSet.contains(transactions[i].id) {
+            let oldTx = transactions[i]
+            if oldTx.type == TransactionType.TRANSFER {
+                if oldTx.accountId == targetAccountId || oldTx.toAccountId == targetAccountId {
+                    continue
+                }
+            } else {
+                if oldTx.accountId == targetAccountId {
+                    continue
+                }
+            }
+
+            let oldCur = CurrencyCatalog.normalize(
+                oldTx.accountCurrency.isEmpty
+                    ? (account(byId: oldTx.accountId)?.currencyCode ?? settings.baseCurrency)
+                    : oldTx.accountCurrency
+            )
+            let origCur = CurrencyCatalog.normalize(oldTx.origCurrency)
+
+            applyBalanceDelta(oldTx, direction: -1, now: now)
+
+            var updatedTx = oldTx
+            updatedTx.accountId = targetAccountId
+            if oldCur != targetCur {
+                let converted: Int64
+                let newRate: Int64
+                if origCur == targetCur {
+                    converted = oldTx.origAmountMicros
+                    newRate = MoneyAmount.rateScale
+                } else {
+                    let dateStr = DefaultSeedData.formatISODate(epochMillis: oldTx.timestamp, timeZone: timeZone)
+                    let rate = getRate(from: oldCur, to: targetCur, onDate: dateStr).rateMicros
+                    converted = MoneyAmount.convert(amountMicros: oldTx.accountAmountMicros, rateMicros: rate)
+                    newRate = MoneyAmount.computeRate(origAmountMicros: oldTx.origAmountMicros, targetAmountMicros: converted)
+                }
+                updatedTx.accountAmountMicros = converted
+                updatedTx.rateToAccountMicros = newRate
+            }
+            updatedTx.accountCurrency = targetCur
+            updatedTx.updatedAt = now
+
+            transactions[i] = updatedTx
+            applyBalanceDelta(updatedTx, direction: 1, now: now)
+            movedCount += 1
+        }
+
+        if movedCount > 0 {
+            persist()
+        }
+        return movedCount
+    }
+
+    @discardableResult
+    public func duplicateTransaction(id: Int64) throws -> TransactionDto {
+        guard let orig = transactions.first(where: { $0.id == id }) else {
+            throw LedgerStoreError.transactionNotFound(id)
+        }
+        let req = RecordTransactionRequest(
+            type: orig.type,
+            timestamp: currentEpochMillis(),
+            origAmountMicros: orig.origAmountMicros,
+            origCurrency: orig.origCurrency,
+            accountId: orig.accountId,
+            toAccountId: orig.type == TransactionType.TRANSFER ? orig.toAccountId : nil,
+            categoryId: orig.type == TransactionType.TRANSFER ? nil : orig.categoryId,
+            merchant: orig.merchant,
+            note: orig.note,
+            tags: orig.tags,
+            reimburseStatus: orig.reimburseStatus == ReimburseStatus.REIMBURSED ? ReimburseStatus.NONE : orig.reimburseStatus,
+            sourceType: CaptureChannel.MANUAL,
+            status: TransactionStatus.CONFIRMED,
+            ledgerId: orig.ledgerId,
+            excludeFromStats: orig.excludeFromStats,
+            excludeFromBudget: orig.excludeFromBudget
+        )
+        let saved = try saveTransactionInternal(req)
+        persist()
+        return saved
+    }
+
     public func confirmTransaction(id: Int64) throws {
         guard let idx = transactions.firstIndex(where: { $0.id == id }) else {
             throw LedgerStoreError.transactionNotFound(id)
@@ -679,8 +775,65 @@ public final class LedgerStore: ObservableObject {
             if dto.createdAt <= 0 { dto.createdAt = now }
             accounts.append(dto)
         }
+        sortAccountsInPlace()
         persist()
         return dto
+    }
+
+    public func reorderAccounts(orderedIds: [Int64]) {
+        guard !accounts.isEmpty else { return }
+        let now = currentEpochMillis()
+        let currentSorted = accounts.sorted { lhs, rhs in
+            if lhs.sortOrder != rhs.sortOrder { return lhs.sortOrder < rhs.sortOrder }
+            return lhs.id < rhs.id
+        }
+        let existingIds = Set(currentSorted.map(\.id))
+        var seen = Set<Int64>()
+        var finalOrder: [Int64] = []
+        for id in orderedIds where existingIds.contains(id) && seen.insert(id).inserted {
+            finalOrder.append(id)
+        }
+        for acc in currentSorted where !seen.contains(acc.id) {
+            finalOrder.append(acc.id)
+        }
+        var orderById: [Int64: Int] = [:]
+        for (idx, id) in finalOrder.enumerated() {
+            orderById[id] = idx * 10
+        }
+        for i in accounts.indices {
+            if let newOrder = orderById[accounts[i].id] {
+                accounts[i].sortOrder = newOrder
+                accounts[i].updatedAt = now
+            }
+        }
+        sortAccountsInPlace()
+        persist()
+    }
+
+    public func updateAssetGroupOrder(_ groupOrder: [String]) {
+        var seen = Set<String>()
+        var normalized: [String] = []
+        for raw in groupOrder {
+            let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty, seen.insert(trimmed).inserted {
+                normalized.append(trimmed)
+            }
+        }
+        settings.assetGroupOrder = normalized
+        persist()
+    }
+
+    public func toggleAssetGroupCollapsed(_ sectionId: String) {
+        let key = sectionId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !key.isEmpty else { return }
+        var list = settings.collapsedAssetGroups
+        if list.contains(key) {
+            list.removeAll { $0 == key }
+        } else {
+            list.append(key)
+        }
+        settings.collapsedAssetGroups = list
+        persist()
     }
 
     public func archiveAccount(id: Int64, archived: Bool) {
@@ -1747,6 +1900,193 @@ public final class LedgerStore: ObservableObject {
         return (epochMillis(of: start), epochMillis(of: nextYear) - 1)
     }
 
+    public func accountDeltaForTransaction(_ tx: TransactionDto, accountId: Int64) -> Int64 {
+        if tx.type == TransactionType.TRANSFER {
+            if tx.accountId == accountId && tx.toAccountId == accountId {
+                return 0
+            }
+            var delta: Int64 = 0
+            if tx.accountId == accountId {
+                delta -= tx.accountAmountMicros
+            }
+            if tx.toAccountId == accountId {
+                delta += (tx.toAmountMicros ?? tx.accountAmountMicros)
+            }
+            return delta
+        }
+        guard tx.accountId == accountId else { return 0 }
+        switch tx.type {
+        case TransactionType.EXPENSE:
+            return -tx.accountAmountMicros
+        case TransactionType.INCOME, TransactionType.ADJUST:
+            return tx.accountAmountMicros
+        default:
+            return 0
+        }
+    }
+
+    public func computeAccountDailyBalanceTrend(
+        accountId: Int64,
+        days: Int,
+        nowMillis: Int64 = currentEpochMillis()
+    ) -> [AccountDailyBalancePoint] {
+        guard let targetAccount = account(byId: accountId) else { return [] }
+        let count = min(max(days, 2), 366)
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = timeZone
+
+        let nowDate = Date(timeIntervalSince1970: Double(nowMillis) / 1000.0)
+        let todayStart = cal.startOfDay(for: nowDate)
+        let todayComps = cal.dateComponents([.year, .month, .day], from: todayStart)
+        let todayKey = YearMonthDayKey(
+            year: todayComps.year ?? 2026,
+            month: todayComps.month ?? 1,
+            day: todayComps.day ?? 1
+        )
+
+        var futureDelta: Int64 = 0
+        var deltaByDay: [YearMonthDayKey: Int64] = [:]
+        for tx in transactions where tx.accountId == accountId || tx.toAccountId == accountId {
+            let delta = accountDeltaForTransaction(tx, accountId: accountId)
+            guard delta != 0 else { continue }
+            let txDate = Date(timeIntervalSince1970: Double(tx.timestamp) / 1000.0)
+            let txComps = cal.dateComponents([.year, .month, .day], from: txDate)
+            let txKey = YearMonthDayKey(
+                year: txComps.year ?? 2026,
+                month: txComps.month ?? 1,
+                day: txComps.day ?? 1
+            )
+            if txKey > todayKey {
+                futureDelta += delta
+            } else {
+                deltaByDay[txKey, default: 0] += delta
+            }
+        }
+
+        var runningBalance = targetAccount.balanceMicros - futureDelta
+        var reversedPoints: [AccountDailyBalancePoint] = []
+        reversedPoints.reserveCapacity(count)
+
+        for offset in 0..<count {
+            let dayDate = cal.date(byAdding: .day, value: -offset, to: todayStart) ?? todayStart
+            let comps = cal.dateComponents([.year, .month, .day], from: dayDate)
+            let y = comps.year ?? 2026
+            let m = comps.month ?? 1
+            let d = comps.day ?? 1
+            let dayKey = YearMonthDayKey(year: y, month: m, day: d)
+            let id = String(format: "%04d-%02d-%02d", y, m, d)
+
+            reversedPoints.append(
+                AccountDailyBalancePoint(
+                    id: id,
+                    date: dayDate,
+                    label: "\(m)/\(d)",
+                    balanceMicros: runningBalance
+                )
+            )
+            if let dayDelta = deltaByDay[dayKey] {
+                runningBalance -= dayDelta
+            }
+        }
+        return reversedPoints.reversed()
+    }
+
+    public func computeCreditBillingCycleSummary(
+        account: AccountDto,
+        nowMillis: Int64 = currentEpochMillis()
+    ) -> CreditBillingCycleSummary {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = timeZone
+
+        let nowDate = Date(timeIntervalSince1970: Double(nowMillis) / 1000.0)
+        let todayStart = cal.startOfDay(for: nowDate)
+        let todayComps = cal.dateComponents([.year, .month, .day], from: todayStart)
+        let curYear = todayComps.year ?? 2026
+        let curMonth = todayComps.month ?? 1
+        let curDay = todayComps.day ?? 1
+
+        let cycleStartMillis: Int64
+        let cycleEndMillis: Int64
+
+        if let rawBillingDay = account.billingDay, (1...31).contains(rawBillingDay) {
+            let thisMonthFirst = cal.date(from: DateComponents(year: curYear, month: curMonth, day: 1)) ?? todayStart
+            let thisMonthDays = cal.range(of: .day, in: .month, for: thisMonthFirst)?.count ?? 30
+            let clampedThisMonthDay = min(rawBillingDay, thisMonthDays)
+
+            let startBillingDate: Date
+            let endBillingDate: Date
+            if curDay > clampedThisMonthDay {
+                startBillingDate = cal.date(from: DateComponents(year: curYear, month: curMonth, day: clampedThisMonthDay)) ?? todayStart
+                let nextYM = nextYearMonth(YearMonthKey(year: curYear, month: curMonth))
+                let nextMonthFirst = cal.date(from: DateComponents(year: nextYM.year, month: nextYM.month, day: 1)) ?? todayStart
+                let nextMonthDays = cal.range(of: .day, in: .month, for: nextMonthFirst)?.count ?? 30
+                endBillingDate = cal.date(from: DateComponents(year: nextYM.year, month: nextYM.month, day: min(rawBillingDay, nextMonthDays))) ?? todayStart
+            } else {
+                let prevYM = previousYearMonth(year: curYear, month: curMonth)
+                let prevMonthFirst = cal.date(from: DateComponents(year: prevYM.year, month: prevYM.month, day: 1)) ?? todayStart
+                let prevMonthDays = cal.range(of: .day, in: .month, for: prevMonthFirst)?.count ?? 30
+                startBillingDate = cal.date(from: DateComponents(year: prevYM.year, month: prevYM.month, day: min(rawBillingDay, prevMonthDays))) ?? todayStart
+                endBillingDate = cal.date(from: DateComponents(year: curYear, month: curMonth, day: clampedThisMonthDay)) ?? todayStart
+            }
+
+            let cycleStartDate = cal.date(byAdding: .day, value: 1, to: startBillingDate) ?? startBillingDate
+            let dayAfterEndDate = cal.date(byAdding: .day, value: 1, to: endBillingDate) ?? endBillingDate
+            cycleStartMillis = epochMillis(of: cycleStartDate)
+            cycleEndMillis = epochMillis(of: dayAfterEndDate) - 1
+        } else {
+            let range = monthRangeMillis(year: curYear, month: curMonth)
+            cycleStartMillis = range.0
+            cycleEndMillis = range.1
+        }
+
+        var rawSpend: Int64 = 0
+        var repaid: Int64 = 0
+        for tx in transactions {
+            guard tx.status == TransactionStatus.CONFIRMED,
+                  tx.timestamp >= cycleStartMillis,
+                  tx.timestamp <= cycleEndMillis else { continue }
+
+            if tx.type == TransactionType.EXPENSE && tx.accountId == account.id {
+                rawSpend += tx.accountAmountMicros
+            } else if tx.type == TransactionType.TRANSFER {
+                if tx.accountId == account.id && tx.toAccountId != account.id {
+                    rawSpend += tx.accountAmountMicros
+                } else if tx.toAccountId == account.id && tx.accountId != account.id {
+                    repaid += (tx.toAmountMicros ?? tx.accountAmountMicros)
+                }
+            } else if tx.type == TransactionType.INCOME && tx.accountId == account.id {
+                if tx.refundOfTxId != nil {
+                    rawSpend -= tx.accountAmountMicros
+                } else {
+                    repaid += tx.accountAmountMicros
+                }
+            }
+        }
+
+        let daysUntilBilling: Int?
+        if let bDay = account.billingDay, (1...31).contains(bDay) {
+            daysUntilBilling = daysUntilDayOfMonth(bDay, from: todayStart, calendar: cal)
+        } else {
+            daysUntilBilling = nil
+        }
+
+        let daysUntilRepayment: Int?
+        if let rDay = account.repaymentDay, (1...31).contains(rDay) {
+            daysUntilRepayment = daysUntilDayOfMonth(rDay, from: todayStart, calendar: cal)
+        } else {
+            daysUntilRepayment = nil
+        }
+
+        return CreditBillingCycleSummary(
+            cycleStartMillis: cycleStartMillis,
+            cycleEndMillis: cycleEndMillis,
+            cycleSpendMicros: max(0, rawSpend),
+            cycleRepaidMicros: max(0, repaid),
+            daysUntilBilling: daysUntilBilling,
+            daysUntilRepayment: daysUntilRepayment
+        )
+    }
+
     // MARK: - Backup & Restore (.klbk V3 Interoperable with Android)
 
     public func buildBackupSnapshot(exportedAtMillis: Int64 = currentEpochMillis()) -> KairoBackupSnapshot {
@@ -1830,6 +2170,7 @@ public final class LedgerStore: ObservableObject {
 
         settings = settings.applying(snapshot.settings)
         ensureActiveLedgerValid()
+        sortAccountsInPlace()
         persist()
 
         return RestoreSummary(
@@ -2419,6 +2760,13 @@ public final class LedgerStore: ObservableObject {
         secretStorage.save(secrets)
     }
 
+    private func sortAccountsInPlace() {
+        accounts.sort { lhs, rhs in
+            if lhs.sortOrder != rhs.sortOrder { return lhs.sortOrder < rhs.sortOrder }
+            return lhs.id < rhs.id
+        }
+    }
+
     // MARK: - Calendar Helpers
 
     private struct YearMonthKey: Hashable, Comparable {
@@ -2429,6 +2777,43 @@ public final class LedgerStore: ObservableObject {
             if lhs.year != rhs.year { return lhs.year < rhs.year }
             return lhs.month < rhs.month
         }
+    }
+
+    private struct YearMonthDayKey: Hashable, Comparable {
+        let year: Int
+        let month: Int
+        let day: Int
+
+        static func < (lhs: YearMonthDayKey, rhs: YearMonthDayKey) -> Bool {
+            if lhs.year != rhs.year { return lhs.year < rhs.year }
+            if lhs.month != rhs.month { return lhs.month < rhs.month }
+            return lhs.day < rhs.day
+        }
+    }
+
+    private func daysUntilDayOfMonth(_ dayOfMonth: Int, from todayStart: Date, calendar cal: Calendar) -> Int {
+        let clampedDay = min(max(1, dayOfMonth), 31)
+        let comps = cal.dateComponents([.year, .month], from: todayStart)
+        let year = comps.year ?? 2026
+        let month = comps.month ?? 1
+        let thisMonthFirst = cal.date(from: DateComponents(year: year, month: month, day: 1)) ?? todayStart
+        let thisMonthDays = cal.range(of: .day, in: .month, for: thisMonthFirst)?.count ?? 30
+        let candidateThisMonth = cal.date(
+            from: DateComponents(year: year, month: month, day: min(clampedDay, thisMonthDays))
+        ) ?? todayStart
+
+        let nextOccurrence: Date
+        if candidateThisMonth >= todayStart {
+            nextOccurrence = candidateThisMonth
+        } else {
+            let nextYM = nextYearMonth(YearMonthKey(year: year, month: month))
+            let nextMonthFirst = cal.date(from: DateComponents(year: nextYM.year, month: nextYM.month, day: 1)) ?? todayStart
+            let nextMonthDays = cal.range(of: .day, in: .month, for: nextMonthFirst)?.count ?? 30
+            nextOccurrence = cal.date(
+                from: DateComponents(year: nextYM.year, month: nextYM.month, day: min(clampedDay, nextMonthDays))
+            ) ?? todayStart
+        }
+        return max(0, cal.dateComponents([.day], from: todayStart, to: nextOccurrence).day ?? 0)
     }
 
     private func yearMonth(of epochMillis: Int64) -> YearMonthKey {

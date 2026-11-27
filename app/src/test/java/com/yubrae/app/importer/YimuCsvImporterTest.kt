@@ -811,6 +811,7 @@ class YimuCsvImporterTest {
         override suspend fun confirmTransaction(transactionId: Long): Result<Unit> = Result.success(Unit)
         override suspend fun confirmAllPending(): Result<Int> = Result.success(0)
         override suspend fun saveAccount(account: AccountEntity): Long = accountDao.insert(account)
+        override suspend fun reorderAccounts(orderedAccountIds: List<Long>): Result<Unit> = Result.success(Unit)
         override suspend fun archiveAccount(accountId: Long, archived: Boolean) {}
         override suspend fun deleteAccount(accountId: Long, migrateToAccountId: Long?): Result<Unit> = Result.success(Unit)
         override suspend fun calibrateAccountBalance(
@@ -837,6 +838,7 @@ class YimuCsvImporterTest {
         override suspend fun archiveLedger(ledgerId: Long, archived: Boolean) {}
         override suspend fun deleteLedger(ledgerId: Long, migrateToLedgerId: Long?): Result<Unit> = Result.success(Unit)
         override suspend fun batchUpdateCategory(txIds: List<Long>, categoryId: Long?): Result<Int> = Result.success(0)
+        override suspend fun batchMoveTransactionsAccount(txIds: List<Long>, targetAccountId: Long): Result<Int> = Result.success(0)
         override suspend fun batchDeleteTransactions(txIds: List<Long>): Result<Int> = Result.success(0)
         override suspend fun settleReimbursements(txIds: List<Long>, targetAccountId: Long, timestamp: Long, note: String): Result<TransactionEntity> =
             Result.failure(UnsupportedOperationException())
@@ -892,6 +894,12 @@ class YimuCsvImporterTest {
         override suspend fun adjustBalance(accountId: Long, deltaMicros: Long, updatedAt: Long) {
             val cur = items[accountId] ?: return
             items[accountId] = cur.copy(balanceMicros = cur.balanceMicros + deltaMicros, updatedAt = updatedAt)
+            publish()
+        }
+
+        override suspend fun updateSortOrder(accountId: Long, sortOrder: Int, updatedAt: Long) {
+            val cur = items[accountId] ?: return
+            items[accountId] = cur.copy(sortOrder = sortOrder, updatedAt = updatedAt)
             publish()
         }
 
