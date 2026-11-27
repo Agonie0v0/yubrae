@@ -200,6 +200,182 @@ public enum YubraeTheme {
         return formatDate(epochMillis, pattern: "M月d日 EEEE")
     }
 
+    private static let weekdayShortLabelsZh = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"]
+    private static let notePlaceholderValues: Set<String> = ["/", "-", "--", "无"]
+    private static let noteDotTrimCharacterSet = CharacterSet(charactersIn: "·")
+    private static let noteSegmentSplitRegex: NSRegularExpression = {
+        try! NSRegularExpression(pattern: #"\s+·\s+|\s*\|\s*|\r?\n|；"#)
+    }()
+    private static let noteClauseSplitRegex: NSRegularExpression = {
+        try! NSRegularExpression(pattern: #"[，。！!]|(?<!\d),(?!\d)"#)
+    }()
+    private static let structuredNoteMetadataRegex: NSRegularExpression = {
+        try! NSRegularExpression(
+            pattern: #"^(?:地址|创建用户|创建人|记账人|优惠|优惠金额|报销账户|报销金额|报销明细|报销说明|报销状态|多币种|退款|退款金额|退款明细|退款说明|其他|其它|附件\d*|交易单号|商户单号|流水号|交易订单号|商家订单号)\s*[:：].*$"#
+        )
+    }()
+    private static let importerDiscountNoteRegex: NSRegularExpression = {
+        try! NSRegularExpression(
+            pattern: #"^优惠\s+[¥￥$€£+\-]?\s*\d+(?:[.,]\d+)*(?:\s*(?:元|折|[A-Za-z]{3}))?$"#
+        )
+    }()
+    private static let autoNotifyStatusRegex: NSRegularExpression = {
+        try! NSRegularExpression(
+            pattern: #"^(?:刷卡完成|支付成功|付款成功|扣款成功|交易成功|收款成功|充值成功)[，,。！!]?$"#
+        )
+    }()
+    private static let autoNotifyAmountRegex: NSRegularExpression = {
+        try! NSRegularExpression(
+            pattern: #"^(?:充值|交易|消费|付款|扣款|支付|入账|转出|转入)金额\s*[:：]\s*[¥￥$€£+\-]?\s*\d+(?:[.,]\d+)*\s*(?:元|[A-Za-z]{3})?[。！!]?$"#
+        )
+    }()
+    private static let autoNotifyBalanceRegex: NSRegularExpression = {
+        try! NSRegularExpression(
+            pattern: #"^(?:卡内|账户|当前|可用|剩余)余额\s*[:：]\s*[¥￥$€£+\-]?\s*\d+(?:[.,]\d+)*\s*(?:元|[A-Za-z]{3})?[。！!]?$"#
+        )
+    }()
+
+    /// 仅用于列表行展示的备注清洗：过滤账单导入结构化元数据与自动通知机器废话，绝不改写持久化原值。
+    public static func cleanListRowNote(_ rawNote: String) -> String {
+        let trimmedRaw = rawNote.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedRaw.isEmpty else { return "" }
+
+        var keptSegments: [String] = []
+        for rawSegment in split(trimmedRaw, using: noteSegmentSplitRegex) {
+            let segment = rawSegment
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .trimmingCharacters(in: noteDotTrimCharacterSet)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !segment.isEmpty,
+                  !notePlaceholderValues.contains(segment),
+                  !isNoiseNoteClause(segment) else {
+                continue
+            }
+
+            let clauses = split(segment, using: noteClauseSplitRegex)
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            if clauses.count > 1 {
+                let hasNoiseClause = clauses.contains { clause in
+                    !clause.isEmpty && (notePlaceholderValues.contains(clause) || isNoiseNoteClause(clause))
+                }
+                if hasNoiseClause {
+                    let surviving = clauses.filter { clause in
+                        !clause.isEmpty &&
+                            !notePlaceholderValues.contains(clause) &&
+                            !isNoiseNoteClause(clause)
+                    }
+                    if !surviving.isEmpty {
+                        keptSegments.append(surviving.joined(separator: "，"))
+                    }
+                    continue
+                }
+            }
+
+            keptSegments.append(segment)
+        }
+        return keptSegments.joined(separator: " · ")
+    }
+
+    /// 返回日期分组头拆分的 `(dateText, subText)`：
+    /// 如 `("11月27日", "今天")` / `("11月26日", "昨天")` / `("11月25日", "周三")`，跨年时 `dateText` 带年份（如 `"2025年11月25日"`）。
+    public static func formatDayHeaderParts(_ epochMillis: Int64) -> (dateText: String, subText: String) {
+        formatDayHeaderParts(epochMillis, referenceDate: Date(), calendar: .current)
+    }
+
+    public static func formatDayHeaderParts(
+        _ epochMillis: Int64,
+        referenceDate: Date,
+        calendar: Calendar = .current
+    ) -> (dateText: String, subText: String) {
+        let date = Date(timeIntervalSince1970: Double(epochMillis) / 1000.0)
+        let comps = calendar.dateComponents([.year, .month, .day, .weekday], from: date)
+        let refYear = calendar.component(.year, from: referenceDate)
+        let year = comps.year ?? refYear
+        let month = comps.month ?? 1
+        let day = comps.day ?? 1
+
+        let dateText = year == refYear
+            ? "\(month)月\(day)日"
+            : "\(year)年\(month)月\(day)日"
+
+        let subText: String
+        if calendar.isDate(date, inSameDayAs: referenceDate) {
+            subText = "今天"
+        } else if let yesterday = calendar.date(byAdding: .day, value: -1, to: referenceDate),
+                  calendar.isDate(date, inSameDayAs: yesterday) {
+            subText = "昨天"
+        } else {
+            let weekdayIdx = (comps.weekday ?? 1) - 1
+            subText = (0..<weekdayShortLabelsZh.count).contains(weekdayIdx)
+                ? weekdayShortLabelsZh[weekdayIdx]
+                : ""
+        }
+
+        return (dateText: dateText, subText: subText)
+    }
+
+    /// 极简列表金额格式：主币种去掉冗余 `¥` 符号（如 `-1.80` / `+106.00` / `50.00` / `1,280.50`），外币保留清晰币种符号。
+    public static func formatPlainSignedAmount(
+        _ micros: Int64,
+        currencyCode: String,
+        baseCurrency: String,
+        showSign: Bool = true
+    ) -> String {
+        let normCurrency = CurrencyCatalog.normalize(currencyCode)
+        let normBase = CurrencyCatalog.normalize(baseCurrency)
+        if normCurrency == normBase {
+            let info = CurrencyCatalog.find(normCurrency)
+            let sign: String
+            if micros < 0 {
+                sign = "-"
+            } else if showSign && micros > 0 {
+                sign = "+"
+            } else {
+                sign = ""
+            }
+            let absMicros: Int64 = micros == Int64.min ? Int64.max : abs(micros)
+            let numberStr = MoneyAmount.formatPlain(absMicros, minorDigits: info.minorDigits, grouping: true)
+            return "\(sign)\(numberStr)"
+        }
+        return MoneyAmount.format(
+            micros,
+            currencyCode: normCurrency,
+            showSign: showSign,
+            showCurrencyCode: false
+        )
+    }
+
+    private static func isNoiseNoteClause(_ text: String) -> Bool {
+        fullMatch(text, using: structuredNoteMetadataRegex)
+            || fullMatch(text, using: importerDiscountNoteRegex)
+            || fullMatch(text, using: autoNotifyStatusRegex)
+            || fullMatch(text, using: autoNotifyAmountRegex)
+            || fullMatch(text, using: autoNotifyBalanceRegex)
+    }
+
+    private static func split(_ text: String, using regex: NSRegularExpression) -> [String] {
+        let nsText = text as NSString
+        let fullRange = NSRange(location: 0, length: nsText.length)
+        let matches = regex.matches(in: text, options: [], range: fullRange)
+        guard !matches.isEmpty else { return [text] }
+        var parts: [String] = []
+        var lastEnd = 0
+        for match in matches {
+            let segmentRange = NSRange(location: lastEnd, length: match.range.location - lastEnd)
+            parts.append(nsText.substring(with: segmentRange))
+            lastEnd = match.range.location + match.range.length
+        }
+        let tailRange = NSRange(location: lastEnd, length: nsText.length - lastEnd)
+        parts.append(nsText.substring(with: tailRange))
+        return parts
+    }
+
+    private static func fullMatch(_ text: String, using regex: NSRegularExpression) -> Bool {
+        let nsText = text as NSString
+        let fullRange = NSRange(location: 0, length: nsText.length)
+        return regex.firstMatch(in: text, options: [], range: fullRange) != nil
+    }
+
     public static func formatFileSize(_ bytes: Int64) -> String {
         if bytes <= 0 { return "未知大小" }
         let formatter = ByteCountFormatter()

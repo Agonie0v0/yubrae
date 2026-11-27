@@ -320,11 +320,13 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.yubrae.app.core.model.CurrencyCatalog
+import com.yubrae.app.core.model.MoneyAmount
 import com.yubrae.app.data.db.CaptureChannel
 import com.yubrae.app.data.db.ParseStatus
 import com.yubrae.app.data.db.TransactionType
 import com.yubrae.app.ui.theme.KairoTheme
 import com.yubrae.app.ui.theme.tabular
+import java.time.DayOfWeek
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -913,12 +915,23 @@ object KairoFormats {
     private val dateTimeFormatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")
     private val timeFormatter = DateTimeFormatter.ofPattern("HH:mm")
     private val monthDayFormatter = DateTimeFormatter.ofPattern("M月d日")
-    private val noteSegmentSplitRegex = Regex("""\s+·\s+|\s*\|\s*|\r?\n|；""")
+    private val yearMonthDayZhFormatter = DateTimeFormatter.ofPattern("yyyy年M月d日")
+    private val noteSegmentSplitRegex = Regex("""\s+·\s+|\s*\|\s*|\r?\n|[；;]""")
+    private val noteClauseSplitRegex = Regex("""[，。！!·]|,(?!\d{3}(?:\D|$))""")
     private val structuredNoteMetadataRegex = Regex(
         """^(?:地址|创建用户|创建人|记账人|优惠|优惠金额|报销账户|报销金额|报销明细|报销说明|报销状态|多币种|退款|退款金额|退款明细|退款说明|其他|其它|附件\d*|交易单号|商户单号|流水号|交易订单号|商家订单号)\s*[:：].*$"""
     )
     private val importerDiscountNoteRegex = Regex(
         """^优惠\s+[¥￥$€£+\-]?\s*\d+(?:[.,]\d+)?(?:\s*(?:元|折|[A-Za-z]{3}))?$"""
+    )
+    private val autoNotifyStatusNoiseRegex = Regex(
+        """^(?:刷卡完成|支付成功|付款成功|扣款成功|交易成功|收款成功|充值成功)[，,。！!]?$"""
+    )
+    private val autoNotifyAmountNoiseRegex = Regex(
+        """^(?:充值|交易|消费|付款|扣款|支付|入账|转出|转入)金额\s*[:：]\s*[¥￥$€£+\-]?\s*\d+(?:[.,]\d+)*\s*(?:元|[A-Za-z]{3})?[，,。！!]?$"""
+    )
+    private val autoNotifyBalanceNoiseRegex = Regex(
+        """^(?:卡内|账户|当前|可用|剩余)余额\s*[:：]\s*[¥￥$€£+\-]?\s*\d+(?:[.,]\d+)*\s*(?:元|[A-Za-z]{3})?[，,。！!]?$"""
     )
     private val notePlaceholderValues = setOf("/", "-", "--", "无")
 
@@ -948,19 +961,98 @@ object KairoFormats {
         return "$prefix${date.format(monthDayFormatter)} $dayOfWeek"
     }
 
+    fun formatDayHeaderParts(
+        date: LocalDate,
+        today: LocalDate = LocalDate.now()
+    ): Pair<String, String> {
+        val dateText = if (date.year == today.year) {
+            date.format(monthDayFormatter)
+        } else {
+            date.format(yearMonthDayZhFormatter)
+        }
+        val subText = when (date) {
+            today -> "今天"
+            today.minusDays(1) -> "昨天"
+            else -> chineseShortDayOfWeek(date.dayOfWeek)
+        }
+        return dateText to subText
+    }
+
+    private fun chineseShortDayOfWeek(dayOfWeek: DayOfWeek): String = when (dayOfWeek) {
+        DayOfWeek.MONDAY -> "周一"
+        DayOfWeek.TUESDAY -> "周二"
+        DayOfWeek.WEDNESDAY -> "周三"
+        DayOfWeek.THURSDAY -> "周四"
+        DayOfWeek.FRIDAY -> "周五"
+        DayOfWeek.SATURDAY -> "周六"
+        DayOfWeek.SUNDAY -> "周日"
+    }
+
     /**
-     * 仅用于列表行展示的备注清洗：过滤账单导入拼接的结构化元数据片段，绝不改写数据库原值。
+     * 主币种去冗余货币符号输出干净等宽金额（规避第三方字体 `-¥` 重叠），外币保留清晰币种符号或代码。
+     */
+    fun formatPlainSignedAmount(
+        amountMicros: Long,
+        currencyCode: String,
+        baseCurrency: String,
+        showSign: Boolean = true
+    ): String {
+        val normalizedCurrency = currencyCode.trim().uppercase(Locale.ROOT)
+            .ifEmpty { CurrencyCatalog.DEFAULT_BASE_CURRENCY }
+        val normalizedBase = baseCurrency.trim().uppercase(Locale.ROOT)
+            .ifEmpty { CurrencyCatalog.DEFAULT_BASE_CURRENCY }
+        val info = CurrencyCatalog.find(normalizedCurrency)
+        val absVal = kotlin.math.abs(amountMicros)
+        val sign = when {
+            amountMicros < 0L -> "-"
+            showSign && amountMicros > 0L -> "+"
+            else -> ""
+        }
+        val numberStr = MoneyAmount.formatPlain(absVal, info.minorDigits, grouping = true)
+        if (normalizedCurrency == normalizedBase) {
+            return "$sign$numberStr"
+        }
+        return if (info.symbol.isBlank() || info.symbol.equals(info.code, ignoreCase = true)) {
+            "$sign$numberStr ${info.code}"
+        } else {
+            "$sign${info.symbol}$numberStr"
+        }
+    }
+
+    private fun isNoiseNoteClause(text: String): Boolean =
+        text.isEmpty() ||
+            text in notePlaceholderValues ||
+            structuredNoteMetadataRegex.matches(text) ||
+            importerDiscountNoteRegex.matches(text) ||
+            autoNotifyStatusNoiseRegex.matches(text) ||
+            autoNotifyAmountNoiseRegex.matches(text) ||
+            autoNotifyBalanceNoiseRegex.matches(text)
+
+    /**
+     * 仅用于列表行展示的备注清洗：过滤账单导入结构化元数据与自动通知/刷卡废话片段，绝不改写数据库原值。
      */
     fun cleanListRowNote(rawNote: String): String {
         if (rawNote.isBlank()) return ""
         val kept = noteSegmentSplitRegex.split(rawNote)
             .asSequence()
             .map { it.trim().trim('·').trim() }
-            .filter { segment ->
-                segment.isNotEmpty() &&
-                    segment !in notePlaceholderValues &&
-                    !structuredNoteMetadataRegex.matches(segment) &&
-                    !importerDiscountNoteRegex.matches(segment)
+            .mapNotNull { segment ->
+                if (isNoiseNoteClause(segment)) {
+                    null
+                } else {
+                    val rawClauses = noteClauseSplitRegex.split(segment)
+                    if (rawClauses.size <= 1) {
+                        segment
+                    } else {
+                        val nonEmptyClauses = rawClauses.map { it.trim() }.filter { it.isNotEmpty() }
+                        val keptClauses = nonEmptyClauses.filterNot { isNoiseNoteClause(it) }
+                        when {
+                            keptClauses.isEmpty() -> null
+                            keptClauses.size == nonEmptyClauses.size -> segment
+                            else -> keptClauses.joinToString("，")
+                        }
+                    }
+                }
             }
             .toList()
         return if (kept.isEmpty()) "" else kept.joinToString(" · ")

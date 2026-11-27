@@ -13,7 +13,8 @@ private enum TransactionFilter: String, CaseIterable, Identifiable {
 
 private struct DayTransactionGroup: Identifiable {
     let id: String
-    let title: String
+    let dateText: String
+    let subText: String
     let expenseMicros: Int64
     let incomeMicros: Int64
     let items: [TransactionDto]
@@ -30,6 +31,7 @@ public struct TransactionsView: View {
     @State private var selectedMonth: Int
     @State private var searchText: String = ""
     @State private var selectedFilter: TransactionFilter = .all
+    @State private var isSearchExpanded: Bool = false
     @State private var showAllLedgers: Bool = false
     @State private var showMonthPickerSheet: Bool = false
     @State private var showMonthSummarySheet: Bool = false
@@ -49,6 +51,24 @@ public struct TransactionsView: View {
 
     private var palette: YubraePalette {
         YubraeTheme.palette(for: store.settings, colorScheme: colorScheme)
+    }
+
+    private var currentYearMonth: (year: Int, month: Int) {
+        let comps = Calendar.current.dateComponents([.year, .month], from: Date())
+        return (comps.year ?? 2026, comps.month ?? 1)
+    }
+
+    private var isCurrentMonth: Bool {
+        let now = currentYearMonth
+        return selectedYear == now.year && selectedMonth == now.month
+    }
+
+    private var hasActiveFilter: Bool {
+        selectedFilter != .all || !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var isSearchBarVisible: Bool {
+        isSearchExpanded || hasActiveFilter
     }
 
     private var activeLedgerFilterId: Int64 {
@@ -136,9 +156,11 @@ public struct TransactionsView: View {
                     inc += converted
                 }
             }
+            let headerParts = YubraeTheme.formatDayHeaderParts(first.timestamp)
             return DayTransactionGroup(
                 id: key,
-                title: YubraeTheme.formatDaySectionTitle(first.timestamp),
+                dateText: headerParts.dateText,
+                subText: headerParts.subText,
                 expenseMicros: exp,
                 incomeMicros: inc,
                 items: items
@@ -151,39 +173,47 @@ public struct TransactionsView: View {
     }
 
     public var body: some View {
-        NavigationStack {
-            ScrollView {
-                LazyVStack(spacing: 14) {
-                    monthlyHeroCard
+        let groups = groupedByDay
+        let refundedByOrigId = store.computeRefundedAmountsByOrigTxId()
+        let categoryById = Dictionary(store.categories.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let accountById = Dictionary(store.accounts.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
 
-                    if store.pendingCount > 0 {
-                        pendingBannerCard
-                    }
+        return NavigationStack {
+            VStack(spacing: 0) {
+                minimalMonthlyHeader
 
-                    if let topBudget = budgetSummaries.first(where: { $0.budget.categoryId == nil }) ?? budgetSummaries.first {
-                        compactBudgetCard(topBudget)
-                    }
+                ScrollView {
+                    LazyVStack(spacing: 14) {
+                        if isSearchBarVisible {
+                            searchAndFilterBar
+                                .transition(.opacity.combined(with: .move(edge: .top)))
+                        }
 
-                    searchAndFilterBar
+                        if store.pendingCount > 0 {
+                            pendingBannerCard
+                        }
 
-                    if groupedByDay.isEmpty {
-                        YubraeEmptyStateView(
-                            icon: "tray",
-                            title: "本月暂无符合条件的账单",
-                            subtitle: "点击右下角「记一笔」或「智能记账」，支持一句话拆单与小票识图。",
-                            palette: palette,
-                            actionTitle: "立即记一笔",
-                            action: { onOpenQuickRecord(nil) }
-                        )
-                    } else {
-                        ForEach(groupedByDay) { group in
-                            daySectionView(group)
+                        if let topBudget = budgetSummaries.first(where: { $0.budget.categoryId == nil }) ?? budgetSummaries.first {
+                            compactBudgetCard(topBudget)
+                        }
+
+                        if groups.isEmpty {
+                            minimalEmptyState
+                        } else {
+                            ForEach(groups) { group in
+                                daySectionView(
+                                    group,
+                                    refundedByOrigId: refundedByOrigId,
+                                    categoryById: categoryById,
+                                    accountById: accountById
+                                )
+                            }
                         }
                     }
+                    .padding(.horizontal, 16)
+                    .padding(.top, 12)
+                    .padding(.bottom, 90)
                 }
-                .padding(.horizontal, 16)
-                .padding(.top, 10)
-                .padding(.bottom, 120)
             }
             .background(palette.background.ignoresSafeArea())
             .navigationBarTitleDisplayMode(.inline)
@@ -193,6 +223,24 @@ public struct TransactionsView: View {
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     HStack(spacing: 14) {
+                        Button {
+                            withAnimation(.easeInOut(duration: 0.2)) {
+                                if isSearchBarVisible {
+                                    isSearchExpanded = false
+                                    if hasActiveFilter {
+                                        searchText = ""
+                                        selectedFilter = .all
+                                    }
+                                } else {
+                                    isSearchExpanded = true
+                                }
+                            }
+                        } label: {
+                            Image(systemName: "magnifyingglass")
+                                .foregroundColor(isSearchBarVisible ? palette.primary : palette.textPrimary)
+                        }
+                        .accessibilityLabel(isSearchBarVisible ? "收起搜索与筛选" : "搜索与筛选")
+
                         Button {
                             store.updateSettings { $0.privacyMaskEnabled.toggle() }
                         } label: {
@@ -209,6 +257,16 @@ public struct TransactionsView: View {
                         }
                         .accessibilityLabel("AI 智能记账")
                     }
+                }
+            }
+            .onChange(of: selectedFilter) { newFilter in
+                if newFilter != .all {
+                    isSearchExpanded = true
+                }
+            }
+            .onChange(of: searchText) { newQuery in
+                if !newQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    isSearchExpanded = true
                 }
             }
             .sheet(isPresented: $showMonthPickerSheet) {
@@ -271,207 +329,216 @@ public struct TransactionsView: View {
                 }
             }
         } label: {
-            HStack(spacing: 6) {
-                YubraeBrandMark(size: 24, primaryColor: palette.primary)
+            HStack(spacing: 5) {
+                YubraeBrandMark(size: 20, primaryColor: palette.primary)
                 Text(showAllLedgers ? "全部账本" : (store.activeLedger?.name ?? "默认账本"))
-                    .font(.headline)
+                    .font(.subheadline.weight(.semibold))
                     .foregroundColor(palette.textPrimary)
                     .lineLimit(1)
                     .truncationMode(.tail)
                     .fixedSize(horizontal: true, vertical: false)
                 Image(systemName: "chevron.down")
-                    .font(.caption.weight(.bold))
+                    .font(.system(size: 10, weight: .semibold))
                     .foregroundColor(palette.textSecondary)
             }
         }
     }
 
-    private var monthlyHeroCard: some View {
-        let baseCur = store.settings.baseCurrency
+    /// Linear / 苹果备忘录风格扁平月度概览区（无厚重实心梯度与冗余笔数胶囊）
+    private var minimalMonthlyHeader: some View {
+        let baseCur = CurrencyCatalog.normalize(store.settings.baseCurrency)
         let masked = store.settings.privacyMaskEnabled
-        let expText = YubraeTheme.masked(MoneyAmount.format(monthExpenseMicros, currencyCode: baseCur), isMasked: masked)
-        let incText = YubraeTheme.masked(MoneyAmount.format(monthIncomeMicros, currencyCode: baseCur), isMasked: masked)
+        let expText = YubraeTheme.masked(
+            YubraeTheme.formatPlainSignedAmount(monthExpenseMicros, currencyCode: baseCur, baseCurrency: baseCur, showSign: false),
+            isMasked: masked
+        )
+        let incText = YubraeTheme.masked(
+            YubraeTheme.formatPlainSignedAmount(monthIncomeMicros, currencyCode: baseCur, baseCurrency: baseCur, showSign: false),
+            isMasked: masked
+        )
         let netMicros = monthIncomeMicros - monthExpenseMicros
-        let netText = YubraeTheme.masked(MoneyAmount.format(netMicros, currencyCode: baseCur, showSign: true), isMasked: masked)
+        let netText = YubraeTheme.masked(
+            YubraeTheme.formatPlainSignedAmount(netMicros, currencyCode: baseCur, baseCurrency: baseCur, showSign: true),
+            isMasked: masked
+        )
         let dfSummary = monthDiscountFeeSummary
+        let nowYM = currentYearMonth
+        let monthTitle = selectedYear == nowYM.year
+            ? "\(selectedMonth)月"
+            : "\(String(selectedYear))年\(selectedMonth)月"
 
-        return VStack(alignment: .leading, spacing: 14) {
-            HStack(spacing: 8) {
-                HStack(spacing: 8) {
+        return VStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 10) {
+                // 月份切换条：‹ 11月 ▾ ›
+                HStack(spacing: 6) {
                     Button { shiftMonth(by: -1) } label: {
                         Image(systemName: "chevron.left")
-                            .font(.subheadline.weight(.bold))
-                            .foregroundColor(.white.opacity(0.9))
+                            .font(.caption.weight(.semibold))
+                            .foregroundColor(palette.textSecondary)
                             .frame(width: 28, height: 28)
-                            .background(Circle().fill(Color.white.opacity(0.18)))
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel("上个月")
 
                     Button {
                         showMonthPickerSheet = true
                     } label: {
                         HStack(spacing: 4) {
-                            Text("\(String(selectedYear))年\(selectedMonth)月")
-                                .font(.headline.weight(.bold))
+                            Text(monthTitle)
+                                .font(.subheadline.weight(.semibold).monospacedDigit())
+                                .foregroundColor(isCurrentMonth ? palette.textPrimary : palette.primary)
                                 .lineLimit(1)
                                 .fixedSize(horizontal: true, vertical: false)
                             Image(systemName: "chevron.down")
-                                .font(.caption2.weight(.bold))
+                                .font(.system(size: 9, weight: .bold))
+                                .foregroundColor(isCurrentMonth ? palette.textSecondary : palette.primary)
                         }
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 5)
-                        .background(Capsule().fill(Color.white.opacity(0.18)))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel("选择年月")
 
                     Button { shiftMonth(by: 1) } label: {
                         Image(systemName: "chevron.right")
-                            .font(.subheadline.weight(.bold))
-                            .foregroundColor(.white.opacity(0.9))
+                            .font(.caption.weight(.semibold))
+                            .foregroundColor(palette.textSecondary)
                             .frame(width: 28, height: 28)
-                            .background(Circle().fill(Color.white.opacity(0.18)))
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                }
-                Spacer(minLength: 6)
-                Text("\(monthTransactions.count) 笔明细")
-                    .font(.caption.weight(.medium))
-                    .foregroundColor(.white.opacity(0.9))
-                    .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 4)
-                    .background(Capsule().fill(Color.white.opacity(0.18)))
-            }
+                    .accessibilityLabel("下个月")
 
-            Button {
-                showMonthSummarySheet = true
-            } label: {
-                VStack(alignment: .leading, spacing: 14) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack(spacing: 4) {
-                            Text("本月支出 (\(baseCur))")
-                                .font(.caption)
-                                .foregroundColor(.white.opacity(0.84))
+                    Spacer(minLength: 6)
+
+                    if !isCurrentMonth {
+                        Button {
+                            selectedYear = nowYM.year
+                            selectedMonth = nowYM.month
+                        } label: {
+                            Text("回本月")
+                                .font(.caption2.weight(.medium))
+                                .foregroundColor(palette.primary)
                                 .lineLimit(1)
-                            Image(systemName: "chevron.right")
-                                .font(.system(size: 9, weight: .semibold))
-                                .foregroundColor(.white.opacity(0.68))
+                                .fixedSize(horizontal: true, vertical: false)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(
+                                    Capsule().fill(palette.primary.opacity(palette.isDark ? 0.18 : 0.10))
+                                )
                         }
-                        Text(expText)
-                            .font(.system(size: 30, weight: .bold, design: .rounded))
-                            .foregroundColor(.white)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .minimumScaleFactor(0.45)
-                            .lineLimit(1)
+                        .buttonStyle(.plain)
                     }
+                }
 
+                // 3 列月度汇总：支出 / 收入 / 结余
+                Button {
+                    showMonthSummarySheet = true
+                } label: {
                     HStack(spacing: 12) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("本月收入")
-                                .font(.caption2)
-                                .foregroundColor(.white.opacity(0.78))
-                                .lineLimit(1)
-                            Text(incText)
-                                .font(.subheadline.weight(.semibold).monospacedDigit())
-                                .foregroundColor(.white)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .minimumScaleFactor(0.45)
-                                .lineLimit(1)
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                        summaryMetricColumn(
+                            label: baseCur == CurrencyCatalog.defaultBaseCurrency ? "支出" : "支出 (\(baseCur))",
+                            value: expText,
+                            valueColor: palette.textPrimary
+                        )
+                        summaryMetricColumn(
+                            label: "收入",
+                            value: incText,
+                            valueColor: palette.incomeColor
+                        )
+                        summaryMetricColumn(
+                            label: "结余",
+                            value: netText,
+                            valueColor: palette.textSecondary
+                        )
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("查看本月收支详情")
 
-                        Divider()
-                            .frame(height: 24)
-                            .background(Color.white.opacity(0.3))
-
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("月度结余")
-                                .font(.caption2)
-                                .foregroundColor(.white.opacity(0.78))
+                // 优惠 / 手续费极轻一行（均为 0 时零占位）
+                if dfSummary.discountBaseMicros > 0 || dfSummary.feeBaseMicros > 0 {
+                    HStack(spacing: 6) {
+                        if dfSummary.discountBaseMicros > 0 {
+                            let discStr = YubraeTheme.masked(
+                                YubraeTheme.formatPlainSignedAmount(
+                                    dfSummary.discountBaseMicros,
+                                    currencyCode: baseCur,
+                                    baseCurrency: baseCur,
+                                    showSign: false
+                                ),
+                                isMasked: masked
+                            )
+                            Text("省 \(discStr)")
+                                .font(.caption2.monospacedDigit())
+                                .foregroundColor(palette.textTertiary)
                                 .lineLimit(1)
-                            Text(netText)
-                                .font(.subheadline.weight(.semibold).monospacedDigit())
-                                .foregroundColor(.white)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .minimumScaleFactor(0.45)
-                                .lineLimit(1)
+                                .fixedSize(horizontal: true, vertical: false)
                         }
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                        if dfSummary.discountBaseMicros > 0 && dfSummary.feeBaseMicros > 0 {
+                            Text("·")
+                                .font(.caption2)
+                                .foregroundColor(palette.textTertiary)
+                        }
+                        if dfSummary.feeBaseMicros > 0 {
+                            let feeStr = YubraeTheme.masked(
+                                YubraeTheme.formatPlainSignedAmount(
+                                    dfSummary.feeBaseMicros,
+                                    currencyCode: baseCur,
+                                    baseCurrency: baseCur,
+                                    showSign: false
+                                ),
+                                isMasked: masked
+                            )
+                            Text("费 \(feeStr)")
+                                .font(.caption2.monospacedDigit())
+                                .foregroundColor(palette.textTertiary)
+                                .lineLimit(1)
+                                .fixedSize(horizontal: true, vertical: false)
+                        }
+                        Spacer(minLength: 0)
                     }
                 }
-                .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel("查看本月收支详情")
+            .padding(.horizontal, 16)
+            .padding(.top, 6)
+            .padding(.bottom, 12)
+            .background(palette.surface)
 
-            if dfSummary.discountBaseMicros > 0 || dfSummary.feeBaseMicros > 0 {
-                HStack(spacing: 8) {
-                    if dfSummary.discountBaseMicros > 0 {
-                        let discStr = YubraeTheme.masked(
-                            MoneyAmount.format(dfSummary.discountBaseMicros, currencyCode: baseCur),
-                            isMasked: masked
-                        )
-                        HStack(spacing: 4) {
-                            Image(systemName: "tag.fill")
-                                .font(.system(size: 10, weight: .semibold))
-                            Text("本月已省 \(discStr)")
-                                .font(.caption2.weight(.semibold).monospacedDigit())
-                                .lineLimit(1)
-                                .minimumScaleFactor(0.75)
-                        }
-                        .foregroundColor(.white)
-                    }
-                    if dfSummary.discountBaseMicros > 0 && dfSummary.feeBaseMicros > 0 {
-                        Text("·")
-                            .font(.caption2.weight(.bold))
-                            .foregroundColor(.white.opacity(0.55))
-                    }
-                    if dfSummary.feeBaseMicros > 0 {
-                        let feeStr = YubraeTheme.masked(
-                            MoneyAmount.format(dfSummary.feeBaseMicros, currencyCode: baseCur),
-                            isMasked: masked
-                        )
-                        Text("手续费 \(feeStr)")
-                            .font(.caption2.weight(.semibold).monospacedDigit())
-                            .foregroundColor(.white.opacity(0.92))
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.75)
-                    }
-                    Spacer(minLength: 0)
-                }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .background(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(Color.white.opacity(0.15))
-                )
-            }
+            Rectangle()
+                .fill(palette.outline)
+                .frame(height: 0.5)
         }
-        .padding(18)
-        .background(
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .fill(palette.heroGradient)
-                .shadow(color: palette.primary.opacity(0.22), radius: 14, x: 0, y: 8)
-        )
+    }
+
+    private func summaryMetricColumn(label: String, value: String, valueColor: Color) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(label)
+                .font(.caption2)
+                .foregroundColor(palette.textTertiary)
+                .lineLimit(1)
+            Text(value)
+                .font(.system(size: 17, weight: .semibold, design: .rounded).monospacedDigit())
+                .foregroundColor(valueColor)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var pendingBannerCard: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
             Image(systemName: "clock.badge.exclamationmark")
+                .font(.footnote.weight(.semibold))
                 .foregroundColor(palette.warningColor)
-            VStack(alignment: .leading, spacing: 2) {
-                Text("有 \(store.pendingCount) 笔待确认账单")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundColor(palette.textPrimary)
-                    .lineLimit(1)
-                Text("核对后可一键转为已确认状态并纳入统计")
-                    .font(.caption)
-                    .foregroundColor(palette.textSecondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+            Text("\(store.pendingCount) 笔待确认")
+                .font(.footnote.weight(.semibold).monospacedDigit())
+                .foregroundColor(palette.textPrimary)
+                .lineLimit(1)
             Spacer(minLength: 6)
             Button {
                 let count = store.confirmAllPending()
@@ -481,28 +548,48 @@ public struct TransactionsView: View {
                     .font(.caption.weight(.semibold))
                     .lineLimit(1)
                     .fixedSize(horizontal: true, vertical: false)
-                    .foregroundColor(palette.isDark ? Color(argbHex: 0xFF111318) : .white)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 6)
-                    .background(Capsule().fill(palette.warningColor))
+                    .foregroundColor(palette.warningColor)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .background(
+                        Capsule().fill(palette.warningColor.opacity(palette.isDark ? 0.22 : 0.14))
+                    )
             }
             .buttonStyle(.plain)
         }
-        .padding(14)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
         .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(palette.warningColor.opacity(0.12))
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(palette.warningColor.opacity(palette.isDark ? 0.12 : 0.08))
         )
     }
 
     private func compactBudgetCard(_ progress: BudgetProgress) -> some View {
         let masked = store.settings.privacyMaskEnabled
-        let spentStr = YubraeTheme.masked(MoneyAmount.format(progress.spentInBudgetCurrencyMicros, currencyCode: progress.budget.currencyCode), isMasked: masked)
-        let limitStr = YubraeTheme.masked(MoneyAmount.format(progress.limitInBudgetCurrencyMicros, currencyCode: progress.budget.currencyCode), isMasked: masked)
+        let baseCur = store.settings.baseCurrency
+        let spentStr = YubraeTheme.masked(
+            YubraeTheme.formatPlainSignedAmount(
+                progress.spentInBudgetCurrencyMicros,
+                currencyCode: progress.budget.currencyCode,
+                baseCurrency: baseCur,
+                showSign: false
+            ),
+            isMasked: masked
+        )
+        let limitStr = YubraeTheme.masked(
+            YubraeTheme.formatPlainSignedAmount(
+                progress.limitInBudgetCurrencyMicros,
+                currencyCode: progress.budget.currencyCode,
+                baseCurrency: baseCur,
+                showSign: false
+            ),
+            isMasked: masked
+        )
         let clampedRatio = min(1.0, max(0.0, progress.progressRatio))
 
-        return YubraeCard(palette: palette, padding: 14) {
-            VStack(alignment: .leading, spacing: 8) {
+        return YubraeCard(palette: palette, padding: 12, cornerRadius: 14) {
+            VStack(alignment: .leading, spacing: 7) {
                 HStack(spacing: 8) {
                     Label(progress.categoryName, systemImage: "gauge.medium")
                         .font(.caption.weight(.semibold))
@@ -524,15 +611,16 @@ public struct TransactionsView: View {
                             .frame(width: geo.size.width * CGFloat(clampedRatio))
                     }
                 }
-                .frame(height: 7)
+                .frame(height: 5)
             }
         }
     }
 
     private var searchAndFilterBar: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: 8) {
             HStack(spacing: 8) {
                 Image(systemName: "magnifyingglass")
+                    .font(.subheadline)
                     .foregroundColor(palette.textTertiary)
                 TextField("搜索分类、商户、账户、标签或备注", text: $searchText)
                     .font(.subheadline)
@@ -543,39 +631,56 @@ public struct TransactionsView: View {
                         Image(systemName: "xmark.circle.fill")
                             .foregroundColor(palette.textTertiary)
                     }
+                    .buttonStyle(.plain)
                 }
             }
             .padding(.horizontal, 12)
-            .padding(.vertical, 9)
+            .padding(.vertical, 8)
             .background(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                RoundedRectangle(cornerRadius: 11, style: .continuous)
                     .fill(palette.surface)
                     .overlay(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .strokeBorder(palette.outline, lineWidth: 0.8)
+                        RoundedRectangle(cornerRadius: 11, style: .continuous)
+                            .strokeBorder(palette.outline, lineWidth: 0.5)
                     )
             )
 
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
+                HStack(spacing: 7) {
                     ForEach(TransactionFilter.allCases) { filter in
                         let selected = selectedFilter == filter
                         Button {
                             selectedFilter = filter
                         } label: {
                             Text(filter.rawValue)
-                                .font(.caption.weight(.semibold))
+                                .font(.caption.weight(.medium))
                                 .lineLimit(1)
                                 .fixedSize(horizontal: true, vertical: false)
                                 .foregroundColor(selected ? palette.onPrimary : palette.textSecondary)
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 6)
+                                .padding(.horizontal, 11)
+                                .padding(.vertical, 5)
                                 .background(
                                     Capsule().fill(selected ? palette.primary : palette.surface)
                                 )
                                 .overlay(
-                                    Capsule().strokeBorder(selected ? Color.clear : palette.outline, lineWidth: 0.8)
+                                    Capsule().strokeBorder(selected ? Color.clear : palette.outline, lineWidth: 0.5)
                                 )
+                        }
+                        .buttonStyle(.plain)
+                    }
+
+                    if hasActiveFilter {
+                        Button {
+                            searchText = ""
+                            selectedFilter = .all
+                        } label: {
+                            Text("清空")
+                                .font(.caption.weight(.medium))
+                                .lineLimit(1)
+                                .fixedSize(horizontal: true, vertical: false)
+                                .foregroundColor(palette.primary)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 5)
                         }
                         .buttonStyle(.plain)
                     }
@@ -584,29 +689,97 @@ public struct TransactionsView: View {
         }
     }
 
-    private func daySectionView(_ group: DayTransactionGroup) -> some View {
-        let baseCur = store.settings.baseCurrency
-        let masked = store.settings.privacyMaskEnabled
-        return VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                Text(group.title)
-                    .font(.caption.weight(.semibold))
-                    .foregroundColor(palette.textSecondary)
+    private var minimalEmptyState: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "tray")
+                .font(.system(size: 26, weight: .regular))
+                .foregroundColor(palette.textTertiary)
+            Text(hasActiveFilter ? "无匹配账单" : "暂无账单")
+                .font(.subheadline.weight(.medium))
+                .foregroundColor(palette.textSecondary)
+            Button {
+                if hasActiveFilter {
+                    searchText = ""
+                    selectedFilter = .all
+                    isSearchExpanded = false
+                } else {
+                    onOpenQuickRecord(nil)
+                }
+            } label: {
+                Text(hasActiveFilter ? "清空筛选" : "记一笔")
+                    .font(.subheadline.weight(.semibold))
                     .lineLimit(1)
                     .fixedSize(horizontal: true, vertical: false)
+                    .foregroundColor(palette.onPrimary)
+                    .padding(.horizontal, 18)
+                    .padding(.vertical, 8)
+                    .background(Capsule().fill(palette.primary))
+            }
+            .buttonStyle(.plain)
+            .padding(.top, 2)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 48)
+    }
+
+    private func daySectionView(
+        _ group: DayTransactionGroup,
+        refundedByOrigId: [Int64: Int64],
+        categoryById: [Int64: CategoryDto],
+        accountById: [Int64: AccountDto]
+    ) -> some View {
+        let baseCur = store.settings.baseCurrency
+        let masked = store.settings.privacyMaskEnabled
+
+        return VStack(alignment: .leading, spacing: 6) {
+            // 日期分组头位于白卡外部上方
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text(group.dateText)
+                    .font(.footnote.weight(.semibold))
+                    .foregroundColor(palette.textPrimary)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+
+                if !group.subText.isEmpty {
+                    Text(group.subText)
+                        .font(.caption)
+                        .foregroundColor(palette.textSecondary)
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
+                }
+
                 Spacer(minLength: 6)
+
                 HStack(spacing: 10) {
-                    if group.expenseMicros > 0 {
-                        Text("支 \(YubraeTheme.masked(MoneyAmount.format(group.expenseMicros, currencyCode: baseCur), isMasked: masked))")
-                            .font(.caption2.monospacedDigit())
-                            .foregroundColor(palette.textTertiary)
+                    if group.incomeMicros > 0 {
+                        let incStr = YubraeTheme.masked(
+                            YubraeTheme.formatPlainSignedAmount(
+                                group.incomeMicros,
+                                currencyCode: baseCur,
+                                baseCurrency: baseCur,
+                                showSign: false
+                            ),
+                            isMasked: masked
+                        )
+                        Text("收 \(incStr)")
+                            .font(.caption.monospacedDigit())
+                            .foregroundColor(palette.textSecondary)
                             .lineLimit(1)
                             .fixedSize(horizontal: true, vertical: false)
                     }
-                    if group.incomeMicros > 0 {
-                        Text("收 \(YubraeTheme.masked(MoneyAmount.format(group.incomeMicros, currencyCode: baseCur), isMasked: masked))")
-                            .font(.caption2.monospacedDigit())
-                            .foregroundColor(palette.textTertiary)
+                    if group.expenseMicros > 0 {
+                        let expStr = YubraeTheme.masked(
+                            YubraeTheme.formatPlainSignedAmount(
+                                group.expenseMicros,
+                                currencyCode: baseCur,
+                                baseCurrency: baseCur,
+                                showSign: false
+                            ),
+                            isMasked: masked
+                        )
+                        Text("支 \(expStr)")
+                            .font(.caption.monospacedDigit())
+                            .foregroundColor(palette.textSecondary)
                             .lineLimit(1)
                             .fixedSize(horizontal: true, vertical: false)
                     }
@@ -614,233 +787,77 @@ public struct TransactionsView: View {
             }
             .padding(.horizontal, 4)
 
-            YubraeCard(palette: palette, padding: 0) {
+            YubraeCard(palette: palette, padding: 0, cornerRadius: 14) {
                 VStack(spacing: 0) {
                     ForEach(group.items) { tx in
-                        transactionRow(tx)
-                            .contentShape(Rectangle())
-                            .onTapGesture {
+                        let cat = tx.categoryId.flatMap { categoryById[$0] }
+                        let parentCat = cat?.parentId.flatMap { categoryById[$0] }
+                        let acc = accountById[tx.accountId]
+                        let toAcc = tx.toAccountId.flatMap { accountById[$0] }
+
+                        TransactionRowView(
+                            tx: tx,
+                            category: cat,
+                            parentCategory: parentCat,
+                            account: acc,
+                            toAccount: toAcc,
+                            refundedMicros: refundedByOrigId[tx.id] ?? 0,
+                            baseCurrency: baseCur,
+                            isMasked: masked,
+                            palette: palette
+                        )
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            onOpenQuickRecord(tx)
+                        }
+                        .contextMenu {
+                            Button {
                                 onOpenQuickRecord(tx)
+                            } label: {
+                                Label("编辑账单", systemImage: "pencil")
                             }
-                            .contextMenu {
+                            if tx.status == TransactionStatus.PENDING {
                                 Button {
-                                    onOpenQuickRecord(tx)
+                                    try? store.confirmTransaction(id: tx.id)
+                                    store.toastMessage = "已确认该笔账单"
                                 } label: {
-                                    Label("编辑账单", systemImage: "pencil")
+                                    Label("确认入账", systemImage: "checkmark.circle")
                                 }
-                                if tx.status == TransactionStatus.PENDING {
-                                    Button {
-                                        try? store.confirmTransaction(id: tx.id)
-                                        store.toastMessage = "已确认该笔账单"
-                                    } label: {
-                                        Label("确认入账", systemImage: "checkmark.circle")
-                                    }
-                                }
-                                if tx.reimburseStatus == ReimburseStatus.PENDING, let defaultAcc = store.activeAccounts.first {
-                                    Button {
-                                        do {
-                                            _ = try store.settleReimbursements(txIds: [tx.id], targetAccountId: defaultAcc.id)
-                                            store.toastMessage = "报销已核销至「\(defaultAcc.name)」"
-                                        } catch {
-                                            store.lastErrorMessage = error.localizedDescription
-                                        }
-                                    } label: {
-                                        Label("一键核销报销", systemImage: "arrow.uturn.backward.circle")
-                                    }
-                                }
-                                Button(role: .destructive) {
+                            }
+                            if tx.reimburseStatus == ReimburseStatus.PENDING, let defaultAcc = store.activeAccounts.first {
+                                Button {
                                     do {
-                                        try store.deleteTransaction(id: tx.id)
-                                        store.toastMessage = "已删除账单"
+                                        _ = try store.settleReimbursements(txIds: [tx.id], targetAccountId: defaultAcc.id)
+                                        store.toastMessage = "报销已核销至「\(defaultAcc.name)」"
                                     } catch {
                                         store.lastErrorMessage = error.localizedDescription
                                     }
                                 } label: {
-                                    Label("删除", systemImage: "trash")
+                                    Label("一键核销报销", systemImage: "arrow.uturn.backward.circle")
                                 }
                             }
+                            Button(role: .destructive) {
+                                do {
+                                    try store.deleteTransaction(id: tx.id)
+                                    store.toastMessage = "已删除账单"
+                                } catch {
+                                    store.lastErrorMessage = error.localizedDescription
+                                }
+                            } label: {
+                                Label("删除", systemImage: "trash")
+                            }
+                        }
+
                         if tx.id != group.items.last?.id {
-                            Divider()
-                                .padding(.leading, 64)
+                            Rectangle()
+                                .fill(palette.outline.opacity(0.75))
+                                .frame(height: 0.5)
+                                .padding(.leading, 58)
                         }
                     }
                 }
             }
         }
-    }
-
-    private func transactionRow(_ tx: TransactionDto) -> some View {
-        let cat = store.category(byId: tx.categoryId)
-        let acc = store.account(byId: tx.accountId)
-        let toAcc = tx.toAccountId.flatMap { store.account(byId: $0) }
-        let masked = store.settings.privacyMaskEnabled
-
-        let iconKey: String
-        let iconColor: Int64
-        let primaryTitle: String
-
-        switch tx.type {
-        case TransactionType.TRANSFER:
-            iconKey = "currency_exchange"
-            iconColor = 0xFF2563EB
-            let route = "\(acc?.name ?? "账户") → \(toAcc?.name ?? "目标账户")"
-            primaryTitle = tx.merchant.isEmpty ? route : tx.merchant
-        case TransactionType.ADJUST:
-            iconKey = "calculate"
-            iconColor = 0xFF64748B
-            primaryTitle = tx.merchant.isEmpty ? "余额校准" : tx.merchant
-        default:
-            iconKey = cat?.icon ?? "category"
-            iconColor = cat?.colorHex ?? 0xFF2AA876
-            primaryTitle = tx.merchant.isEmpty ? (cat?.name ?? "未分类") : tx.merchant
-        }
-
-        let amountSignPrefix: String
-        let amountColor: Color
-        switch tx.type {
-        case TransactionType.EXPENSE:
-            amountSignPrefix = "-"
-            amountColor = palette.expenseColor
-        case TransactionType.INCOME:
-            amountSignPrefix = "+"
-            amountColor = palette.incomeColor
-        case TransactionType.TRANSFER:
-            amountSignPrefix = ""
-            amountColor = palette.transferColor
-        default:
-            amountSignPrefix = tx.origAmountMicros >= 0 ? "+" : ""
-            amountColor = palette.textSecondary
-        }
-
-        let formattedOrig = amountSignPrefix + MoneyAmount.format(tx.origAmountMicros, currencyCode: tx.origCurrency, showCurrencyCode: true)
-        let txTags = TagTextCodec.parse(tx.tags)
-
-        return HStack(spacing: 12) {
-            YubraeCategoryIconBadge(iconKey: iconKey, colorHex: iconColor, size: 40)
-
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 6) {
-                    Text(primaryTitle)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundColor(palette.textPrimary)
-                        .lineLimit(1)
-                    if tx.status == TransactionStatus.PENDING {
-                        badgeTag("待确认", color: palette.warningColor)
-                    }
-                    if tx.reimburseStatus == ReimburseStatus.PENDING {
-                        badgeTag("待报销", color: palette.transferColor)
-                    }
-                }
-
-                HStack(spacing: 6) {
-                    Text(YubraeTheme.formatDate(tx.timestamp, pattern: "HH:mm"))
-                        .lineLimit(1)
-                        .fixedSize(horizontal: true, vertical: false)
-                    if let acc {
-                        Text("· \(acc.name)")
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                    }
-                    if let cat, !tx.merchant.isEmpty {
-                        Text("· \(cat.name)")
-                            .lineLimit(1)
-                            .truncationMode(.tail)
-                    }
-                }
-                .font(.caption)
-                .foregroundColor(palette.textSecondary)
-                .lineLimit(1)
-
-                if tx.discountAmountMicros > 0 || tx.feeAmountMicros > 0 {
-                    HStack(spacing: 5) {
-                        if tx.discountAmountMicros > 0 {
-                            let discStr = YubraeTheme.masked(
-                                MoneyAmount.format(tx.discountAmountMicros, currencyCode: tx.origCurrency),
-                                isMasked: masked
-                            )
-                            badgeTag("惠 \(discStr)", color: palette.incomeColor)
-                        }
-                        if tx.feeAmountMicros > 0 {
-                            let feeStr = YubraeTheme.masked(
-                                MoneyAmount.format(tx.feeAmountMicros, currencyCode: tx.origCurrency),
-                                isMasked: masked
-                            )
-                            badgeTag("费 \(feeStr)", color: palette.warningColor)
-                        }
-                    }
-                }
-
-                if !tx.note.isEmpty || !txTags.isEmpty {
-                    HStack(spacing: 4) {
-                        ForEach(txTags.prefix(2), id: \.self) { t in
-                            Text("#\(t)")
-                                .font(.caption2)
-                                .foregroundColor(palette.primary)
-                                .lineLimit(1)
-                        }
-                        if !tx.note.isEmpty {
-                            Text(tx.note)
-                                .font(.caption2)
-                                .foregroundColor(palette.textTertiary)
-                                .lineLimit(1)
-                        }
-                    }
-                }
-            }
-
-            Spacer(minLength: 6)
-
-            VStack(alignment: .trailing, spacing: 2) {
-                Text(YubraeTheme.masked(formattedOrig, isMasked: masked))
-                    .font(.subheadline.weight(.bold).monospacedDigit())
-                    .foregroundColor(amountColor)
-                    .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
-                if tx.type == TransactionType.TRANSFER, let toAmt = tx.toAmountMicros {
-                    let toCur = CurrencyCatalog.normalize(tx.toCurrency ?? tx.origCurrency)
-                    let origCur = CurrencyCatalog.normalize(tx.origCurrency)
-                    if tx.discountAmountMicros > 0 || tx.feeAmountMicros > 0 || toCur != origCur || toAmt != tx.origAmountMicros {
-                        let toFmt = MoneyAmount.format(toAmt, currencyCode: toCur, showCurrencyCode: true)
-                        Text("到账 \(YubraeTheme.masked(toFmt, isMasked: masked))")
-                            .font(.caption2.monospacedDigit())
-                            .foregroundColor(palette.textSecondary)
-                            .lineLimit(1)
-                            .fixedSize(horizontal: true, vertical: false)
-                    }
-                } else if tx.origCurrency != tx.accountCurrency {
-                    let accFmt = MoneyAmount.format(tx.accountAmountMicros, currencyCode: tx.accountCurrency, showCurrencyCode: true)
-                    Text("实扣 \(YubraeTheme.masked(accFmt, isMasked: masked))")
-                        .font(.caption2.monospacedDigit())
-                        .foregroundColor(palette.textTertiary)
-                        .lineLimit(1)
-                        .fixedSize(horizontal: true, vertical: false)
-                } else if tx.type == TransactionType.EXPENSE && tx.discountAmountMicros > 0 {
-                    let nominalMicros = tx.origAmountMicros + tx.discountAmountMicros - tx.feeAmountMicros
-                    if nominalMicros > 0 && nominalMicros != tx.origAmountMicros {
-                        let nomFmt = MoneyAmount.format(nominalMicros, currencyCode: tx.origCurrency, showCurrencyCode: true)
-                        Text("原价 \(YubraeTheme.masked(nomFmt, isMasked: masked))")
-                            .font(.caption2.monospacedDigit())
-                            .foregroundColor(palette.textTertiary)
-                            .lineLimit(1)
-                            .fixedSize(horizontal: true, vertical: false)
-                    }
-                }
-            }
-            .layoutPriority(1)
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 12)
-    }
-
-    private func badgeTag(_ text: String, color: Color) -> some View {
-        Text(text)
-            .font(.system(size: 10, weight: .semibold).monospacedDigit())
-            .foregroundColor(color)
-            .lineLimit(1)
-            .fixedSize(horizontal: true, vertical: false)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(Capsule().fill(color.opacity(0.14)))
     }
 
     // MARK: - Helpers

@@ -102,52 +102,42 @@ public struct RootTabView: View {
 
     public var body: some View {
         ZStack(alignment: .top) {
-            ZStack(alignment: .bottomTrailing) {
-                TabView(selection: $selectedTab) {
-                    TransactionsView(
-                        store: store,
-                        onOpenQuickRecord: { tx in
-                            quickRecordContext = QuickRecordContext(editingTransaction: tx)
-                        },
-                        onOpenSmartInput: {
-                            smartInputLaunch = SmartInputLaunchRequest(initialMode: .text)
+            TabView(selection: $selectedTab) {
+                TransactionsView(
+                    store: store,
+                    onOpenQuickRecord: { tx in
+                        quickRecordContext = QuickRecordContext(editingTransaction: tx)
+                    },
+                    onOpenSmartInput: {
+                        smartInputLaunch = SmartInputLaunchRequest(initialMode: .text)
+                    }
+                )
+                .tag(YubraeTab.transactions)
+
+                AssetsView(store: store)
+                    .tag(YubraeTab.assets)
+
+                StatsView(store: store)
+                    .tag(YubraeTab.stats)
+
+                MineView(
+                    store: store,
+                    availableUpdate: availableUpdate,
+                    isCheckingUpdate: isCheckingUpdate,
+                    onCheckUpdate: {
+                        Task { await performUpdateCheck(manual: true) }
+                    },
+                    onPresentUpdateSheet: {
+                        if availableUpdate != nil {
+                            showUpdateSheet = true
                         }
-                    )
-                    .tag(YubraeTab.transactions)
-
-                    AssetsView(store: store)
-                        .tag(YubraeTab.assets)
-
-                    StatsView(store: store)
-                        .tag(YubraeTab.stats)
-
-                    MineView(
-                        store: store,
-                        availableUpdate: availableUpdate,
-                        isCheckingUpdate: isCheckingUpdate,
-                        onCheckUpdate: {
-                            Task { await performUpdateCheck(manual: true) }
-                        },
-                        onPresentUpdateSheet: {
-                            if availableUpdate != nil {
-                                showUpdateSheet = true
-                            }
-                        }
-                    )
-                    .tag(YubraeTab.mine)
-                }
-                .tabViewStyle(.page(indexDisplayMode: .never))
-                .tint(palette.primary)
-                .background(palette.background.ignoresSafeArea())
-
-                // 仅在明细页保留精致 AI 速记悬浮圆钮（避开底栏高度，不与中央 + 按钮冲突）
-                if selectedTab == .transactions {
-                    floatingAiButton
-                        .padding(.trailing, 18)
-                        .padding(.bottom, 16)
-                        .transition(.scale(scale: 0.85).combined(with: .opacity))
-                }
+                    }
+                )
+                .tag(YubraeTab.mine)
             }
+            .tabViewStyle(.page(indexDisplayMode: .never))
+            .tint(palette.primary)
+            .background(palette.background.ignoresSafeArea())
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 yubraeBottomTabBar
             }
@@ -236,7 +226,7 @@ public struct RootTabView: View {
         }
     }
 
-    // MARK: - Bottom Tab Bar & Floating AI Button
+    // MARK: - Bottom Tab Bar
 
     private var yubraeBottomTabBar: some View {
         VStack(spacing: 0) {
@@ -364,31 +354,6 @@ public struct RootTabView: View {
         .accessibilityLabel("记一笔")
         .accessibilityHint("轻点手动记一笔，长按触发 AI 智能记账")
         .accessibilityAddTraits(.isButton)
-    }
-
-    private var floatingAiButton: some View {
-        Button {
-            triggerImpactFeedback(.light)
-            smartInputLaunch = SmartInputLaunchRequest(initialMode: .text)
-        } label: {
-            Image(systemName: "sparkles")
-                .font(.system(size: 17, weight: .semibold))
-                .foregroundColor(palette.onPrimary)
-                .frame(width: 48, height: 48)
-                .background(
-                    Circle()
-                        .fill(
-                            LinearGradient(
-                                colors: [palette.primary, palette.primary.opacity(0.86)],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            )
-                        )
-                        .shadow(color: palette.primary.opacity(0.30), radius: 10, x: 0, y: 5)
-                )
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("AI 智能记账")
     }
 
     private func triggerImpactFeedback(_ style: UIImpactFeedbackGenerator.FeedbackStyle) {

@@ -130,8 +130,96 @@ data class TransactionsUiState(
     val monthDiscountBaseMicros: Long = 0L,
     val monthFeeBaseMicros: Long = 0L,
     val monthDiscountCount: Int = 0,
-    val monthFeeCount: Int = 0
+    val monthFeeCount: Int = 0,
+    val refundedAmountByOrigTxId: Map<Long, Long> = emptyMap()
 )
+
+internal fun resolveExchangeRateFromList(
+    fromCurrency: String,
+    toCurrency: String,
+    rates: List<ExchangeRateEntity>
+): Long {
+    val from = LedgerAnalytics.normalizeCurrency(fromCurrency)
+    val to = LedgerAnalytics.normalizeCurrency(toCurrency)
+    if (from == to) return MoneyAmount.RATE_SCALE
+
+    val direct = rates
+        .filter { it.baseCurrency.equals(from, true) && it.targetCurrency.equals(to, true) }
+        .maxByOrNull { it.date + "_" + it.updatedAt }
+    if (direct != null) return direct.rateMicros
+
+    val inverse = rates
+        .filter { it.baseCurrency.equals(to, true) && it.targetCurrency.equals(from, true) }
+        .maxByOrNull { it.date + "_" + it.updatedAt }
+    if (inverse != null) return MoneyAmount.invertRate(inverse.rateMicros)
+
+    val cny = CurrencyCatalog.DEFAULT_BASE_CURRENCY
+    val fromToCny = if (from == cny) MoneyAmount.RATE_SCALE else {
+        rates.filter { it.baseCurrency.equals(from, true) && it.targetCurrency.equals(cny, true) }
+            .maxByOrNull { it.date + "_" + it.updatedAt }?.rateMicros
+            ?: rates.filter { it.baseCurrency.equals(cny, true) && it.targetCurrency.equals(from, true) }
+                .maxByOrNull { it.date + "_" + it.updatedAt }?.let { MoneyAmount.invertRate(it.rateMicros) }
+            ?: CurrencyCatalog.find(from).fallbackRateToCnyMicros
+    }
+    val toToCny = if (to == cny) MoneyAmount.RATE_SCALE else {
+        rates.filter { it.baseCurrency.equals(to, true) && it.targetCurrency.equals(cny, true) }
+            .maxByOrNull { it.date + "_" + it.updatedAt }?.rateMicros
+            ?: rates.filter { it.baseCurrency.equals(cny, true) && it.targetCurrency.equals(to, true) }
+                .maxByOrNull { it.date + "_" + it.updatedAt }?.let { MoneyAmount.invertRate(it.rateMicros) }
+            ?: CurrencyCatalog.find(to).fallbackRateToCnyMicros
+    }
+    return MoneyAmount.crossRate(fromToCny, toToCny)
+}
+
+internal fun computeRefundedAmountByOrigTxId(
+    transactions: List<TransactionEntity>,
+    rates: List<ExchangeRateEntity>
+): Map<Long, Long> {
+    if (transactions.isEmpty()) return emptyMap()
+    val confirmedRefunds = transactions.filter { tx ->
+        tx.type == TransactionType.INCOME &&
+            tx.refundOfTxId != null &&
+            tx.status == TransactionStatus.CONFIRMED &&
+            tx.origAmountMicros > 0L
+    }
+    if (confirmedRefunds.isEmpty()) return emptyMap()
+
+    val targetIds = confirmedRefunds.mapNotNullTo(HashSet(confirmedRefunds.size)) { it.refundOfTxId }
+    val origCurrencyByTxId = HashMap<Long, String>(targetIds.size)
+    for (tx in transactions) {
+        if (tx.id in targetIds) {
+            origCurrencyByTxId[tx.id] = tx.origCurrency
+        }
+    }
+
+    val totals = HashMap<Long, Long>(targetIds.size)
+    val rateCache = HashMap<Pair<String, String>, Long>()
+    for (refundTx in confirmedRefunds) {
+        val origTxId = refundTx.refundOfTxId ?: continue
+        val refundOrigMicros = refundTx.origAmountMicros
+        val origCurrencyRaw = origCurrencyByTxId[origTxId]
+        val convertedMicros = if (origCurrencyRaw == null ||
+            refundTx.origCurrency.equals(origCurrencyRaw, ignoreCase = true)
+        ) {
+            refundOrigMicros
+        } else {
+            val from = LedgerAnalytics.normalizeCurrency(refundTx.origCurrency)
+            val to = LedgerAnalytics.normalizeCurrency(origCurrencyRaw)
+            if (from == to) {
+                refundOrigMicros
+            } else {
+                val rate = rateCache.getOrPut(from to to) {
+                    resolveExchangeRateFromList(from, to, rates)
+                }
+                MoneyAmount.convert(refundOrigMicros, rate)
+            }
+        }
+        if (convertedMicros > 0L) {
+            totals[origTxId] = (totals[origTxId] ?: 0L) + convertedMicros
+        }
+    }
+    return totals
+}
 
 internal fun matchesTransactionSearchQuery(
     tx: TransactionEntity,
@@ -469,6 +557,8 @@ class KairoMainViewModel(
                 )
             }
 
+        val refundedAmountByOrigTxId = computeRefundedAmountByOrigTxId(transactions, rates)
+
         TransactionsUiState(
             filters = filters,
             baseCurrency = base,
@@ -482,7 +572,8 @@ class KairoMainViewModel(
             monthDiscountBaseMicros = monthDiscount,
             monthFeeBaseMicros = monthFee,
             monthDiscountCount = monthDiscountCount,
-            monthFeeCount = monthFeeCount
+            monthFeeCount = monthFeeCount,
+            refundedAmountByOrigTxId = refundedAmountByOrigTxId
         )
     }
         .flowOn(Dispatchers.Default)
@@ -2161,38 +2252,7 @@ class KairoMainViewModel(
         fromCurrency: String,
         toCurrency: String,
         rates: List<ExchangeRateEntity>
-    ): Long {
-        val from = fromCurrency.trim().uppercase()
-        val to = toCurrency.trim().uppercase()
-        if (from == to) return MoneyAmount.RATE_SCALE
-
-        val direct = rates
-            .filter { it.baseCurrency.equals(from, true) && it.targetCurrency.equals(to, true) }
-            .maxByOrNull { it.date + "_" + it.updatedAt }
-        if (direct != null) return direct.rateMicros
-
-        val inverse = rates
-            .filter { it.baseCurrency.equals(to, true) && it.targetCurrency.equals(from, true) }
-            .maxByOrNull { it.date + "_" + it.updatedAt }
-        if (inverse != null) return MoneyAmount.invertRate(inverse.rateMicros)
-
-        val cny = CurrencyCatalog.DEFAULT_BASE_CURRENCY
-        val fromToCny = if (from == cny) MoneyAmount.RATE_SCALE else {
-            rates.filter { it.baseCurrency.equals(from, true) && it.targetCurrency.equals(cny, true) }
-                .maxByOrNull { it.date + "_" + it.updatedAt }?.rateMicros
-                ?: rates.filter { it.baseCurrency.equals(cny, true) && it.targetCurrency.equals(from, true) }
-                    .maxByOrNull { it.date + "_" + it.updatedAt }?.let { MoneyAmount.invertRate(it.rateMicros) }
-                ?: CurrencyCatalog.find(from).fallbackRateToCnyMicros
-        }
-        val toToCny = if (to == cny) MoneyAmount.RATE_SCALE else {
-            rates.filter { it.baseCurrency.equals(to, true) && it.targetCurrency.equals(cny, true) }
-                .maxByOrNull { it.date + "_" + it.updatedAt }?.rateMicros
-                ?: rates.filter { it.baseCurrency.equals(cny, true) && it.targetCurrency.equals(to, true) }
-                    .maxByOrNull { it.date + "_" + it.updatedAt }?.let { MoneyAmount.invertRate(it.rateMicros) }
-                ?: CurrencyCatalog.find(to).fallbackRateToCnyMicros
-        }
-        return MoneyAmount.crossRate(fromToCny, toToCny)
-    }
+    ): Long = resolveExchangeRateFromList(fromCurrency, toCurrency, rates)
 
     // --- In-App Update actions ---
     fun openUpdateDialog(triggerCheckIfIdle: Boolean = true) {

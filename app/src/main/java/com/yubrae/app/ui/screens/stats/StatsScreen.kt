@@ -26,8 +26,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -42,6 +42,7 @@ import androidx.compose.material.icons.automirrored.rounded.MenuBook
 import androidx.compose.material.icons.automirrored.rounded.TrendingUp
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.ArrowDropDown
+import androidx.compose.material.icons.rounded.AttachFile
 import androidx.compose.material.icons.rounded.CalendarMonth
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Edit
@@ -112,7 +113,6 @@ import com.yubrae.app.core.model.CurrencyCatalog
 import com.yubrae.app.core.model.MoneyAmount
 import com.yubrae.app.data.db.AccountEntity
 import com.yubrae.app.data.db.BudgetEntity
-import com.yubrae.app.data.db.CaptureChannel
 import com.yubrae.app.data.db.CategoryEntity
 import com.yubrae.app.data.db.ExchangeRateEntity
 import com.yubrae.app.data.db.LedgerEntity
@@ -126,10 +126,8 @@ import com.yubrae.app.domain.LedgerAnalytics
 import com.yubrae.app.ui.components.AutoResizeAmountText
 import com.yubrae.app.ui.components.CartoonCategoryIcon
 import com.yubrae.app.ui.components.CategoryIconBadge
-import com.yubrae.app.ui.components.ChannelChip
 import com.yubrae.app.ui.components.CompactHairlineDivider
 import com.yubrae.app.ui.components.ConfirmActionDialog
-import com.yubrae.app.ui.components.CurrencyBadge
 import com.yubrae.app.ui.components.CurrencyPickerDialog
 import com.yubrae.app.ui.components.EmptyStateCard
 import com.yubrae.app.ui.components.KairoFormats
@@ -185,6 +183,8 @@ private data class NetWorthChartBounds(
 )
 
 private val StatsYearMonthFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("yyyy年M月")
+private val StatsDrillDownTimeFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("M/d HH:mm")
+private val StatsDrillDownYearTimeFormatter: DateTimeFormatter = DateTimeFormatter.ofPattern("yy/M/d HH:mm")
 private val StatsTypeOptions = listOf(
     TransactionType.EXPENSE to "支出",
     TransactionType.INCOME to "收入"
@@ -194,6 +194,11 @@ private val ChartZeroLineDashEffect: PathEffect = PathEffect.dashPathEffect(floa
 private val StatsTopBarBottomShape = RoundedCornerShape(bottomStart = 18.dp, bottomEnd = 18.dp)
 private val StatsProgressBarShape = RoundedCornerShape(4.dp)
 private val StatsBadgeShape = RoundedCornerShape(5.dp)
+private val StatsInlineTagShape = RoundedCornerShape(4.dp)
+private val StatsDrillDownSingleShape = RoundedCornerShape(14.dp)
+private val StatsDrillDownTopShape = RoundedCornerShape(topStart = 14.dp, topEnd = 14.dp)
+private val StatsDrillDownBottomShape = RoundedCornerShape(bottomStart = 14.dp, bottomEnd = 14.dp)
+private val StatsDrillDownMiddleShape = RoundedCornerShape(0.dp)
 private val StatsSummaryCardShape = RoundedCornerShape(10.dp)
 private val StatsDiscountTileShape = RoundedCornerShape(12.dp)
 
@@ -1881,7 +1886,7 @@ private fun CategoryBreakdownCard(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun CategoryDrillDownBottomSheet(
     stat: CategoryStat,
@@ -1896,7 +1901,6 @@ private fun CategoryDrillDownBottomSheet(
     onDismiss: () -> Unit
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    val semantic = KairoTheme.semantic
 
     ModalBottomSheet(
         onDismissRequest = onDismiss,
@@ -1979,7 +1983,10 @@ private fun CategoryDrillDownBottomSheet(
                 }
             }
 
-            HorizontalDivider()
+            HorizontalDivider(
+                thickness = 0.5.dp,
+                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)
+            )
 
             if (transactions.isEmpty()) {
                 EmptyStateCard(
@@ -1991,172 +1998,46 @@ private fun CategoryDrillDownBottomSheet(
                     modifier = Modifier
                         .fillMaxWidth()
                         .heightIn(max = 440.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                    verticalArrangement = Arrangement.spacedBy(0.dp)
                 ) {
-                    items(
+                    itemsIndexed(
                         items = transactions,
-                        key = { it.id },
-                        contentType = { "category_drilldown_tx" }
-                    ) { tx ->
+                        key = { _, tx -> tx.id },
+                        contentType = { _, _ -> "category_drilldown_tx" }
+                    ) { index, tx ->
                         val isRefund = tx.type == TransactionType.INCOME && tx.refundOfTxId != null
-                        val accountName = accountMap[tx.accountId]?.name ?: "账户 #${tx.accountId}"
-                        val title = tx.merchant.ifBlank {
-                            tx.note.ifBlank { stat.categoryName }
-                        }
-                        val amountColor = when {
-                            isRefund -> semantic.income
-                            tx.type == TransactionType.INCOME -> semantic.income
-                            else -> semantic.expense
-                        }
-                        val prefix = if (isRefund || tx.type == TransactionType.INCOME) "+" else "-"
-                        val rawOrig = MoneyAmount.format(
-                            tx.origAmountMicros,
-                            tx.origCurrency,
-                            showCurrencyCode = true
-                        )
-                        val showBaseApprox = !tx.origCurrency.equals(displayCurrency, ignoreCase = true)
-                        val baseApproxMicros = if (showBaseApprox) {
-                            convertFrozenBaseAmount(tx, displayCurrency, rates)
-                        } else {
-                            0L
-                        }
                         val cleanedNote = remember(tx.note) { KairoFormats.cleanListRowNote(tx.note) }
-                        val txTags = remember(tx.tags) { TagTextCodec.parse(tx.tags) }
-
-                        YimuCard(
-                            containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
-                            cornerRadius = 14.dp,
-                            onClick = { onEditTransaction(tx) }
-                        ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 12.dp, vertical = 10.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                CategoryIconBadge(
-                                    iconKey = stat.icon,
-                                    colorHex = stat.colorHex,
-                                    size = 36.dp,
-                                    iconSize = 18.dp
-                                )
-                                Spacer(modifier = Modifier.width(10.dp))
-                                Column(
-                                    modifier = Modifier.weight(1f),
-                                    verticalArrangement = Arrangement.spacedBy(3.dp)
-                                ) {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                                    ) {
-                                        Text(
-                                            text = title,
-                                            style = MaterialTheme.typography.titleSmall,
-                                            fontWeight = FontWeight.SemiBold,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis,
-                                            modifier = Modifier.weight(1f, fill = false)
-                                        )
-                                        if (isRefund) {
-                                            Surface(
-                                                shape = RoundedCornerShape(6.dp),
-                                                color = semantic.incomeContainer
-                                            ) {
-                                                Text(
-                                                    text = "退款冲减",
-                                                    style = MaterialTheme.typography.labelSmall,
-                                                    color = semantic.income,
-                                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp)
-                                                )
-                                            }
-                                        }
-                                    }
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                                    ) {
-                                        Text(
-                                            text = "$accountName · ${KairoFormats.formatDateTime(tx.timestamp)}",
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis,
-                                            modifier = Modifier.weight(1f, fill = false)
-                                        )
-                                        if (tx.sourceType.isNotBlank() && tx.sourceType != CaptureChannel.MANUAL) {
-                                            ChannelChip(channel = tx.sourceType)
-                                        }
-                                    }
-                                    if (cleanedNote.isNotBlank() && cleanedNote != title) {
-                                        Text(
-                                            text = cleanedNote,
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                    }
-                                    if (tx.discountAmountMicros > 0L || tx.feeAmountMicros > 0L || txTags.isNotEmpty()) {
-                                        FlowRow(
-                                            horizontalArrangement = Arrangement.spacedBy(4.dp),
-                                            verticalArrangement = Arrangement.spacedBy(3.dp)
-                                        ) {
-                                            if (tx.discountAmountMicros > 0L) {
-                                                val discountText = formatPrivacyAmount(
-                                                    privacyMasked,
-                                                    MoneyAmount.format(tx.discountAmountMicros, tx.origCurrency)
-                                                )
-                                                StatsTxDiscountFeeBadge(
-                                                    text = "惠 $discountText",
-                                                    containerColor = semantic.incomeContainer,
-                                                    contentColor = semantic.income
-                                                )
-                                            }
-                                            if (tx.feeAmountMicros > 0L) {
-                                                val feeText = formatPrivacyAmount(
-                                                    privacyMasked,
-                                                    MoneyAmount.format(tx.feeAmountMicros, tx.origCurrency)
-                                                )
-                                                StatsTxDiscountFeeBadge(
-                                                    text = "费 $feeText",
-                                                    containerColor = semantic.warningContainer,
-                                                    contentColor = semantic.warning
-                                                )
-                                            }
-                                            txTags.take(2).forEach { tagName ->
-                                                val tagEntity = tagMap[tagName]
-                                                TagBadgeChip(
-                                                    name = tagName,
-                                                    colorHex = tagEntity?.colorHex ?: KairoIcons.fallbackTagColorHex(tagName),
-                                                    compact = true,
-                                                    iconKey = tagEntity?.icon.orEmpty()
-                                                )
-                                            }
-                                        }
-                                    }
-                                }
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Column(horizontalAlignment = Alignment.End) {
-                                    Text(
-                                        text = if (privacyMasked) "****" else "$prefix$rawOrig",
-                                        style = MaterialTheme.typography.titleSmall.tabular(),
-                                        fontWeight = FontWeight.Bold,
-                                        color = amountColor
-                                    )
-                                    if (showBaseApprox) {
-                                        Text(
-                                            text = if (privacyMasked) {
-                                                "****"
-                                            } else {
-                                                "≈ ${MoneyAmount.format(baseApproxMicros, displayCurrency)}"
-                                            },
-                                            style = MaterialTheme.typography.labelSmall.tabular(),
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    }
-                                }
+                        val title = remember(tx.merchant, cleanedNote, stat.categoryName) {
+                            tx.merchant.trim().ifBlank {
+                                cleanedNote.ifBlank { stat.categoryName }
                             }
                         }
+                        val detailNote = remember(cleanedNote, title) {
+                            if (cleanedNote.isNotBlank() && !cleanedNote.equals(title, ignoreCase = true)) {
+                                cleanedNote
+                            } else {
+                                ""
+                            }
+                        }
+                        val txTags = remember(tx.tags) { TagTextCodec.parse(tx.tags) }
+
+                        StatsDrillDownTransactionRow(
+                            tx = tx,
+                            title = title,
+                            detailNote = detailNote,
+                            iconKey = stat.icon,
+                            iconColorHex = stat.colorHex,
+                            isRefund = isRefund,
+                            inlineTags = txTags.take(2),
+                            account = accountMap[tx.accountId],
+                            tagMap = tagMap,
+                            displayCurrency = displayCurrency,
+                            rates = rates,
+                            privacyMasked = privacyMasked,
+                            isFirst = index == 0,
+                            isLast = index == transactions.lastIndex,
+                            onClick = { onEditTransaction(tx) }
+                        )
                     }
                 }
             }
@@ -3531,7 +3412,7 @@ private fun TagBreakdownCard(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun TagDrillDownBottomSheet(
     stat: TagStat,
@@ -3547,7 +3428,6 @@ private fun TagDrillDownBottomSheet(
     onDismiss: () -> Unit
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
-    val semantic = KairoTheme.semantic
     val tagColor = Color(stat.colorHex)
     val tagIconKey = tagMap[stat.tagName]?.icon.orEmpty()
 
@@ -3648,7 +3528,10 @@ private fun TagDrillDownBottomSheet(
                 }
             }
 
-            HorizontalDivider()
+            HorizontalDivider(
+                thickness = 0.5.dp,
+                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)
+            )
 
             if (transactions.isEmpty()) {
                 EmptyStateCard(
@@ -3660,153 +3543,330 @@ private fun TagDrillDownBottomSheet(
                     modifier = Modifier
                         .fillMaxWidth()
                         .heightIn(max = 440.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                    verticalArrangement = Arrangement.spacedBy(0.dp)
                 ) {
-                    items(
+                    itemsIndexed(
                         items = transactions,
-                        key = { it.id },
-                        contentType = { "tag_drilldown_tx" }
-                    ) { tx ->
+                        key = { _, tx -> tx.id },
+                        contentType = { _, _ -> "tag_drilldown_tx" }
+                    ) { index, tx ->
                         val cat = tx.categoryId?.let { categoryMap[it] }
-                        val accountName = accountMap[tx.accountId]?.name ?: "账户 #${tx.accountId}"
-                        val title = tx.merchant.ifBlank {
-                            cat?.name ?: tx.note.ifBlank { "#${stat.tagName}" }
-                        }
-                        val amountColor = if (tx.type == TransactionType.INCOME) semantic.income else semantic.expense
-                        val prefix = if (tx.type == TransactionType.INCOME) "+" else "-"
-                        val rawOrig = MoneyAmount.format(
-                            tx.origAmountMicros,
-                            tx.origCurrency,
-                            showCurrencyCode = true
-                        )
-                        val showBaseApprox = !tx.origCurrency.equals(displayCurrency, ignoreCase = true)
-                        val baseApproxMicros = if (showBaseApprox) {
-                            convertFrozenBaseAmount(tx, displayCurrency, rates)
-                        } else {
-                            0L
-                        }
-                        val cleanedNote = remember(tx.note) { KairoFormats.cleanListRowNote(tx.note) }
-                        val txTags = remember(tx.tags) { TagTextCodec.parse(tx.tags) }
-
-                        YimuCard(
-                            containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
-                            cornerRadius = 14.dp,
-                            onClick = { onEditTransaction(tx) }
-                        ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 12.dp, vertical = 10.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                CategoryIconBadge(
-                                    iconKey = cat?.icon ?: "label",
-                                    colorHex = cat?.colorHex ?: stat.colorHex,
-                                    size = 36.dp,
-                                    iconSize = 18.dp
-                                )
-                                Spacer(modifier = Modifier.width(10.dp))
-                                Column(
-                                    modifier = Modifier.weight(1f),
-                                    verticalArrangement = Arrangement.spacedBy(3.dp)
-                                ) {
-                                    Text(
-                                        text = title,
-                                        style = MaterialTheme.typography.titleSmall,
-                                        fontWeight = FontWeight.SemiBold,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                                    ) {
-                                        Text(
-                                            text = "$accountName · ${KairoFormats.formatDateTime(tx.timestamp)}",
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis,
-                                            modifier = Modifier.weight(1f, fill = false)
-                                        )
-                                        if (tx.sourceType.isNotBlank() && tx.sourceType != CaptureChannel.MANUAL) {
-                                            ChannelChip(channel = tx.sourceType)
-                                        }
-                                    }
-                                    if (cleanedNote.isNotBlank() && cleanedNote != title) {
-                                        Text(
-                                            text = cleanedNote,
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis
-                                        )
-                                    }
-                                    if (tx.discountAmountMicros > 0L || tx.feeAmountMicros > 0L || txTags.isNotEmpty()) {
-                                        FlowRow(
-                                            horizontalArrangement = Arrangement.spacedBy(4.dp),
-                                            verticalArrangement = Arrangement.spacedBy(3.dp)
-                                        ) {
-                                            if (tx.discountAmountMicros > 0L) {
-                                                val discountText = formatPrivacyAmount(
-                                                    privacyMasked,
-                                                    MoneyAmount.format(tx.discountAmountMicros, tx.origCurrency)
-                                                )
-                                                StatsTxDiscountFeeBadge(
-                                                    text = "惠 $discountText",
-                                                    containerColor = semantic.incomeContainer,
-                                                    contentColor = semantic.income
-                                                )
-                                            }
-                                            if (tx.feeAmountMicros > 0L) {
-                                                val feeText = formatPrivacyAmount(
-                                                    privacyMasked,
-                                                    MoneyAmount.format(tx.feeAmountMicros, tx.origCurrency)
-                                                )
-                                                StatsTxDiscountFeeBadge(
-                                                    text = "费 $feeText",
-                                                    containerColor = semantic.warningContainer,
-                                                    contentColor = semantic.warning
-                                                )
-                                            }
-                                            txTags.take(2).forEach { tagName ->
-                                                val tagEntity = tagMap[tagName]
-                                                TagBadgeChip(
-                                                    name = tagName,
-                                                    colorHex = tagEntity?.colorHex ?: KairoIcons.fallbackTagColorHex(tagName),
-                                                    compact = true,
-                                                    iconKey = tagEntity?.icon.orEmpty()
-                                                )
-                                            }
-                                        }
-                                    }
-                                }
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Column(horizontalAlignment = Alignment.End) {
-                                    Text(
-                                        text = if (privacyMasked) "****" else "$prefix$rawOrig",
-                                        style = MaterialTheme.typography.titleSmall.tabular(),
-                                        fontWeight = FontWeight.Bold,
-                                        color = amountColor
-                                    )
-                                    if (showBaseApprox) {
-                                        Text(
-                                            text = if (privacyMasked) {
-                                                "****"
-                                            } else {
-                                                "≈ ${MoneyAmount.format(baseApproxMicros, displayCurrency)}"
-                                            },
-                                            style = MaterialTheme.typography.labelSmall.tabular(),
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    }
-                                }
+                        val categoryDisplayName = remember(cat, categoryMap) {
+                            if (cat == null) {
+                                null
+                            } else {
+                                val parentName = cat.parentId?.let { categoryMap[it]?.name }?.takeIf { it.isNotBlank() }
+                                if (parentName != null && parentName != cat.name) "$parentName-${cat.name}" else cat.name
                             }
                         }
+                        val cleanedNote = remember(tx.note) { KairoFormats.cleanListRowNote(tx.note) }
+                        val title = remember(categoryDisplayName, tx.merchant, cleanedNote, stat.tagName) {
+                            categoryDisplayName
+                                ?: tx.merchant.trim().ifBlank { cleanedNote.ifBlank { "#${stat.tagName}" } }
+                        }
+                        val detailNote = remember(tx.merchant, cleanedNote, title) {
+                            buildList {
+                                val merchantTrimmed = tx.merchant.trim()
+                                if (merchantTrimmed.isNotEmpty() && !merchantTrimmed.equals(title, ignoreCase = true)) {
+                                    add(merchantTrimmed)
+                                }
+                                val noteTrimmed = cleanedNote.trim()
+                                if (noteTrimmed.isNotEmpty() &&
+                                    !noteTrimmed.equals(title, ignoreCase = true) &&
+                                    none { it.equals(noteTrimmed, ignoreCase = true) }
+                                ) {
+                                    add(noteTrimmed)
+                                }
+                            }.joinToString(" · ")
+                        }
+                        val otherTags = remember(tx.tags, stat.tagName) {
+                            TagTextCodec.parse(tx.tags)
+                                .filterNot { it.equals(stat.tagName, ignoreCase = true) }
+                                .take(2)
+                        }
+
+                        StatsDrillDownTransactionRow(
+                            tx = tx,
+                            title = title,
+                            detailNote = detailNote,
+                            iconKey = cat?.icon ?: "label",
+                            iconColorHex = cat?.colorHex ?: stat.colorHex,
+                            isRefund = tx.type == TransactionType.INCOME && tx.refundOfTxId != null,
+                            inlineTags = otherTags,
+                            account = accountMap[tx.accountId],
+                            tagMap = tagMap,
+                            displayCurrency = displayCurrency,
+                            rates = rates,
+                            privacyMasked = privacyMasked,
+                            isFirst = index == 0,
+                            isLast = index == transactions.lastIndex,
+                            onClick = { onEditTransaction(tx) }
+                        )
                     }
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun StatsDrillDownTransactionRow(
+    tx: TransactionEntity,
+    title: String,
+    detailNote: String,
+    iconKey: String,
+    iconColorHex: Long,
+    isRefund: Boolean,
+    inlineTags: List<String>,
+    account: AccountEntity?,
+    tagMap: Map<String, TagEntity>,
+    displayCurrency: String,
+    rates: List<ExchangeRateEntity>,
+    privacyMasked: Boolean,
+    isFirst: Boolean,
+    isLast: Boolean,
+    onClick: () -> Unit
+) {
+    val semantic = KairoTheme.semantic
+    val shape = when {
+        isFirst && isLast -> StatsDrillDownSingleShape
+        isFirst -> StatsDrillDownTopShape
+        isLast -> StatsDrillDownBottomShape
+        else -> StatsDrillDownMiddleShape
+    }
+    val accountName = account?.name ?: "账户 #${tx.accountId}"
+    val amountColor = if (isRefund || tx.type == TransactionType.INCOME) semantic.income else semantic.expense
+    val absOrigMicros = kotlin.math.abs(tx.origAmountMicros)
+    val signedOrigMicros = if (isRefund || tx.type == TransactionType.INCOME) absOrigMicros else -absOrigMicros
+    val showBaseApprox = !tx.origCurrency.equals(displayCurrency, ignoreCase = true)
+    val baseApproxMicros = remember(tx, displayCurrency, rates, showBaseApprox) {
+        if (showBaseApprox) convertFrozenBaseAmount(tx, displayCurrency, rates) else 0L
+    }
+    val hasAttachment = remember(tx.attachmentPaths) {
+        tx.attachmentPaths.split(';').any { it.isNotBlank() }
+    }
+    val timeLabel = remember(tx.timestamp) { formatStatsDrillDownTime(tx.timestamp) }
+
+    val line1Badges = buildList<Triple<String, Color, Color>> {
+        if (isRefund) {
+            add(Triple("退款", semantic.income.copy(alpha = 0.12f), semantic.income))
+        }
+        if (tx.discountAmountMicros > 0L) {
+            val d = if (privacyMasked) {
+                ""
+            } else {
+                KairoFormats.formatPlainSignedAmount(
+                    amountMicros = tx.discountAmountMicros,
+                    currencyCode = tx.origCurrency,
+                    baseCurrency = displayCurrency,
+                    showSign = false
+                )
+            }
+            add(Triple("惠$d", semantic.income.copy(alpha = 0.12f), semantic.income))
+        }
+        if (tx.feeAmountMicros > 0L) {
+            val f = if (privacyMasked) {
+                ""
+            } else {
+                KairoFormats.formatPlainSignedAmount(
+                    amountMicros = tx.feeAmountMicros,
+                    currencyCode = tx.origCurrency,
+                    baseCurrency = displayCurrency,
+                    showSign = false
+                )
+            }
+            add(Triple("费$f", semantic.warning.copy(alpha = 0.14f), semantic.warning))
+        }
+    }.take(2)
+
+    Surface(
+        shape = shape,
+        color = MaterialTheme.colorScheme.surfaceContainerLow,
+        onClick = onClick,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Column {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                CategoryIconBadge(
+                    iconKey = iconKey,
+                    colorHex = iconColorHex,
+                    size = 34.dp,
+                    iconSize = 17.dp
+                )
+                Spacer(modifier = Modifier.width(10.dp))
+
+                // 左列：严格 2 行（标题+微标 / 时间+内联标签+备注）
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(3.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(5.dp)
+                    ) {
+                        Text(
+                            text = title,
+                            style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp),
+                            fontWeight = FontWeight.Medium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false)
+                        )
+                        line1Badges.forEach { (badgeText, bgColor, fgColor) ->
+                            StatsTxDiscountFeeBadge(
+                                text = badgeText,
+                                containerColor = bgColor,
+                                contentColor = fgColor
+                            )
+                        }
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(5.dp)
+                    ) {
+                        Text(
+                            text = timeLabel,
+                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.5.sp).tabular(),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f),
+                            maxLines = 1,
+                            softWrap = false
+                        )
+                        if (hasAttachment) {
+                            Icon(
+                                imageVector = Icons.Rounded.AttachFile,
+                                contentDescription = "含附件",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
+                                modifier = Modifier.size(12.dp)
+                            )
+                        }
+                        inlineTags.forEach { tagName ->
+                            val tagColorHex = tagMap[tagName]?.colorHex ?: KairoIcons.fallbackTagColorHex(tagName)
+                            StatsInlineTagPill(name = tagName, colorHex = tagColorHex)
+                        }
+                        if (detailNote.isNotEmpty()) {
+                            Text(
+                                text = detailNote,
+                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.5.sp),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.82f),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f, fill = false)
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.width(8.dp))
+
+                // 右列：等宽金额 + 柔灰账户名（外币时紧凑附折算）
+                Column(
+                    horizontalAlignment = Alignment.End,
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    Text(
+                        text = formatPrivacyAmount(
+                            privacyMasked,
+                            KairoFormats.formatPlainSignedAmount(
+                                amountMicros = signedOrigMicros,
+                                currencyCode = tx.origCurrency,
+                                baseCurrency = displayCurrency,
+                                showSign = true
+                            )
+                        ),
+                        style = MaterialTheme.typography.titleSmall.copy(fontSize = 15.sp).tabular(),
+                        fontWeight = FontWeight.SemiBold,
+                        color = amountColor,
+                        maxLines = 1,
+                        softWrap = false
+                    )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        if (account != null) {
+                            Box(
+                                modifier = Modifier
+                                    .size(6.dp)
+                                    .clip(CircleShape)
+                                    .background(Color(account.colorHex).copy(alpha = 0.82f))
+                            )
+                        }
+                        val rightSubText = if (showBaseApprox && !privacyMasked) {
+                            val approx = KairoFormats.formatPlainSignedAmount(
+                                amountMicros = baseApproxMicros,
+                                currencyCode = displayCurrency,
+                                baseCurrency = displayCurrency,
+                                showSign = false
+                            )
+                            "≈ $approx · $accountName"
+                        } else {
+                            accountName
+                        }
+                        Text(
+                            text = rightSubText,
+                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp).tabular(),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.widthIn(max = 116.dp)
+                        )
+                    }
+                }
+            }
+            if (!isLast) {
+                HorizontalDivider(
+                    modifier = Modifier.padding(start = 56.dp, end = 12.dp),
+                    thickness = 0.5.dp,
+                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.28f)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun StatsInlineTagPill(
+    name: String,
+    colorHex: Long
+) {
+    val tagColor = Color(colorHex)
+    Surface(
+        shape = StatsInlineTagShape,
+        color = tagColor.copy(alpha = 0.10f)
+    ) {
+        Text(
+            text = name,
+            style = MaterialTheme.typography.labelSmall.copy(
+                fontSize = 10.5.sp,
+                lineHeight = 13.sp
+            ),
+            fontWeight = FontWeight.Medium,
+            color = tagColor,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier
+                .widthIn(max = 60.dp)
+                .padding(horizontal = 4.5.dp, vertical = 1.dp)
+        )
+    }
+}
+
+private fun formatStatsDrillDownTime(epochMillis: Long): String {
+    val zone = ZoneId.systemDefault()
+    val zdt = Instant.ofEpochMilli(epochMillis).atZone(zone)
+    val today = LocalDate.now(zone)
+    return when {
+        zdt.toLocalDate() == today -> KairoFormats.formatTime(epochMillis)
+        zdt.year == today.year -> zdt.format(StatsDrillDownTimeFormatter)
+        else -> zdt.format(StatsDrillDownYearTimeFormatter)
     }
 }
 

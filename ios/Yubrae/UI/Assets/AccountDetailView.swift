@@ -22,10 +22,17 @@ private enum AccountTxTypeFilter: String, CaseIterable, Identifiable {
 
 private struct AccountDayGroup: Identifiable {
     let id: String
-    let title: String
+    let dateText: String
+    let subText: String
     let inflowMicros: Int64
     let outflowMicros: Int64
     let items: [TransactionDto]
+}
+
+private struct AccountRowMicroBadge: Identifiable {
+    let id: String
+    let text: String
+    let color: Color
 }
 
 private struct DetailQuickRecordContext: Identifiable {
@@ -200,9 +207,11 @@ public struct AccountDetailView: View {
                     outflow += -delta
                 }
             }
+            let headerParts = YubraeTheme.formatDayHeaderParts(first.timestamp)
             return AccountDayGroup(
                 id: key,
-                title: YubraeTheme.formatDaySectionTitle(first.timestamp),
+                dateText: headerParts.dateText,
+                subText: headerParts.subText,
                 inflowMicros: inflow,
                 outflowMicros: outflow,
                 items: items
@@ -1302,8 +1311,17 @@ public struct AccountDetailView: View {
                     }
                 )
             } else {
+                let refundedByOrigId = store.computeRefundedAmountsByOrigTxId()
+                let categoryById = Dictionary(store.categories.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+                let accountById = Dictionary(store.accounts.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
                 ForEach(groupedByDay) { group in
-                    daySectionCard(group: group, account: acc)
+                    daySectionCard(
+                        group: group,
+                        account: acc,
+                        refundedByOrigId: refundedByOrigId,
+                        categoryById: categoryById,
+                        accountById: accountById
+                    )
                 }
             }
         }
@@ -1437,30 +1455,62 @@ public struct AccountDetailView: View {
         }
     }
 
-    private func daySectionCard(group: AccountDayGroup, account acc: AccountDto) -> some View {
+    private func daySectionCard(
+        group: AccountDayGroup,
+        account acc: AccountDto,
+        refundedByOrigId: [Int64: Int64],
+        categoryById: [Int64: CategoryDto],
+        accountById: [Int64: AccountDto]
+    ) -> some View {
         let cur = CurrencyCatalog.normalize(acc.currencyCode)
+        let baseCur = CurrencyCatalog.normalize(store.settings.baseCurrency)
         let masked = store.settings.privacyMaskEnabled
 
-        return VStack(alignment: .leading, spacing: 7) {
-            HStack(spacing: 8) {
-                Text(group.title)
-                    .font(.caption.weight(.semibold))
-                    .foregroundColor(palette.textSecondary)
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text(group.dateText)
+                    .font(.footnote.weight(.semibold))
+                    .foregroundColor(palette.textPrimary)
                     .lineLimit(1)
                     .fixedSize(horizontal: true, vertical: false)
+                if !group.subText.isEmpty {
+                    Text(group.subText)
+                        .font(.caption)
+                        .foregroundColor(palette.textSecondary)
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
+                }
                 Spacer(minLength: 6)
                 HStack(spacing: 10) {
-                    if group.outflowMicros > 0 {
-                        Text("出 \(YubraeTheme.masked(MoneyAmount.format(group.outflowMicros, currencyCode: cur), isMasked: masked))")
-                            .font(.caption2.monospacedDigit())
-                            .foregroundColor(palette.textTertiary)
+                    if group.inflowMicros > 0 {
+                        let inStr = YubraeTheme.masked(
+                            YubraeTheme.formatPlainSignedAmount(
+                                group.inflowMicros,
+                                currencyCode: cur,
+                                baseCurrency: baseCur,
+                                showSign: false
+                            ),
+                            isMasked: masked
+                        )
+                        Text("入 \(inStr)")
+                            .font(.caption.monospacedDigit())
+                            .foregroundColor(palette.textSecondary)
                             .lineLimit(1)
                             .fixedSize(horizontal: true, vertical: false)
                     }
-                    if group.inflowMicros > 0 {
-                        Text("入 \(YubraeTheme.masked(MoneyAmount.format(group.inflowMicros, currencyCode: cur), isMasked: masked))")
-                            .font(.caption2.monospacedDigit())
-                            .foregroundColor(palette.textTertiary)
+                    if group.outflowMicros > 0 {
+                        let outStr = YubraeTheme.masked(
+                            YubraeTheme.formatPlainSignedAmount(
+                                group.outflowMicros,
+                                currencyCode: cur,
+                                baseCurrency: baseCur,
+                                showSign: false
+                            ),
+                            isMasked: masked
+                        )
+                        Text("出 \(outStr)")
+                            .font(.caption.monospacedDigit())
+                            .foregroundColor(palette.textSecondary)
                             .lineLimit(1)
                             .fixedSize(horizontal: true, vertical: false)
                     }
@@ -1468,13 +1518,21 @@ public struct AccountDetailView: View {
             }
             .padding(.horizontal, 4)
 
-            YubraeCard(palette: palette, padding: 0) {
+            YubraeCard(palette: palette, padding: 0, cornerRadius: 14) {
                 VStack(spacing: 0) {
                     ForEach(group.items) { tx in
-                        accountTransactionRow(tx, account: acc)
+                        accountTransactionRow(
+                            tx,
+                            account: acc,
+                            refundedMicros: refundedByOrigId[tx.id] ?? 0,
+                            categoryById: categoryById,
+                            accountById: accountById
+                        )
                         if tx.id != group.items.last?.id {
-                            Divider()
-                                .padding(.leading, isSelectionMode ? 90 : 64)
+                            Rectangle()
+                                .fill(palette.outline.opacity(0.75))
+                                .frame(height: 0.5)
+                                .padding(.leading, isSelectionMode ? 90 : 58)
                         }
                     }
                 }
@@ -1482,51 +1540,139 @@ public struct AccountDetailView: View {
         }
     }
 
-    private func accountTransactionRow(_ tx: TransactionDto, account acc: AccountDto) -> some View {
-        let cat = store.category(byId: tx.categoryId)
-        let fromAcc = store.account(byId: tx.accountId)
-        let toAcc = tx.toAccountId.flatMap { store.account(byId: $0) }
+    private func accountTransactionRow(
+        _ tx: TransactionDto,
+        account acc: AccountDto,
+        refundedMicros: Int64,
+        categoryById: [Int64: CategoryDto],
+        accountById: [Int64: AccountDto]
+    ) -> some View {
+        let cat = tx.categoryId.flatMap { categoryById[$0] }
+        let parentCat = cat?.parentId.flatMap { categoryById[$0] }
+        let fromAcc = accountById[tx.accountId]
+        let toAcc = tx.toAccountId.flatMap { accountById[$0] }
         let masked = store.settings.privacyMaskEnabled
         let cur = CurrencyCatalog.normalize(acc.currencyCode)
+        let baseCur = CurrencyCatalog.normalize(store.settings.baseCurrency)
         let delta = store.accountDeltaForTransaction(tx, accountId: acc.id)
         let isSelected = selectedTxIds.contains(tx.id)
 
         let iconKey: String
         let iconColor: Int64
         let primaryTitle: String
-        var subtitleExtra: String = ""
 
         switch tx.type {
         case TransactionType.TRANSFER:
             iconKey = "currency_exchange"
             iconColor = 0xFF2563EB
             let isCredit = acc.groupType.uppercased() == AccountGroup.CREDIT
-            let route: String
             if tx.accountId == acc.id {
-                route = "转出至 \(toAcc?.name ?? "目标账户")"
+                primaryTitle = "→ \(toAcc?.name ?? "目标账户")"
             } else if tx.toAccountId == acc.id {
-                route = isCredit
-                    ? "还款来自 \(fromAcc?.name ?? "付款账户")"
-                    : "转入自 \(fromAcc?.name ?? "源账户")"
+                primaryTitle = isCredit
+                    ? "← \(fromAcc?.name ?? "付款账户") 还款"
+                    : "← \(fromAcc?.name ?? "源账户")"
             } else {
-                route = "\(fromAcc?.name ?? "账户") → \(toAcc?.name ?? "目标账户")"
-            }
-            primaryTitle = tx.merchant.isEmpty ? route : tx.merchant
-            if !tx.merchant.isEmpty {
-                subtitleExtra = route
+                primaryTitle = "\(fromAcc?.name ?? "账户") → \(toAcc?.name ?? "目标账户")"
             }
         case TransactionType.ADJUST:
             iconKey = "calculate"
             iconColor = 0xFF64748B
-            primaryTitle = tx.merchant.isEmpty ? "余额校准" : tx.merchant
+            primaryTitle = "余额校准"
         default:
             iconKey = cat?.icon ?? "category"
             iconColor = cat?.colorHex ?? 0xFF2AA876
-            primaryTitle = tx.merchant.isEmpty ? (cat?.name ?? "未分类") : tx.merchant
-            if let cat, !tx.merchant.isEmpty {
-                subtitleExtra = cat.name
+            if let cat {
+                if let parent = parentCat, !parent.name.isEmpty, parent.name != cat.name {
+                    primaryTitle = "\(parent.name)-\(cat.name)"
+                } else {
+                    primaryTitle = cat.name
+                }
+            } else {
+                primaryTitle = "未分类"
             }
         }
+
+        var rowBadges: [AccountRowMicroBadge] = []
+        if tx.status == TransactionStatus.PENDING {
+            rowBadges.append(AccountRowMicroBadge(id: "pending", text: "待确认", color: palette.warningColor))
+        }
+        if tx.type == TransactionType.EXPENSE && refundedMicros > 0 {
+            let refStr = YubraeTheme.masked(
+                YubraeTheme.formatPlainSignedAmount(
+                    refundedMicros,
+                    currencyCode: tx.origCurrency,
+                    baseCurrency: baseCur,
+                    showSign: false
+                ),
+                isMasked: masked
+            )
+            rowBadges.append(AccountRowMicroBadge(id: "refunded", text: "退\(refStr)", color: palette.incomeColor))
+        }
+        if tx.type == TransactionType.INCOME && tx.refundOfTxId != nil {
+            rowBadges.append(AccountRowMicroBadge(id: "refund", text: "退款", color: palette.incomeColor))
+        }
+        if tx.reimburseStatus == ReimburseStatus.PENDING {
+            rowBadges.append(AccountRowMicroBadge(id: "reimburse", text: "待报销", color: palette.transferColor))
+        }
+        if tx.discountAmountMicros > 0 {
+            let discStr = YubraeTheme.masked(
+                YubraeTheme.formatPlainSignedAmount(
+                    tx.discountAmountMicros,
+                    currencyCode: tx.origCurrency,
+                    baseCurrency: baseCur,
+                    showSign: false
+                ),
+                isMasked: masked
+            )
+            rowBadges.append(AccountRowMicroBadge(id: "discount", text: "惠\(discStr)", color: palette.incomeColor))
+        }
+        if tx.feeAmountMicros > 0 {
+            let feeStr = YubraeTheme.masked(
+                YubraeTheme.formatPlainSignedAmount(
+                    tx.feeAmountMicros,
+                    currencyCode: tx.origCurrency,
+                    baseCurrency: baseCur,
+                    showSign: false
+                ),
+                isMasked: masked
+            )
+            rowBadges.append(AccountRowMicroBadge(id: "fee", text: "费\(feeStr)", color: palette.warningColor))
+        }
+        let visibleBadges = Array(rowBadges.prefix(2))
+
+        let hasAttachments = tx.attachmentPaths
+            .split { $0 == ";" || $0 == "," || $0 == "\n" }
+            .contains { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        let inlineTags = Array(TagTextCodec.parse(tx.tags).prefix(2))
+
+        let excludedCandidates: [String?] = [
+            primaryTitle,
+            cat?.name,
+            parentCat?.name,
+            fromAcc?.name,
+            toAcc?.name,
+            acc.name
+        ]
+        let excludedMetaNames: Set<String> = Set(
+            excludedCandidates
+                .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+                .filter { !$0.isEmpty }
+        )
+        let trimmedMerchant = tx.merchant.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleanedNote = YubraeTheme.cleanListRowNote(tx.note).trimmingCharacters(in: .whitespacesAndNewlines)
+        let keepMerchant = !trimmedMerchant.isEmpty && !excludedMetaNames.contains(trimmedMerchant.lowercased())
+        let keepNote = !cleanedNote.isEmpty && !excludedMetaNames.contains(cleanedNote.lowercased())
+        let line2MetaText: String = {
+            if keepMerchant && keepNote {
+                if cleanedNote.localizedCaseInsensitiveContains(trimmedMerchant) { return cleanedNote }
+                if trimmedMerchant.localizedCaseInsensitiveContains(cleanedNote) { return trimmedMerchant }
+                return "\(trimmedMerchant) · \(cleanedNote)"
+            }
+            if keepMerchant { return trimmedMerchant }
+            if keepNote { return cleanedNote }
+            return ""
+        }()
 
         let deltaColor: Color
         if delta > 0 {
@@ -1537,118 +1683,110 @@ public struct AccountDetailView: View {
             deltaColor = palette.textSecondary
         }
 
-        let deltaFormatted = MoneyAmount.format(delta, currencyCode: cur, showSign: true, showCurrencyCode: true)
-        let txTags = TagTextCodec.parse(tx.tags)
+        let deltaFormatted = YubraeTheme.formatPlainSignedAmount(
+            delta,
+            currencyCode: cur,
+            baseCurrency: baseCur,
+            showSign: true
+        )
 
-        return HStack(spacing: 11) {
+        let secondaryAmountText: String? = {
+            let hasDiscountOrFee = tx.discountAmountMicros > 0 || tx.feeAmountMicros > 0
+            if tx.type == TransactionType.TRANSFER && tx.accountId == acc.id,
+               let toAmt = tx.toAmountMicros {
+                let toCur = CurrencyCatalog.normalize(tx.toCurrency ?? tx.origCurrency)
+                if hasDiscountOrFee || toCur != cur || toAmt != tx.accountAmountMicros {
+                    let toFmt = toCur != cur
+                        ? MoneyAmount.format(toAmt, currencyCode: toCur, showSign: false, showCurrencyCode: false)
+                        : YubraeTheme.formatPlainSignedAmount(toAmt, currencyCode: toCur, baseCurrency: baseCur, showSign: false)
+                    return "到账 \(YubraeTheme.masked(toFmt, isMasked: masked))"
+                }
+            } else if tx.type == TransactionType.TRANSFER && tx.toAccountId == acc.id {
+                let fromCur = CurrencyCatalog.normalize(tx.accountCurrency.isEmpty ? tx.origCurrency : tx.accountCurrency)
+                let toAmt = tx.toAmountMicros ?? tx.accountAmountMicros
+                if hasDiscountOrFee || fromCur != cur || tx.accountAmountMicros != toAmt {
+                    let outFmt = fromCur != cur
+                        ? MoneyAmount.format(tx.accountAmountMicros, currencyCode: fromCur, showSign: false, showCurrencyCode: false)
+                        : YubraeTheme.formatPlainSignedAmount(tx.accountAmountMicros, currencyCode: fromCur, baseCurrency: baseCur, showSign: false)
+                    return "实扣 \(YubraeTheme.masked(outFmt, isMasked: masked))"
+                }
+            } else if CurrencyCatalog.normalize(tx.origCurrency) != cur {
+                let origFmt = MoneyAmount.format(tx.origAmountMicros, currencyCode: tx.origCurrency, showSign: false, showCurrencyCode: false)
+                return "原币 \(YubraeTheme.masked(origFmt, isMasked: masked))"
+            }
+            return nil
+        }()
+
+        return HStack(alignment: .center, spacing: 10) {
             if isSelectionMode {
                 Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
                     .font(.system(size: 20))
                     .foregroundColor(isSelected ? palette.primary : palette.textTertiary)
-                    .frame(width: 24)
+                    .frame(width: 22)
             }
 
-            YubraeCategoryIconBadge(iconKey: iconKey, colorHex: iconColor, size: 38)
+            YubraeCategoryIconBadge(iconKey: iconKey, colorHex: iconColor, size: 34)
 
-            VStack(alignment: .leading, spacing: 3) {
+            // 严格 2 行中列
+            VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 5) {
                     Text(primaryTitle)
                         .font(.subheadline.weight(.semibold))
                         .foregroundColor(palette.textPrimary)
                         .lineLimit(1)
-                    if tx.status == TransactionStatus.PENDING {
-                        smallBadge("待确认", color: palette.warningColor)
-                    }
-                    if tx.reimburseStatus == ReimburseStatus.PENDING {
-                        smallBadge("待报销", color: palette.transferColor)
+                        .truncationMode(.tail)
+                    ForEach(visibleBadges) { badge in
+                        smallBadge(badge.text, color: badge.color)
                     }
                 }
 
                 HStack(spacing: 5) {
                     Text(YubraeTheme.formatDate(tx.timestamp, pattern: "HH:mm"))
+                        .font(.caption2.monospacedDigit())
+                        .foregroundColor(palette.textTertiary)
                         .lineLimit(1)
                         .fixedSize(horizontal: true, vertical: false)
-                    if !subtitleExtra.isEmpty {
-                        Text("· \(subtitleExtra)")
+
+                    if hasAttachments {
+                        Image(systemName: "paperclip")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundColor(palette.textTertiary)
+                    }
+
+                    ForEach(inlineTags, id: \.self) { tag in
+                        Text("#\(tag)")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundColor(palette.primary)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.85)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1)
+                            .background(
+                                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                    .fill(palette.primary.opacity(palette.isDark ? 0.16 : 0.09))
+                            )
+                    }
+
+                    if !line2MetaText.isEmpty {
+                        Text(line2MetaText)
+                            .font(.caption2)
+                            .foregroundColor(palette.textSecondary)
                             .lineLimit(1)
                             .truncationMode(.tail)
                     }
                 }
-                .font(.caption)
-                .foregroundColor(palette.textSecondary)
-
-                if tx.discountAmountMicros > 0 || tx.feeAmountMicros > 0 {
-                    HStack(spacing: 5) {
-                        if tx.discountAmountMicros > 0 {
-                            let discStr = YubraeTheme.masked(
-                                MoneyAmount.format(tx.discountAmountMicros, currencyCode: tx.origCurrency),
-                                isMasked: masked
-                            )
-                            smallBadge("惠 \(discStr)", color: palette.incomeColor)
-                        }
-                        if tx.feeAmountMicros > 0 {
-                            let feeStr = YubraeTheme.masked(
-                                MoneyAmount.format(tx.feeAmountMicros, currencyCode: tx.origCurrency),
-                                isMasked: masked
-                            )
-                            smallBadge("费 \(feeStr)", color: palette.warningColor)
-                        }
-                    }
-                }
-
-                if !tx.note.isEmpty || !txTags.isEmpty {
-                    HStack(spacing: 4) {
-                        ForEach(txTags.prefix(2), id: \.self) { t in
-                            Text("#\(t)")
-                                .font(.caption2)
-                                .foregroundColor(palette.primary)
-                                .lineLimit(1)
-                        }
-                        if !tx.note.isEmpty {
-                            Text(tx.note)
-                                .font(.caption2)
-                                .foregroundColor(palette.textTertiary)
-                                .lineLimit(1)
-                        }
-                    }
-                }
             }
-
-            Spacer(minLength: 6)
+            .frame(maxWidth: .infinity, alignment: .leading)
 
             HStack(spacing: 6) {
-                let hasDiscountOrFee = tx.discountAmountMicros > 0 || tx.feeAmountMicros > 0
-                VStack(alignment: .trailing, spacing: 2) {
+                VStack(alignment: .trailing, spacing: 3) {
                     Text(YubraeTheme.masked(deltaFormatted, isMasked: masked))
-                        .font(.subheadline.weight(.bold).monospacedDigit())
+                        .font(.subheadline.weight(.semibold).monospacedDigit())
                         .foregroundColor(deltaColor)
                         .lineLimit(1)
                         .fixedSize(horizontal: true, vertical: false)
-                    if tx.type == TransactionType.TRANSFER && tx.accountId == acc.id,
-                       let toAmt = tx.toAmountMicros {
-                        let toCur = CurrencyCatalog.normalize(tx.toCurrency ?? tx.origCurrency)
-                        if hasDiscountOrFee || toCur != cur || toAmt != tx.accountAmountMicros {
-                            let toFmt = MoneyAmount.format(toAmt, currencyCode: toCur, showCurrencyCode: true)
-                            Text("到账 \(YubraeTheme.masked(toFmt, isMasked: masked))")
-                                .font(.caption2.monospacedDigit())
-                                .foregroundColor(palette.textTertiary)
-                                .lineLimit(1)
-                                .fixedSize(horizontal: true, vertical: false)
-                        }
-                    } else if tx.type == TransactionType.TRANSFER && tx.toAccountId == acc.id {
-                        let fromCur = CurrencyCatalog.normalize(tx.accountCurrency.isEmpty ? tx.origCurrency : tx.accountCurrency)
-                        let toAmt = tx.toAmountMicros ?? tx.accountAmountMicros
-                        if hasDiscountOrFee || fromCur != cur || tx.accountAmountMicros != toAmt {
-                            let outFmt = MoneyAmount.format(tx.accountAmountMicros, currencyCode: fromCur, showCurrencyCode: true)
-                            Text("实扣 \(YubraeTheme.masked(outFmt, isMasked: masked))")
-                                .font(.caption2.monospacedDigit())
-                                .foregroundColor(palette.textTertiary)
-                                .lineLimit(1)
-                                .fixedSize(horizontal: true, vertical: false)
-                        }
-                    } else if CurrencyCatalog.normalize(tx.origCurrency) != cur {
-                        let origFmt = MoneyAmount.format(tx.origAmountMicros, currencyCode: tx.origCurrency, showCurrencyCode: true)
-                        Text("原币 \(YubraeTheme.masked(origFmt, isMasked: masked))")
+                    if let subAmt = secondaryAmountText {
+                        Text(subAmt)
                             .font(.caption2.monospacedDigit())
                             .foregroundColor(palette.textTertiary)
                             .lineLimit(1)
@@ -1816,13 +1954,16 @@ public struct AccountDetailView: View {
 
     private func smallBadge(_ text: String, color: Color) -> some View {
         Text(text)
-            .font(.system(size: 10, weight: .semibold).monospacedDigit())
+            .font(.system(size: 10, weight: .medium).monospacedDigit())
             .foregroundColor(color)
             .lineLimit(1)
             .fixedSize(horizontal: true, vertical: false)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(Capsule().fill(color.opacity(0.14)))
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1.5)
+            .background(
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .fill(color.opacity(palette.isDark ? 0.18 : 0.11))
+            )
     }
 
     private func openEditTransaction(_ tx: TransactionDto) {

@@ -1668,4 +1668,249 @@ final class LedgerStoreTests: XCTestCase {
         XCTAssertEqual(restoredStore.transactions.first(where: { $0.id == incomeTx.id })?.feeAmountMicros, 6_000)
         XCTAssertEqual(restoredStore.transactions.first(where: { $0.id == withdrawTx.id })?.feeAmountMicros, 1_000)
     }
+
+    @MainActor
+    func testRefundAggregationAndCleanListRowNote() throws {
+        let dir = makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let tz = TimeZone(secondsFromGMT: 8 * 3600)!
+        let store = LedgerStore(storageDirectory: dir, useKeychain: false, timeZone: tz)
+        let unit = MoneyAmount.amountScale
+
+        let wechatId = try XCTUnwrap(store.accounts.first(where: { $0.name == "微信零钱" })?.id)
+        let usdId = try XCTUnwrap(store.accounts.first(where: { $0.currencyCode == "USD" })?.id)
+
+        // 设定 USD -> CNY = 7.2000，用于跨币种退款折算验证
+        store.saveCustomRate(from: "USD", to: "CNY", rateMicros: 7_200_000)
+
+        let baseTs: Int64 = 1_772_352_000_000 // 2026-03-01 16:00:00 +08:00
+        let nextMonthTs: Int64 = baseTs + 35 * 86_400_000
+
+        // 1. 单笔关联退款（跨月）+ 待确认退款（应被忽略）+ 普通收入（不计入）
+        let expenseSingle = try store.saveTransaction(
+            RecordTransactionRequest(
+                type: TransactionType.EXPENSE,
+                timestamp: baseTs,
+                origAmountMicros: 100 * unit,
+                origCurrency: "CNY",
+                accountId: wechatId,
+                merchant: "网购外套"
+            )
+        )
+        _ = try store.saveTransaction(
+            RecordTransactionRequest(
+                type: TransactionType.INCOME,
+                timestamp: nextMonthTs,
+                origAmountMicros: 417_000, // 41.70 元
+                origCurrency: "CNY",
+                accountId: wechatId,
+                merchant: "部分退款",
+                status: TransactionStatus.CONFIRMED,
+                refundOfTxId: expenseSingle.id
+            )
+        )
+        _ = try store.saveTransaction(
+            RecordTransactionRequest(
+                type: TransactionType.INCOME,
+                timestamp: nextMonthTs + 1_000,
+                origAmountMicros: 10 * unit,
+                origCurrency: "CNY",
+                accountId: wechatId,
+                merchant: "待确认退款",
+                status: TransactionStatus.PENDING,
+                refundOfTxId: expenseSingle.id
+            )
+        )
+        _ = try store.saveTransaction(
+            RecordTransactionRequest(
+                type: TransactionType.INCOME,
+                timestamp: baseTs + 2_000,
+                origAmountMicros: 50 * unit,
+                origCurrency: "CNY",
+                accountId: wechatId,
+                merchant: "普通收入"
+            )
+        )
+
+        // 2. 多笔同币种关联退款聚合到同一原支出
+        let expenseMulti = try store.saveTransaction(
+            RecordTransactionRequest(
+                type: TransactionType.EXPENSE,
+                timestamp: baseTs + 10_000,
+                origAmountMicros: 200 * unit,
+                origCurrency: "CNY",
+                accountId: wechatId,
+                merchant: "商超采购"
+            )
+        )
+        _ = try store.saveTransaction(
+            RecordTransactionRequest(
+                type: TransactionType.INCOME,
+                timestamp: baseTs + 20_000,
+                origAmountMicros: 30 * unit,
+                origCurrency: "CNY",
+                accountId: wechatId,
+                refundOfTxId: expenseMulti.id
+            )
+        )
+        _ = try store.saveTransaction(
+            RecordTransactionRequest(
+                type: TransactionType.INCOME,
+                timestamp: baseTs + 30_000,
+                origAmountMicros: 455_000, // 45.50 元
+                origCurrency: "CNY",
+                accountId: wechatId,
+                refundOfTxId: expenseMulti.id
+            )
+        )
+
+        // 3. 跨币种关联退款：$10.00 USD (按 7.20 折合 72.00 CNY) + ¥8.00 CNY = ¥80.00 CNY
+        let expenseCross = try store.saveTransaction(
+            RecordTransactionRequest(
+                type: TransactionType.EXPENSE,
+                timestamp: baseTs + 40_000,
+                origAmountMicros: 144 * unit,
+                origCurrency: "CNY",
+                accountId: wechatId,
+                merchant: "跨境直邮"
+            )
+        )
+        _ = try store.saveTransaction(
+            RecordTransactionRequest(
+                type: TransactionType.INCOME,
+                timestamp: baseTs + 50_000,
+                origAmountMicros: 10 * unit,
+                origCurrency: "USD",
+                accountId: usdId,
+                refundOfTxId: expenseCross.id
+            )
+        )
+        _ = try store.saveTransaction(
+            RecordTransactionRequest(
+                type: TransactionType.INCOME,
+                timestamp: baseTs + 60_000,
+                origAmountMicros: 8 * unit,
+                origCurrency: "CNY",
+                accountId: wechatId,
+                refundOfTxId: expenseCross.id
+            )
+        )
+
+        let refundedMap = store.computeRefundedAmountsByOrigTxId()
+        XCTAssertEqual(refundedMap.count, 3)
+        XCTAssertEqual(refundedMap[expenseSingle.id], 417_000)
+        XCTAssertEqual(refundedMap[expenseMulti.id], 755_000)
+        XCTAssertEqual(refundedMap[expenseCross.id], 80 * unit)
+
+        // 4. YubraeTheme.cleanListRowNote：过滤自动抓取废话与导入结构化元数据，保留真实备注
+        XCTAssertEqual(YubraeTheme.cleanListRowNote(""), "")
+        XCTAssertEqual(YubraeTheme.cleanListRowNote("   "), "")
+        XCTAssertEqual(YubraeTheme.cleanListRowNote("/"), "")
+        XCTAssertEqual(YubraeTheme.cleanListRowNote("刷卡完成，交易金额：1.80元"), "")
+        XCTAssertEqual(YubraeTheme.cleanListRowNote("充值金额: 50.00元 · 卡内余额: 66.35元"), "")
+        XCTAssertEqual(YubraeTheme.cleanListRowNote("支付成功，交易金额：12.50元"), "")
+        XCTAssertEqual(YubraeTheme.cleanListRowNote("扣款成功，交易金额：1,280.50元，账户余额：2,000.00元"), "")
+        XCTAssertEqual(YubraeTheme.cleanListRowNote("付款成功！消费金额：1,280.50元，账户余额：3,400.00元。"), "")
+        XCTAssertEqual(
+            YubraeTheme.cleanListRowNote("地址: 北京市朝阳区 · 优惠: 2.00元 · 报销明细: 差旅 · 退款明细: 部分退 · 交易单号: 202611270001"),
+            ""
+        )
+        XCTAssertEqual(YubraeTheme.cleanListRowNote("优惠 2.00元"), "")
+        XCTAssertEqual(YubraeTheme.cleanListRowNote("信用卡还款"), "信用卡还款")
+        XCTAssertEqual(YubraeTheme.cleanListRowNote("午饭"), "午饭")
+        XCTAssertEqual(YubraeTheme.cleanListRowNote("六婆辣椒面香辣蘸料"), "六婆辣椒面香辣蘸料")
+        XCTAssertEqual(YubraeTheme.cleanListRowNote("1,280元团建餐"), "1,280元团建餐")
+        XCTAssertEqual(YubraeTheme.cleanListRowNote("超好吃！强烈推荐！"), "超好吃！强烈推荐！")
+        XCTAssertEqual(YubraeTheme.cleanListRowNote("重庆畅通卡 · 刷卡完成，交易金额：1.80元"), "重庆畅通卡")
+        XCTAssertEqual(YubraeTheme.cleanListRowNote("买咖啡，支付成功，交易金额：18.00元"), "买咖啡")
+        XCTAssertEqual(YubraeTheme.cleanListRowNote("买奶茶！支付成功！消费金额：18.00元"), "买奶茶")
+        XCTAssertEqual(YubraeTheme.cleanListRowNote("优惠: 2.00元 · 午饭打包 · 卡内余额: 66.35元"), "午饭打包")
+
+        // 5. YubraeTheme.formatPlainSignedAmount：主币种去符号，外币保留清晰符号
+        XCTAssertEqual(
+            YubraeTheme.formatPlainSignedAmount(-18_000, currencyCode: "CNY", baseCurrency: "CNY"),
+            "-1.80"
+        )
+        XCTAssertEqual(
+            YubraeTheme.formatPlainSignedAmount(1_060_000, currencyCode: "cny", baseCurrency: "CNY"),
+            "+106.00"
+        )
+        XCTAssertEqual(
+            YubraeTheme.formatPlainSignedAmount(500_000, currencyCode: "CNY", baseCurrency: "CNY", showSign: false),
+            "50.00"
+        )
+        XCTAssertEqual(
+            YubraeTheme.formatPlainSignedAmount(12_805_000, currencyCode: "CNY", baseCurrency: "CNY", showSign: false),
+            "1,280.50"
+        )
+        XCTAssertEqual(
+            YubraeTheme.formatPlainSignedAmount(0, currencyCode: "CNY", baseCurrency: "CNY", showSign: true),
+            "0.00"
+        )
+        XCTAssertEqual(
+            YubraeTheme.formatPlainSignedAmount(-531_600, currencyCode: "USD", baseCurrency: "CNY"),
+            "-$53.16"
+        )
+        XCTAssertEqual(
+            YubraeTheme.formatPlainSignedAmount(120_000, currencyCode: "USD", baseCurrency: "CNY"),
+            "+$12.00"
+        )
+        XCTAssertEqual(
+            YubraeTheme.formatPlainSignedAmount(120_000, currencyCode: "USD", baseCurrency: "CNY", showSign: false),
+            "$12.00"
+        )
+        XCTAssertEqual(
+            YubraeTheme.formatPlainSignedAmount(-12_000_000, currencyCode: "JPY", baseCurrency: "CNY"),
+            "-JP¥1,200"
+        )
+        XCTAssertEqual(
+            YubraeTheme.formatPlainSignedAmount(-12_000_000, currencyCode: "JPY", baseCurrency: "JPY"),
+            "-1,200"
+        )
+
+        // 6. YubraeTheme.formatDayHeaderParts：今天 / 昨天 / 同年周几 / 跨年日期
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = tz
+        let refDate = try XCTUnwrap(cal.date(from: DateComponents(year: 2026, month: 11, day: 27, hour: 12)))
+        let todayDate = try XCTUnwrap(cal.date(from: DateComponents(year: 2026, month: 11, day: 27, hour: 8, minute: 30)))
+        let yesterdayDate = try XCTUnwrap(cal.date(from: DateComponents(year: 2026, month: 11, day: 26, hour: 20)))
+        let wedDate = try XCTUnwrap(cal.date(from: DateComponents(year: 2026, month: 11, day: 25, hour: 14)))
+        let prevYearDate = try XCTUnwrap(cal.date(from: DateComponents(year: 2025, month: 11, day: 25, hour: 14)))
+
+        let todayParts = YubraeTheme.formatDayHeaderParts(
+            Int64((todayDate.timeIntervalSince1970 * 1000.0).rounded()),
+            referenceDate: refDate,
+            calendar: cal
+        )
+        XCTAssertEqual(todayParts.dateText, "11月27日")
+        XCTAssertEqual(todayParts.subText, "今天")
+
+        let yesterdayParts = YubraeTheme.formatDayHeaderParts(
+            Int64((yesterdayDate.timeIntervalSince1970 * 1000.0).rounded()),
+            referenceDate: refDate,
+            calendar: cal
+        )
+        XCTAssertEqual(yesterdayParts.dateText, "11月26日")
+        XCTAssertEqual(yesterdayParts.subText, "昨天")
+
+        let wedParts = YubraeTheme.formatDayHeaderParts(
+            Int64((wedDate.timeIntervalSince1970 * 1000.0).rounded()),
+            referenceDate: refDate,
+            calendar: cal
+        )
+        XCTAssertEqual(wedParts.dateText, "11月25日")
+        XCTAssertEqual(wedParts.subText, "周三")
+
+        let prevYearParts = YubraeTheme.formatDayHeaderParts(
+            Int64((prevYearDate.timeIntervalSince1970 * 1000.0).rounded()),
+            referenceDate: refDate,
+            calendar: cal
+        )
+        XCTAssertEqual(prevYearParts.dateText, "2025年11月25日")
+        XCTAssertEqual(prevYearParts.subText, "周二")
+
+        let liveTodayParts = YubraeTheme.formatDayHeaderParts(currentEpochMillis())
+        XCTAssertEqual(liveTodayParts.subText, "今天")
+        XCTAssertFalse(liveTodayParts.dateText.isEmpty)
+    }
 }

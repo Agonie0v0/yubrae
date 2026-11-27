@@ -1755,6 +1755,53 @@ public final class LedgerStore: ObservableObject {
         )
     }
 
+    /// 统计每笔原始交易累计关联的已确认退款总额（按原交易 `origCurrency` 计价）。
+    /// 遍历全量已确认退款收入（即使跨月或跨币种），返回 `[origTxId: totalRefundedInOrigCurrencyMicros]`。
+    public func computeRefundedAmountsByOrigTxId() -> [Int64: Int64] {
+        guard !transactions.isEmpty else { return [:] }
+        let txById = Dictionary(transactions.map { ($0.id, $0) }, uniquingKeysWith: { _, latest in latest })
+        var rateCache: [String: Int64] = [:]
+        var refundedByOrigId: [Int64: Int64] = [:]
+
+        for tx in transactions {
+            guard tx.type == TransactionType.INCOME,
+                  tx.status == TransactionStatus.CONFIRMED,
+                  let origTxId = tx.refundOfTxId,
+                  tx.origAmountMicros > 0 else {
+                continue
+            }
+
+            guard let origTx = txById[origTxId] else {
+                refundedByOrigId[origTxId, default: 0] += tx.origAmountMicros
+                continue
+            }
+
+            let refundCur = CurrencyCatalog.normalize(tx.origCurrency)
+            let origCur = CurrencyCatalog.normalize(origTx.origCurrency)
+            let amountInOrigCurrency: Int64
+            if refundCur == origCur {
+                amountInOrigCurrency = tx.origAmountMicros
+            } else {
+                let cacheKey = "\(refundCur)->\(origCur)"
+                let rate: Int64
+                if let cached = rateCache[cacheKey] {
+                    rate = cached
+                } else {
+                    let fetched = getRate(from: refundCur, to: origCur).rateMicros
+                    rateCache[cacheKey] = fetched
+                    rate = fetched
+                }
+                amountInOrigCurrency = MoneyAmount.convert(amountMicros: tx.origAmountMicros, rateMicros: rate)
+            }
+
+            if amountInOrigCurrency > 0 {
+                refundedByOrigId[origTxId, default: 0] += amountInOrigCurrency
+            }
+        }
+
+        return refundedByOrigId
+    }
+
     public func computeBudgetProgress(
         year: Int,
         month: Int,

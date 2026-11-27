@@ -48,6 +48,7 @@ import androidx.compose.material.icons.automirrored.rounded.ReceiptLong
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Archive
 import androidx.compose.material.icons.rounded.ArrowDropDown
+import androidx.compose.material.icons.rounded.AttachFile
 import androidx.compose.material.icons.rounded.Category
 import androidx.compose.material.icons.rounded.CheckBox
 import androidx.compose.material.icons.rounded.CheckBoxOutlineBlank
@@ -125,7 +126,6 @@ import com.yubrae.app.core.model.CurrencyCatalog
 import com.yubrae.app.core.model.MoneyAmount
 import com.yubrae.app.data.db.AccountEntity
 import com.yubrae.app.data.db.AccountGroup
-import com.yubrae.app.data.db.CaptureChannel
 import com.yubrae.app.data.db.CategoryEntity
 import com.yubrae.app.data.db.InstallmentPlanEntity
 import com.yubrae.app.data.db.ReimburseStatus
@@ -137,14 +137,12 @@ import com.yubrae.app.domain.LedgerAnalytics
 import com.yubrae.app.ui.components.AutoResizeAmountText
 import com.yubrae.app.ui.components.CartoonAccountIcon
 import com.yubrae.app.ui.components.CategoryIconBadge
-import com.yubrae.app.ui.components.ChannelChip
 import com.yubrae.app.ui.components.ConfirmActionDialog
 import com.yubrae.app.ui.components.CurrencyBadge
 import com.yubrae.app.ui.components.EmptyStateCard
 import com.yubrae.app.ui.components.KairoFormats
 import com.yubrae.app.ui.components.KairoIcons
 import com.yubrae.app.ui.components.LocalPrivacyMasked
-import com.yubrae.app.ui.components.TagBadgeChip
 import com.yubrae.app.ui.components.YearMonthPickerDialog
 import com.yubrae.app.ui.components.YearPickerDialog
 import com.yubrae.app.ui.components.YimuCard
@@ -192,6 +190,7 @@ private object AccountTxTypeFilter {
 }
 
 private val AccountTxMiniBadgeShape = RoundedCornerShape(5.dp)
+private val AccountInlineTagShape = RoundedCornerShape(4.dp)
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
@@ -671,9 +670,8 @@ fun AccountDetailScreen(
                     when {
                         hasActiveFilter -> EmptyStateCard(
                             icon = Icons.Rounded.Search,
-                            title = "未找到匹配的账单",
-                            subtitle = "试试调整关键词或切换交易类型筛选",
-                            actionLabel = "重置筛选",
+                            title = "无匹配账单",
+                            actionLabel = "清空筛选",
                             onAction = {
                                 searchQuery = ""
                                 typeFilter = AccountTxTypeFilter.ALL
@@ -686,14 +684,12 @@ fun AccountDetailScreen(
                                 AccountHistoryPeriodMode.YEAR -> "${selectedYear}年暂无账单"
                                 AccountHistoryPeriodMode.ALL -> "暂无账单"
                             },
-                            subtitle = "该账户共有 ${accountTransactions.size} 笔历史账单",
                             actionLabel = "查看全部历史",
                             onAction = { periodMode = AccountHistoryPeriodMode.ALL }
                         )
                         else -> EmptyStateCard(
                             icon = Icons.AutoMirrored.Rounded.ReceiptLong,
-                            title = "暂无流水记录",
-                            subtitle = "记一笔收支或转账，随时掌握账户余额变化",
+                            title = "暂无账单",
                             actionLabel = "记一笔",
                             onAction = onQuickRecord
                         )
@@ -705,6 +701,7 @@ fun AccountDetailScreen(
                         AccountDayTransactionGroupCard(
                             date = date,
                             account = account,
+                            displayCurrency = displayCurrency,
                             transactions = dayTxs,
                             categoryMap = categoryMap,
                             accountMap = accountMap,
@@ -1889,13 +1886,15 @@ private fun CreditAccountSummaryCard(
                         account.billingDay?.let { "${it}日出账" },
                         account.repaymentDay?.let { "${it}日还款" }
                     ).joinToString(" · ")
-                    Text(
-                        text = scheduleText.ifEmpty { "可在编辑账户中设置账单/还款日" },
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
+                    if (scheduleText.isNotEmpty()) {
+                        Text(
+                            text = scheduleText,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
                 }
             }
         }
@@ -1995,7 +1994,6 @@ private fun InstallmentsManagementCard(
                 EmptyStateCard(
                     icon = Icons.Rounded.CreditCard,
                     title = "暂无分期计划",
-                    subtitle = "管理账单分期与消费分期，按期一键入账",
                     actionLabel = "新建分期",
                     onAction = onAddInstallment
                 )
@@ -2494,7 +2492,7 @@ private fun AccountHistoryWorkbenchCard(
                     ) {
                         if (searchQuery.isEmpty()) {
                             Text(
-                                text = "搜索商户、备注、分类、标签或金额",
+                                text = "搜索账单",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
                                 maxLines = 1,
@@ -2592,14 +2590,14 @@ private fun AccountHistoryWorkbenchCard(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = "当前命中 $filteredCount / $totalInPeriodCount 笔",
+                        text = "$filteredCount / $totalInPeriodCount 笔",
                         style = MaterialTheme.typography.labelSmall.tabular(),
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
                         softWrap = false
                     )
                     Text(
-                        text = "重置筛选",
+                        text = "清空",
                         style = MaterialTheme.typography.labelSmall,
                         fontWeight = FontWeight.SemiBold,
                         color = activeAccent,
@@ -2726,11 +2724,12 @@ private fun AccountBatchActionBottomBar(
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class, ExperimentalLayoutApi::class)
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun AccountDayTransactionGroupCard(
     date: LocalDate,
     account: AccountEntity,
+    displayCurrency: String,
     transactions: List<TransactionEntity>,
     categoryMap: Map<Long, CategoryEntity>,
     accountMap: Map<Long, AccountEntity>,
@@ -2751,450 +2750,466 @@ private fun AccountDayTransactionGroupCard(
             .filter { it.status == TransactionStatus.CONFIRMED }
             .sumOf { accountDeltaForTransaction(it, account.id) }
     }
-    val dayTitle = remember(date) { formatAccountDayHeader(date) }
+    val (dayDateText, daySubText) = remember(date) { KairoFormats.formatDayHeaderParts(date) }
 
-    YimuCard(cornerRadius = 18.dp) {
-        Column(modifier = Modifier.padding(vertical = 6.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        // 卡片外极简日期分组头
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 4.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
             Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 14.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier.weight(1f, fill = false)
             ) {
                 Text(
-                    text = dayTitle,
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    text = dayDateText,
+                    style = MaterialTheme.typography.labelLarge.copy(fontSize = 13.sp),
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f, fill = false)
+                    softWrap = false
                 )
-                Spacer(modifier = Modifier.width(8.dp))
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    if (dayNetMicros != 0L) {
-                        Text(
-                            text = formatPrivacyAmount(
-                                privacyMasked,
-                                MoneyAmount.format(dayNetMicros, account.currencyCode, showSign = true)
-                            ),
-                            style = MaterialTheme.typography.labelMedium.tabular(),
-                            fontWeight = FontWeight.SemiBold,
-                            color = if (dayNetMicros > 0L) semantic.income else semantic.expense,
-                            maxLines = 1,
-                            softWrap = false
-                        )
-                    }
+                if (daySubText.isNotEmpty()) {
                     Text(
-                        text = "${transactions.size} 笔",
-                        style = MaterialTheme.typography.labelSmall.tabular(),
+                        text = daySubText,
+                        style = MaterialTheme.typography.labelMedium.copy(fontSize = 12.sp),
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
                         softWrap = false
                     )
                 }
             }
-
-            transactions.forEach { tx ->
-                HorizontalDivider(
-                    modifier = Modifier.padding(horizontal = 14.dp),
-                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f)
-                )
-
-                val category = tx.categoryId?.let { categoryMap[it] }
-                val isTransferIn = tx.type == TransactionType.TRANSFER && tx.toAccountId == account.id
-                val accountSignedAmount = accountDeltaForTransaction(tx, account.id)
-                val isSelected = isMultiSelectMode && tx.id in selectedTxIds
-                var showRowMenu by remember(tx.id) { mutableStateOf(false) }
-
-                val amountColor = when {
-                    isTransferIn -> semantic.income
-                    tx.type == TransactionType.TRANSFER -> semantic.transfer
-                    tx.type == TransactionType.EXPENSE -> semantic.expense
-                    tx.type == TransactionType.INCOME -> semantic.income
-                    accountSignedAmount >= 0L -> semantic.income
-                    else -> semantic.expense
-                }
-                val iconKey = when {
-                    tx.type == TransactionType.TRANSFER -> "swap_horiz"
-                    tx.type == TransactionType.ADJUST -> "tune"
-                    category != null -> category.icon
-                    else -> "more_horiz"
-                }
-                val iconColorHex = when {
-                    tx.type == TransactionType.TRANSFER -> 0xFF1A65C7L
-                    tx.type == TransactionType.ADJUST -> 0xFF475569L
-                    category != null -> category.colorHex
-                    else -> account.colorHex
-                }
-                val peerTransferLabel = remember(tx, account.id, accountMap) {
-                    resolveTransferPeerLabel(tx, account.id, accountMap)
-                }
-                val titleText = remember(tx, account.id, category, peerTransferLabel) {
-                    when {
-                        tx.merchant.isNotBlank() -> tx.merchant
-                        tx.type == TransactionType.TRANSFER -> peerTransferLabel ?: if (isTransferIn) "转入" else "转出"
-                        category != null -> category.name
-                        else -> KairoFormats.transactionTypeLabel(tx.type)
-                    }
-                }
-                val cleanedNote = remember(tx.note) { KairoFormats.cleanListRowNote(tx.note) }
-                val parsedTags = remember(tx.tags) { TagTextCodec.parse(tx.tags) }
-
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(
-                            if (isSelected) {
-                                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.32f)
-                            } else {
-                                Color.Transparent
-                            }
-                        )
-                        .combinedClickable(
-                            onClick = { onClickTransaction(tx) },
-                            onLongClick = { onLongClickTransaction(tx) }
-                        )
-                        .padding(start = 14.dp, end = if (isMultiSelectMode) 14.dp else 6.dp, top = 11.dp, bottom = 11.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    if (isMultiSelectMode) {
-                        Icon(
-                            imageVector = if (isSelected) Icons.Rounded.CheckBox else Icons.Rounded.CheckBoxOutlineBlank,
-                            contentDescription = if (isSelected) "已勾选" else "未勾选",
-                            tint = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(22.dp)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                    }
-
-                    CategoryIconBadge(
-                        iconKey = iconKey,
-                        colorHex = iconColorHex,
-                        size = 38.dp,
-                        iconSize = 18.dp
-                    )
-                    Spacer(modifier = Modifier.width(10.dp))
-
-                    Column(
-                        modifier = Modifier.weight(1f),
-                        verticalArrangement = Arrangement.spacedBy(3.dp)
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(5.dp)
-                        ) {
-                            Text(
-                                text = titleText,
-                                style = MaterialTheme.typography.titleSmall,
-                                fontWeight = FontWeight.Medium,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.weight(1f, fill = false)
+            Spacer(modifier = Modifier.width(8.dp))
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                if (dayNetMicros != 0L) {
+                    Text(
+                        text = formatPrivacyAmount(
+                            privacyMasked,
+                            KairoFormats.formatPlainSignedAmount(
+                                amountMicros = dayNetMicros,
+                                currencyCode = account.currencyCode,
+                                baseCurrency = displayCurrency,
+                                showSign = true
                             )
-                            if (tx.status == TransactionStatus.PENDING) {
-                                TxMiniFlagBadge(
-                                    text = "待确认",
-                                    containerColor = semantic.warningContainer,
-                                    contentColor = semantic.warning
+                        ),
+                        style = MaterialTheme.typography.labelMedium.copy(fontSize = 12.sp).tabular(),
+                        fontWeight = FontWeight.Medium,
+                        color = if (dayNetMicros > 0L) {
+                            semantic.income.copy(alpha = 0.88f)
+                        } else {
+                            semantic.expense.copy(alpha = 0.88f)
+                        },
+                        maxLines = 1,
+                        softWrap = false
+                    )
+                }
+                Text(
+                    text = "${transactions.size} 笔",
+                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.5.sp).tabular(),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    softWrap = false
+                )
+            }
+        }
+
+        YimuCard(cornerRadius = 14.dp) {
+            Column {
+                transactions.forEachIndexed { index, tx ->
+                    if (index > 0) {
+                        HorizontalDivider(
+                            modifier = Modifier.padding(
+                                start = if (isMultiSelectMode) 12.dp else 56.dp,
+                                end = 12.dp
+                            ),
+                            thickness = 0.5.dp,
+                            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.28f)
+                        )
+                    }
+
+                    val category = tx.categoryId?.let { categoryMap[it] }
+                    val categoryDisplayName = remember(category, categoryMap) {
+                        resolveCategoryDisplayName(category, categoryMap)
+                    }
+                    val isTransferIn = tx.type == TransactionType.TRANSFER && tx.toAccountId == account.id
+                    val accountSignedAmount = accountDeltaForTransaction(tx, account.id)
+                    val isSelected = isMultiSelectMode && tx.id in selectedTxIds
+                    var showRowMenu by remember(tx.id) { mutableStateOf(false) }
+
+                    val amountColor = when {
+                        isTransferIn -> semantic.income
+                        tx.type == TransactionType.TRANSFER -> semantic.transfer
+                        tx.type == TransactionType.EXPENSE -> semantic.expense
+                        tx.type == TransactionType.INCOME -> semantic.income
+                        accountSignedAmount >= 0L -> semantic.income
+                        else -> semantic.expense
+                    }
+                    val iconKey = when {
+                        tx.type == TransactionType.TRANSFER -> "swap_horiz"
+                        tx.type == TransactionType.ADJUST -> "tune"
+                        category != null -> category.icon
+                        else -> "more_horiz"
+                    }
+                    val iconColorHex = when {
+                        tx.type == TransactionType.TRANSFER -> 0xFF1A65C7L
+                        tx.type == TransactionType.ADJUST -> 0xFF475569L
+                        category != null -> category.colorHex
+                        else -> account.colorHex
+                    }
+                    val peerTransferLabel = remember(tx, account.id, accountMap) {
+                        resolveTransferPeerLabel(tx, account.id, accountMap)
+                    }
+                    val titleText = remember(tx, categoryDisplayName, peerTransferLabel) {
+                        when {
+                            tx.type == TransactionType.TRANSFER -> peerTransferLabel ?: "转账"
+                            tx.type == TransactionType.ADJUST -> "余额校准"
+                            !categoryDisplayName.isNullOrBlank() -> categoryDisplayName
+                            tx.merchant.isNotBlank() -> tx.merchant.trim()
+                            else -> KairoFormats.transactionTypeLabel(tx.type)
+                        }
+                    }
+                    val cleanedNote = remember(tx.note) { KairoFormats.cleanListRowNote(tx.note) }
+                    val parsedTags = remember(tx.tags) { TagTextCodec.parse(tx.tags) }
+                    val hasAttachment = remember(tx.attachmentPaths) {
+                        tx.attachmentPaths.split(';').any { it.isNotBlank() }
+                    }
+                    val detailMetaText = remember(tx.merchant, cleanedNote, titleText, account.name) {
+                        buildList {
+                            val merchantTrimmed = tx.merchant.trim()
+                            if (merchantTrimmed.isNotEmpty() &&
+                                !merchantTrimmed.equals(titleText, ignoreCase = true) &&
+                                !merchantTrimmed.equals(account.name, ignoreCase = true)
+                            ) {
+                                add(merchantTrimmed)
+                            }
+                            val noteTrimmed = cleanedNote.trim()
+                            if (noteTrimmed.isNotEmpty() &&
+                                !noteTrimmed.equals(titleText, ignoreCase = true) &&
+                                none { it.equals(noteTrimmed, ignoreCase = true) }
+                            ) {
+                                add(noteTrimmed)
+                            }
+                        }.joinToString(" · ")
+                    }
+
+                    val line1Badges = buildList<Triple<String, Color, Color>> {
+                        if (tx.status == TransactionStatus.PENDING) {
+                            add(Triple("待确认", semantic.warning.copy(alpha = 0.14f), semantic.warning))
+                        }
+                        if (tx.refundOfTxId != null) {
+                            add(Triple("退款", semantic.income.copy(alpha = 0.12f), semantic.income))
+                        }
+                        if (tx.discountAmountMicros > 0L) {
+                            val amtText = if (privacyMasked) {
+                                ""
+                            } else {
+                                KairoFormats.formatPlainSignedAmount(
+                                    amountMicros = tx.discountAmountMicros,
+                                    currencyCode = tx.origCurrency,
+                                    baseCurrency = displayCurrency,
+                                    showSign = false
                                 )
                             }
-                            if (tx.reimburseStatus == ReimburseStatus.PENDING) {
-                                TxMiniFlagBadge(
-                                    text = "待报销",
-                                    containerColor = MaterialTheme.colorScheme.tertiaryContainer,
-                                    contentColor = MaterialTheme.colorScheme.onTertiaryContainer
-                                )
-                            } else if (tx.reimburseStatus == ReimburseStatus.REIMBURSED) {
-                                TxMiniFlagBadge(
-                                    text = "已报销",
-                                    containerColor = semantic.incomeContainer,
-                                    contentColor = semantic.income
-                                )
-                            }
-                            if (tx.refundOfTxId != null) {
-                                TxMiniFlagBadge(
-                                    text = "退款",
-                                    containerColor = semantic.incomeContainer,
-                                    contentColor = semantic.income
+                            add(Triple("惠$amtText", semantic.income.copy(alpha = 0.12f), semantic.income))
+                        }
+                        if (tx.feeAmountMicros > 0L) {
+                            val amtText = if (privacyMasked) {
+                                ""
+                            } else {
+                                KairoFormats.formatPlainSignedAmount(
+                                    amountMicros = tx.feeAmountMicros,
+                                    currencyCode = tx.origCurrency,
+                                    baseCurrency = displayCurrency,
+                                    showSign = false
                                 )
                             }
+                            add(Triple("费$amtText", semantic.warning.copy(alpha = 0.14f), semantic.warning))
+                        }
+                        if (tx.reimburseStatus == ReimburseStatus.PENDING) {
+                            add(
+                                Triple(
+                                    "待报销",
+                                    MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.72f),
+                                    MaterialTheme.colorScheme.onTertiaryContainer
+                                )
+                            )
+                        }
+                    }.take(2)
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(
+                                if (isSelected) {
+                                    MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.32f)
+                                } else {
+                                    Color.Transparent
+                                }
+                            )
+                            .combinedClickable(
+                                onClick = { onClickTransaction(tx) },
+                                onLongClick = { onLongClickTransaction(tx) }
+                            )
+                            .padding(
+                                start = 12.dp,
+                                end = if (isMultiSelectMode) 12.dp else 4.dp,
+                                top = 10.dp,
+                                bottom = 10.dp
+                            ),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        if (isMultiSelectMode) {
+                            Icon(
+                                imageVector = if (isSelected) Icons.Rounded.CheckBox else Icons.Rounded.CheckBoxOutlineBlank,
+                                contentDescription = if (isSelected) "已勾选" else "未勾选",
+                                tint = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
                         }
 
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(5.dp)
+                        CategoryIconBadge(
+                            iconKey = iconKey,
+                            colorHex = iconColorHex,
+                            size = 34.dp,
+                            iconSize = 17.dp
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+
+                        // 中列：严格 2 行对称结构
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(3.dp)
                         ) {
-                            Text(
-                                text = KairoFormats.formatTime(tx.timestamp),
-                                style = MaterialTheme.typography.labelSmall.tabular(),
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
-                                softWrap = false
-                            )
-                            val subMeta = when {
-                                tx.type == TransactionType.TRANSFER && tx.merchant.isNotBlank() && peerTransferLabel != null -> peerTransferLabel
-                                tx.type != TransactionType.TRANSFER && tx.merchant.isNotBlank() && category != null -> category.name
-                                else -> null
-                            }
-                            if (!subMeta.isNullOrBlank()) {
+                            // Line 1：分类/转账方向 + 极轻扁平微标（最多 2 枚）
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(5.dp)
+                            ) {
                                 Text(
-                                    text = subMeta,
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
-                            if (tx.sourceType.isNotBlank() && tx.sourceType != CaptureChannel.MANUAL) {
-                                ChannelChip(channel = tx.sourceType)
-                            }
-                            if (cleanedNote.isNotBlank()) {
-                                Text(
-                                    text = cleanedNote,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    text = titleText,
+                                    style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp),
+                                    fontWeight = FontWeight.Medium,
+                                    color = MaterialTheme.colorScheme.onSurface,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis,
                                     modifier = Modifier.weight(1f, fill = false)
                                 )
+                                line1Badges.forEach { (badgeText, bgColor, fgColor) ->
+                                    TxMiniFlagBadge(
+                                        text = badgeText,
+                                        containerColor = bgColor,
+                                        contentColor = fgColor
+                                    )
+                                }
                             }
-                        }
 
-                        val hasDiscount = tx.discountAmountMicros > 0L
-                        val hasFee = tx.feeAmountMicros > 0L
-                        if (hasDiscount || hasFee || parsedTags.isNotEmpty()) {
-                            FlowRow(
-                                horizontalArrangement = Arrangement.spacedBy(4.dp),
-                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            // Line 2：HH:mm + 附件回形针 + 最多 2 枚内联轻标签 + 商户/清洗后备注
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(5.dp)
                             ) {
-                                if (hasDiscount) {
-                                    val discountLabel = formatPrivacyAmount(
-                                        privacyMasked,
-                                        MoneyAmount.format(tx.discountAmountMicros, tx.origCurrency)
-                                    )
-                                    TxMiniFlagBadge(
-                                        text = "惠 $discountLabel",
-                                        containerColor = semantic.incomeContainer,
-                                        contentColor = semantic.income
-                                    )
-                                }
-                                if (hasFee) {
-                                    val feeLabel = formatPrivacyAmount(
-                                        privacyMasked,
-                                        MoneyAmount.format(tx.feeAmountMicros, tx.origCurrency)
-                                    )
-                                    TxMiniFlagBadge(
-                                        text = "费 $feeLabel",
-                                        containerColor = semantic.warningContainer,
-                                        contentColor = semantic.warning
-                                    )
-                                }
-                                parsedTags.take(3).forEach { tagName ->
-                                    TagBadgeChip(
-                                        name = tagName,
-                                        colorHex = KairoIcons.fallbackTagColorHex(tagName),
-                                        compact = true
-                                    )
-                                }
-                                if (parsedTags.size > 3) {
-                                    Text(
-                                        text = "+${parsedTags.size - 3}",
-                                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp).tabular(),
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        maxLines = 1,
-                                        softWrap = false
-                                    )
-                                }
-                            }
-                        }
-                    }
-
-                    Spacer(modifier = Modifier.width(6.dp))
-
-                    val isTransferOut = tx.type == TransactionType.TRANSFER &&
-                        tx.accountId == account.id &&
-                        tx.toAccountId != account.id
-                    val isTransferInOnly = tx.type == TransactionType.TRANSFER &&
-                        tx.toAccountId == account.id &&
-                        tx.accountId != account.id
-                    val hasDiscountOrFee = tx.discountAmountMicros > 0L || tx.feeAmountMicros > 0L
-
-                    Column(horizontalAlignment = Alignment.End) {
-                        Text(
-                            text = formatPrivacyAmount(
-                                privacyMasked,
-                                MoneyAmount.format(
-                                    amountMicros = accountSignedAmount,
-                                    currencyCode = account.currencyCode,
-                                    showSign = true,
-                                    showCurrencyCode = !account.currencyCode.equals("CNY", true)
-                                )
-                            ),
-                            style = MaterialTheme.typography.titleSmall.tabular(),
-                            color = amountColor,
-                            fontWeight = FontWeight.Bold,
-                            maxLines = 1,
-                            softWrap = false
-                        )
-                        val transferSubText = when {
-                            isTransferOut && tx.toAmountMicros != null && (
-                                hasDiscountOrFee ||
-                                    tx.toAmountMicros != tx.accountAmountMicros ||
-                                    (tx.toCurrency != null && !tx.toCurrency.equals(account.currencyCode, ignoreCase = true))
-                                ) -> {
-                                val toCur = tx.toCurrency ?: tx.origCurrency
-                                val formattedTo = formatPrivacyAmount(
-                                    privacyMasked,
-                                    MoneyAmount.format(
-                                        amountMicros = tx.toAmountMicros,
-                                        currencyCode = toCur,
-                                        showCurrencyCode = !toCur.equals("CNY", ignoreCase = true)
-                                    )
-                                )
-                                "到账 $formattedTo"
-                            }
-                            isTransferInOnly && (
-                                hasDiscountOrFee ||
-                                    (tx.toAmountMicros != null && tx.toAmountMicros != tx.accountAmountMicros) ||
-                                    !tx.accountCurrency.equals(account.currencyCode, ignoreCase = true)
-                                ) -> {
-                                val formattedOut = formatPrivacyAmount(
-                                    privacyMasked,
-                                    MoneyAmount.format(
-                                        amountMicros = tx.accountAmountMicros,
-                                        currencyCode = tx.accountCurrency,
-                                        showCurrencyCode = !tx.accountCurrency.equals("CNY", ignoreCase = true)
-                                    )
-                                )
-                                "实扣 $formattedOut"
-                            }
-                            else -> null
-                        }
-                        if (transferSubText != null) {
-                            Text(
-                                text = transferSubText,
-                                style = MaterialTheme.typography.labelSmall.tabular(),
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
-                                softWrap = false
-                            )
-                        } else if (!tx.origCurrency.equals(account.currencyCode, ignoreCase = true)) {
-                            Text(
-                                text = formatPrivacyAmount(
-                                    privacyMasked,
-                                    "原币 ${MoneyAmount.format(tx.origAmountMicros, tx.origCurrency, showCurrencyCode = true)}"
-                                ),
-                                style = MaterialTheme.typography.labelSmall.tabular(),
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
-                                softWrap = false
-                            )
-                        } else if (!account.currencyCode.equals(tx.baseCurrency, ignoreCase = true) && tx.rateToBaseMicros > 0L) {
-                            val frozenBase = LedgerAnalytics.computeFrozenBaseMicros(tx)
-                            Text(
-                                text = formatPrivacyAmount(
-                                    privacyMasked,
-                                    "≈ ${MoneyAmount.format(frozenBase, tx.baseCurrency, showCurrencyCode = true)}"
-                                ),
-                                style = MaterialTheme.typography.labelSmall.tabular(),
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
-                                softWrap = false
-                            )
-                        } else if (tx.type == TransactionType.EXPENSE && tx.discountAmountMicros > 0L) {
-                            val nominalMicros = (tx.origAmountMicros + tx.discountAmountMicros - tx.feeAmountMicros)
-                                .coerceAtLeast(0L)
-                            if (nominalMicros > 0L && nominalMicros != tx.origAmountMicros) {
-                                val nominalFormatted = formatPrivacyAmount(
-                                    privacyMasked,
-                                    MoneyAmount.format(
-                                        amountMicros = nominalMicros,
-                                        currencyCode = tx.origCurrency,
-                                        showCurrencyCode = !tx.origCurrency.equals("CNY", ignoreCase = true)
-                                    )
-                                )
                                 Text(
-                                    text = "原价 $nominalFormatted",
-                                    style = MaterialTheme.typography.labelSmall.tabular(),
+                                    text = KairoFormats.formatTime(tx.timestamp),
+                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.5.sp).tabular(),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f),
+                                    maxLines = 1,
+                                    softWrap = false
+                                )
+                                if (hasAttachment) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.AttachFile,
+                                        contentDescription = "含附件",
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
+                                        modifier = Modifier.size(12.dp)
+                                    )
+                                }
+                                parsedTags.take(2).forEach { tagName ->
+                                    AccountInlineTagPill(
+                                        name = tagName,
+                                        colorHex = KairoIcons.fallbackTagColorHex(tagName)
+                                    )
+                                }
+                                if (detailMetaText.isNotEmpty()) {
+                                    Text(
+                                        text = detailMetaText,
+                                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.5.sp),
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.82f),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f, fill = false)
+                                    )
+                                }
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.width(8.dp))
+
+                        val isTransferOut = tx.type == TransactionType.TRANSFER &&
+                            tx.accountId == account.id &&
+                            tx.toAccountId != account.id
+                        val isTransferInOnly = tx.type == TransactionType.TRANSFER &&
+                            tx.toAccountId == account.id &&
+                            tx.accountId != account.id
+                        val hasDiscountOrFee = tx.discountAmountMicros > 0L || tx.feeAmountMicros > 0L
+
+                        // 右列：严格 2 行（主金额 + 仅转账差额/外币折算副行）
+                        Column(
+                            horizontalAlignment = Alignment.End,
+                            verticalArrangement = Arrangement.spacedBy(2.dp)
+                        ) {
+                            Text(
+                                text = formatPrivacyAmount(
+                                    privacyMasked,
+                                    KairoFormats.formatPlainSignedAmount(
+                                        amountMicros = accountSignedAmount,
+                                        currencyCode = account.currencyCode,
+                                        baseCurrency = displayCurrency,
+                                        showSign = true
+                                    )
+                                ),
+                                style = MaterialTheme.typography.titleSmall.copy(fontSize = 15.sp).tabular(),
+                                color = amountColor,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1,
+                                softWrap = false
+                            )
+                            val subAmountText = when {
+                                isTransferOut && tx.toAmountMicros != null && (
+                                    hasDiscountOrFee ||
+                                        tx.toAmountMicros != tx.accountAmountMicros ||
+                                        (tx.toCurrency != null && !tx.toCurrency.equals(account.currencyCode, ignoreCase = true))
+                                    ) -> {
+                                    val toCur = tx.toCurrency ?: tx.origCurrency
+                                    val formattedTo = formatPrivacyAmount(
+                                        privacyMasked,
+                                        KairoFormats.formatPlainSignedAmount(
+                                            amountMicros = tx.toAmountMicros,
+                                            currencyCode = toCur,
+                                            baseCurrency = displayCurrency,
+                                            showSign = false
+                                        )
+                                    )
+                                    "到账 $formattedTo"
+                                }
+                                isTransferInOnly && (
+                                    hasDiscountOrFee ||
+                                        (tx.toAmountMicros != null && tx.toAmountMicros != tx.accountAmountMicros) ||
+                                        !tx.accountCurrency.equals(account.currencyCode, ignoreCase = true)
+                                    ) -> {
+                                    val formattedOut = formatPrivacyAmount(
+                                        privacyMasked,
+                                        KairoFormats.formatPlainSignedAmount(
+                                            amountMicros = tx.accountAmountMicros,
+                                            currencyCode = tx.accountCurrency,
+                                            baseCurrency = displayCurrency,
+                                            showSign = false
+                                        )
+                                    )
+                                    "实扣 $formattedOut"
+                                }
+                                !tx.origCurrency.equals(account.currencyCode, ignoreCase = true) -> {
+                                    formatPrivacyAmount(
+                                        privacyMasked,
+                                        "原币 ${MoneyAmount.format(tx.origAmountMicros, tx.origCurrency, showCurrencyCode = true)}"
+                                    )
+                                }
+                                !account.currencyCode.equals(tx.baseCurrency, ignoreCase = true) && tx.rateToBaseMicros > 0L -> {
+                                    val frozenBase = LedgerAnalytics.computeFrozenBaseMicros(tx)
+                                    formatPrivacyAmount(
+                                        privacyMasked,
+                                        "≈ ${MoneyAmount.format(frozenBase, tx.baseCurrency, showCurrencyCode = !tx.baseCurrency.equals(displayCurrency, ignoreCase = true))}"
+                                    )
+                                }
+                                else -> null
+                            }
+                            if (subAmountText != null) {
+                                Text(
+                                    text = subAmountText,
+                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp).tabular(),
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     maxLines = 1,
                                     softWrap = false
                                 )
                             }
                         }
-                    }
 
-                    if (!isMultiSelectMode) {
-                        Box {
-                            IconButton(
-                                onClick = { showRowMenu = true },
-                                modifier = Modifier.size(30.dp)
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Rounded.MoreVert,
-                                    contentDescription = "账单操作",
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
-                                    modifier = Modifier.size(18.dp)
-                                )
-                            }
-                            DropdownMenu(
-                                expanded = showRowMenu,
-                                onDismissRequest = { showRowMenu = false }
-                            ) {
-                                DropdownMenuItem(
-                                    leadingIcon = { Icon(Icons.Rounded.Edit, contentDescription = null) },
-                                    text = { Text("编辑账单") },
-                                    onClick = {
-                                        showRowMenu = false
-                                        onEditTransaction(tx)
-                                    }
-                                )
-                                DropdownMenuItem(
-                                    leadingIcon = { Icon(Icons.Rounded.ContentCopy, contentDescription = null) },
-                                    text = { Text("再记一笔") },
-                                    onClick = {
-                                        showRowMenu = false
-                                        onDuplicateTransaction(tx)
-                                    }
-                                )
-                                if (tx.type == TransactionType.EXPENSE) {
+                        if (!isMultiSelectMode) {
+                            Box {
+                                IconButton(
+                                    onClick = { showRowMenu = true },
+                                    modifier = Modifier.size(28.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.MoreVert,
+                                        contentDescription = "账单操作",
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f),
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                                DropdownMenu(
+                                    expanded = showRowMenu,
+                                    onDismissRequest = { showRowMenu = false }
+                                ) {
                                     DropdownMenuItem(
-                                        leadingIcon = { Icon(Icons.Rounded.Replay, contentDescription = null) },
-                                        text = { Text("退款") },
+                                        leadingIcon = { Icon(Icons.Rounded.Edit, contentDescription = null) },
+                                        text = { Text("编辑账单") },
                                         onClick = {
                                             showRowMenu = false
-                                            onRefundTransaction(tx)
+                                            onEditTransaction(tx)
+                                        }
+                                    )
+                                    DropdownMenuItem(
+                                        leadingIcon = { Icon(Icons.Rounded.ContentCopy, contentDescription = null) },
+                                        text = { Text("再记一笔") },
+                                        onClick = {
+                                            showRowMenu = false
+                                            onDuplicateTransaction(tx)
+                                        }
+                                    )
+                                    if (tx.type == TransactionType.EXPENSE) {
+                                        DropdownMenuItem(
+                                            leadingIcon = { Icon(Icons.Rounded.Replay, contentDescription = null) },
+                                            text = { Text("退款") },
+                                            onClick = {
+                                                showRowMenu = false
+                                                onRefundTransaction(tx)
+                                            }
+                                        )
+                                    }
+                                    DropdownMenuItem(
+                                        leadingIcon = { Icon(Icons.Rounded.CheckBox, contentDescription = null) },
+                                        text = { Text("多选管理") },
+                                        onClick = {
+                                            showRowMenu = false
+                                            onStartMultiSelectWith(tx)
+                                        }
+                                    )
+                                    HorizontalDivider(modifier = Modifier.padding(vertical = 2.dp))
+                                    DropdownMenuItem(
+                                        leadingIcon = {
+                                            Icon(
+                                                imageVector = Icons.Rounded.Delete,
+                                                contentDescription = null,
+                                                tint = semantic.expense
+                                            )
+                                        },
+                                        text = { Text("删除账单", color = semantic.expense) },
+                                        onClick = {
+                                            showRowMenu = false
+                                            onRequestDeleteTransaction(tx)
                                         }
                                     )
                                 }
-                                DropdownMenuItem(
-                                    leadingIcon = { Icon(Icons.Rounded.CheckBox, contentDescription = null) },
-                                    text = { Text("多选管理") },
-                                    onClick = {
-                                        showRowMenu = false
-                                        onStartMultiSelectWith(tx)
-                                    }
-                                )
-                                HorizontalDivider(modifier = Modifier.padding(vertical = 2.dp))
-                                DropdownMenuItem(
-                                    leadingIcon = {
-                                        Icon(
-                                            imageVector = Icons.Rounded.Delete,
-                                            contentDescription = null,
-                                            tint = semantic.expense
-                                        )
-                                    },
-                                    text = { Text("删除账单", color = semantic.expense) },
-                                    onClick = {
-                                        showRowMenu = false
-                                        onRequestDeleteTransaction(tx)
-                                    }
-                                )
                             }
                         }
                     }
@@ -3216,12 +3231,42 @@ private fun TxMiniFlagBadge(
     ) {
         Text(
             text = text,
-            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp).tabular(),
+            style = MaterialTheme.typography.labelSmall.copy(
+                fontSize = 10.sp,
+                lineHeight = 13.sp
+            ).tabular(),
             fontWeight = FontWeight.SemiBold,
             color = contentColor,
             maxLines = 1,
             softWrap = false,
             modifier = Modifier.padding(horizontal = 4.5.dp, vertical = 1.dp)
+        )
+    }
+}
+
+@Composable
+private fun AccountInlineTagPill(
+    name: String,
+    colorHex: Long
+) {
+    val tagColor = Color(colorHex)
+    Surface(
+        shape = AccountInlineTagShape,
+        color = tagColor.copy(alpha = 0.10f)
+    ) {
+        Text(
+            text = name,
+            style = MaterialTheme.typography.labelSmall.copy(
+                fontSize = 10.5.sp,
+                lineHeight = 13.sp
+            ),
+            fontWeight = FontWeight.Medium,
+            color = tagColor,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier
+                .widthIn(max = 64.dp)
+                .padding(horizontal = 4.5.dp, vertical = 1.dp)
         )
     }
 }
@@ -3628,6 +3673,19 @@ private fun InstallmentEditorDialog(
     }
 }
 
+private fun resolveCategoryDisplayName(
+    category: CategoryEntity?,
+    categoryMap: Map<Long, CategoryEntity>
+): String? {
+    if (category == null) return null
+    val parentName = category.parentId?.let { categoryMap[it]?.name }?.takeIf { it.isNotBlank() }
+    return if (parentName != null && parentName != category.name) {
+        "$parentName-${category.name}"
+    } else {
+        category.name
+    }
+}
+
 private fun resolveTransferPeerLabel(
     tx: TransactionEntity,
     accountId: Long,
@@ -3638,11 +3696,11 @@ private fun resolveTransferPeerLabel(
         tx.toAccountId == accountId && tx.accountId == accountId -> "账户内互转"
         tx.toAccountId == accountId -> {
             val fromName = accountMap[tx.accountId]?.name
-            if (fromName != null) "从 $fromName 转入" else "转入"
+            if (!fromName.isNullOrBlank()) "← $fromName" else "← 转入"
         }
         tx.accountId == accountId -> {
             val toName = tx.toAccountId?.let { accountMap[it]?.name }
-            if (toName != null) "转至 $toName" else "转出"
+            if (!toName.isNullOrBlank()) "→ $toName" else "→ 转出"
         }
         else -> null
     }
@@ -3654,11 +3712,13 @@ private fun resolveTransactionTitle(
     categoryMap: Map<Long, CategoryEntity>,
     accountMap: Map<Long, AccountEntity>
 ): String {
-    if (tx.merchant.isNotBlank()) return tx.merchant
     if (tx.type == TransactionType.TRANSFER) {
         return resolveTransferPeerLabel(tx, accountId, accountMap) ?: "转账"
     }
-    return tx.categoryId?.let { categoryMap[it]?.name } ?: KairoFormats.transactionTypeLabel(tx.type)
+    val categoryName = resolveCategoryDisplayName(tx.categoryId?.let { categoryMap[it] }, categoryMap)
+    if (!categoryName.isNullOrBlank()) return categoryName
+    if (tx.merchant.isNotBlank()) return tx.merchant.trim()
+    return KairoFormats.transactionTypeLabel(tx.type)
 }
 
 private fun matchesAccountTransactionQuery(
@@ -3668,7 +3728,8 @@ private fun matchesAccountTransactionQuery(
     categoryMap: Map<Long, CategoryEntity>,
     accountMap: Map<Long, AccountEntity>
 ): Boolean {
-    val categoryName = tx.categoryId?.let { categoryMap[it]?.name }.orEmpty()
+    val category = tx.categoryId?.let { categoryMap[it] }
+    val categoryName = resolveCategoryDisplayName(category, categoryMap).orEmpty()
     val peerName = when {
         tx.type == TransactionType.TRANSFER && tx.toAccountId == accountId -> accountMap[tx.accountId]?.name.orEmpty()
         tx.type == TransactionType.TRANSFER && tx.accountId == accountId -> tx.toAccountId?.let { accountMap[it]?.name }.orEmpty()
@@ -3695,16 +3756,6 @@ private fun matchesAccountTransactionQuery(
     }.lowercase(Locale.ROOT)
 
     return tokens.all { token -> haystack.contains(token) }
-}
-
-private fun formatAccountDayHeader(date: LocalDate): String {
-    val today = LocalDate.now()
-    return if (date.year == today.year) {
-        KairoFormats.formatDayHeader(date)
-    } else {
-        val dayOfWeek = date.dayOfWeek.getDisplayName(TextStyle.SHORT, Locale.SIMPLIFIED_CHINESE)
-        "${date.year}年${date.monthValue}月${date.dayOfMonth}日 $dayOfWeek"
-    }
 }
 
 private fun formatCycleDateRange(startMillis: Long, endMillis: Long, zone: ZoneId): String {
