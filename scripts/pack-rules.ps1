@@ -5,7 +5,7 @@ param(
 
     [string]$Version = (Get-Date -Format 'yyyy.MM.dd.1'),
 
-    [string]$Changelog = '融合 AutoAccounting 短信/通知/屏幕识别规则与智能分类词库',
+    [string]$Changelog = '整理网上公开短信/通知/屏幕识别规则与智能分类词库',
 
     [string]$RepoOwner = 'Agonie0v0',
 
