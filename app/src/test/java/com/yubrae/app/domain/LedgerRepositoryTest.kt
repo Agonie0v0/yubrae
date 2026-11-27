@@ -1771,4 +1771,312 @@ class LedgerRepositoryTest {
         assertEquals(MoneyAmount.parseToMicros("100.00")!!, afterToggleOff.totalLiabilitiesMicros)
         assertEquals(MoneyAmount.parseToMicros("900.00")!!, afterToggleOff.netWorthMicros)
     }
+
+    @Test
+    fun discountAndFee_transferExpenseIncomeAndEditDeleteRollbackAccounting() = runTest {
+        val bankId = accountDao.insert(
+            AccountEntity(
+                name = "储蓄卡",
+                groupType = AccountGroup.DEBIT,
+                currencyCode = "CNY",
+                balanceMicros = MoneyAmount.parseToMicros("1000.00")!!
+            )
+        )
+        val transitId = accountDao.insert(
+            AccountEntity(
+                name = "交通卡",
+                groupType = AccountGroup.WALLET,
+                currencyCode = "CNY",
+                balanceMicros = 0L
+            )
+        )
+        val wechatId = accountDao.insert(
+            AccountEntity(
+                name = "微信零钱",
+                groupType = AccountGroup.WALLET,
+                currencyCode = "CNY",
+                balanceMicros = MoneyAmount.parseToMicros("500.00")!!
+            )
+        )
+        val foodCatId = categoryDao.insert(CategoryEntity(name = "餐饮", type = TransactionType.EXPENSE))
+        val bonusCatId = categoryDao.insert(CategoryEntity(name = "副业", type = TransactionType.INCOME))
+
+        // 初始净资产 = 1500.00
+        assertEquals(MoneyAmount.parseToMicros("1500.00")!!, ledger.computeNetWorth("CNY").netWorthMicros)
+
+        // 1. 转账充值 50 优惠 2：源 -48，目标 +50，净资产 +2 (= 1502.00)
+        val rechargeTx = ledger.saveTransaction(
+            RecordTransactionRequest(
+                type = TransactionType.TRANSFER,
+                timestamp = millisOf(2026, 11, 20, 10, 0),
+                origAmountMicros = MoneyAmount.parseToMicros("48.00")!!,
+                origCurrency = "CNY",
+                accountId = bankId,
+                toAccountId = transitId,
+                discountAmountMicros = MoneyAmount.parseToMicros("2.00")!!,
+                feeAmountMicros = 0L
+            )
+        ).getOrThrow()
+        assertEquals(MoneyAmount.parseToMicros("48.00")!!, rechargeTx.origAmountMicros)
+        assertEquals(MoneyAmount.parseToMicros("48.00")!!, rechargeTx.accountAmountMicros)
+        assertEquals(MoneyAmount.parseToMicros("50.00")!!, rechargeTx.toAmountMicros)
+        assertEquals(MoneyAmount.parseToMicros("2.00")!!, rechargeTx.discountAmountMicros)
+        assertEquals(0L, rechargeTx.feeAmountMicros)
+        assertEquals(MoneyAmount.parseToMicros("952.00")!!, accountDao.getById(bankId)!!.balanceMicros)
+        assertEquals(MoneyAmount.parseToMicros("50.00")!!, accountDao.getById(transitId)!!.balanceMicros)
+        assertEquals(MoneyAmount.parseToMicros("1502.00")!!, ledger.computeNetWorth("CNY").netWorthMicros)
+
+        // 2. 提现 100 手续费 0.10：源 -100.10，目标 +100，净资产 -0.10 (= 1501.90)
+        val withdrawTx = ledger.saveTransaction(
+            RecordTransactionRequest(
+                type = TransactionType.TRANSFER,
+                timestamp = millisOf(2026, 11, 20, 11, 0),
+                origAmountMicros = MoneyAmount.parseToMicros("100.10")!!,
+                origCurrency = "CNY",
+                accountId = wechatId,
+                toAccountId = bankId,
+                discountAmountMicros = 0L,
+                feeAmountMicros = MoneyAmount.parseToMicros("0.10")!!
+            )
+        ).getOrThrow()
+        assertEquals(MoneyAmount.parseToMicros("100.10")!!, withdrawTx.accountAmountMicros)
+        assertEquals(MoneyAmount.parseToMicros("100.00")!!, withdrawTx.toAmountMicros)
+        assertEquals(MoneyAmount.parseToMicros("0.10")!!, withdrawTx.feeAmountMicros)
+        assertEquals(MoneyAmount.parseToMicros("399.90")!!, accountDao.getById(wechatId)!!.balanceMicros)
+        assertEquals(MoneyAmount.parseToMicros("1052.00")!!, accountDao.getById(bankId)!!.balanceMicros)
+        assertEquals(MoneyAmount.parseToMicros("1501.90")!!, ledger.computeNetWorth("CNY").netWorthMicros)
+
+        // 3. 满 50 减 50 零元免单转账：源 -0，目标 +50，净资产 +50 (= 1551.90)
+        val freeTransferTx = ledger.saveTransaction(
+            RecordTransactionRequest(
+                type = TransactionType.TRANSFER,
+                timestamp = millisOf(2026, 11, 20, 12, 0),
+                origAmountMicros = 0L,
+                origCurrency = "CNY",
+                accountId = bankId,
+                toAccountId = transitId,
+                discountAmountMicros = MoneyAmount.parseToMicros("50.00")!!,
+                feeAmountMicros = 0L
+            )
+        ).getOrThrow()
+        assertEquals(0L, freeTransferTx.origAmountMicros)
+        assertEquals(0L, freeTransferTx.accountAmountMicros)
+        assertEquals(MoneyAmount.parseToMicros("50.00")!!, freeTransferTx.toAmountMicros)
+        assertEquals(MoneyAmount.parseToMicros("50.00")!!, freeTransferTx.discountAmountMicros)
+        assertEquals(MoneyAmount.parseToMicros("1052.00")!!, accountDao.getById(bankId)!!.balanceMicros)
+        assertEquals(MoneyAmount.parseToMicros("100.00")!!, accountDao.getById(transitId)!!.balanceMicros)
+        assertEquals(MoneyAmount.parseToMicros("1551.90")!!, ledger.computeNetWorth("CNY").netWorthMicros)
+
+        // 4. 支出 50 优惠 2：账户 -48，月度支出统计 = 48
+        val expTx = ledger.saveTransaction(
+            RecordTransactionRequest(
+                type = TransactionType.EXPENSE,
+                timestamp = millisOf(2026, 11, 21, 12, 0),
+                origAmountMicros = MoneyAmount.parseToMicros("48.00")!!,
+                origCurrency = "CNY",
+                accountId = wechatId,
+                categoryId = foodCatId,
+                discountAmountMicros = MoneyAmount.parseToMicros("2.00")!!,
+                feeAmountMicros = 0L
+            )
+        ).getOrThrow()
+        assertEquals(MoneyAmount.parseToMicros("48.00")!!, expTx.origAmountMicros)
+        assertEquals(MoneyAmount.parseToMicros("2.00")!!, expTx.discountAmountMicros)
+        assertEquals(MoneyAmount.parseToMicros("351.90")!!, accountDao.getById(wechatId)!!.balanceMicros)
+
+        // 5. 收入 100 手续费 0.60：账户 +99.40（传入优惠也应被收入自动归零）
+        val incTx = ledger.saveTransaction(
+            RecordTransactionRequest(
+                type = TransactionType.INCOME,
+                timestamp = millisOf(2026, 11, 21, 18, 0),
+                origAmountMicros = MoneyAmount.parseToMicros("99.40")!!,
+                origCurrency = "CNY",
+                accountId = bankId,
+                categoryId = bonusCatId,
+                discountAmountMicros = MoneyAmount.parseToMicros("5.00")!!,
+                feeAmountMicros = MoneyAmount.parseToMicros("0.60")!!
+            )
+        ).getOrThrow()
+        assertEquals(MoneyAmount.parseToMicros("99.40")!!, incTx.origAmountMicros)
+        assertEquals(0L, incTx.discountAmountMicros)
+        assertEquals(MoneyAmount.parseToMicros("0.60")!!, incTx.feeAmountMicros)
+        assertEquals(MoneyAmount.parseToMicros("1151.40")!!, accountDao.getById(bankId)!!.balanceMicros)
+
+        val trend = ledger.computeMonthlyTrend(monthsBack = 1, displayCurrency = "CNY")
+        assertEquals(MoneyAmount.parseToMicros("48.00")!!, trend.single().expenseBaseMicros)
+        assertEquals(MoneyAmount.parseToMicros("99.40")!!, trend.single().incomeBaseMicros)
+
+        // 6. 编辑充值转账（改优惠为 5 -> 实扣 45、到账 50），再逐笔删除验证精确回滚至初始余额
+        val editedRecharge = ledger.saveTransaction(
+            RecordTransactionRequest(
+                existingId = rechargeTx.id,
+                type = TransactionType.TRANSFER,
+                timestamp = rechargeTx.timestamp,
+                origAmountMicros = MoneyAmount.parseToMicros("45.00")!!,
+                origCurrency = "CNY",
+                accountId = bankId,
+                toAccountId = transitId,
+                discountAmountMicros = MoneyAmount.parseToMicros("5.00")!!,
+                feeAmountMicros = 0L
+            )
+        ).getOrThrow()
+        assertEquals(MoneyAmount.parseToMicros("50.00")!!, editedRecharge.toAmountMicros)
+        assertEquals(MoneyAmount.parseToMicros("5.00")!!, editedRecharge.discountAmountMicros)
+        assertEquals(MoneyAmount.parseToMicros("1154.40")!!, accountDao.getById(bankId)!!.balanceMicros)
+        assertEquals(MoneyAmount.parseToMicros("100.00")!!, accountDao.getById(transitId)!!.balanceMicros)
+
+        assertTrue(ledger.deleteTransaction(rechargeTx.id).isSuccess)
+        assertTrue(ledger.deleteTransaction(freeTransferTx.id).isSuccess)
+        assertTrue(ledger.deleteTransaction(withdrawTx.id).isSuccess)
+        assertTrue(ledger.deleteTransaction(expTx.id).isSuccess)
+        assertTrue(ledger.deleteTransaction(incTx.id).isSuccess)
+
+        assertEquals(MoneyAmount.parseToMicros("1000.00")!!, accountDao.getById(bankId)!!.balanceMicros)
+        assertEquals(0L, accountDao.getById(transitId)!!.balanceMicros)
+        assertEquals(MoneyAmount.parseToMicros("500.00")!!, accountDao.getById(wechatId)!!.balanceMicros)
+        assertEquals(MoneyAmount.parseToMicros("1500.00")!!, ledger.computeNetWorth("CNY").netWorthMicros)
+    }
+
+    @Test
+    fun discountAndFee_crossCurrencyZeroOrigValidationAndBatchMovePreserveFields() = runTest {
+        exchangeRateDao.upsert(
+            ExchangeRateEntity(
+                baseCurrency = "USD",
+                targetCurrency = "CNY",
+                rateMicros = 7_200_000L,
+                date = "2026-11-22",
+                source = "CUSTOM"
+            )
+        )
+        val usdId = accountDao.insert(
+            AccountEntity(
+                name = "美元账户",
+                groupType = AccountGroup.FOREIGN,
+                currencyCode = "USD",
+                balanceMicros = MoneyAmount.parseToMicros("500.00")!!
+            )
+        )
+        val cnyId = accountDao.insert(
+            AccountEntity(
+                name = "人民币储蓄卡",
+                groupType = AccountGroup.DEBIT,
+                currencyCode = "CNY",
+                balanceMicros = MoneyAmount.parseToMicros("1000.00")!!
+            )
+        )
+        val cny2Id = accountDao.insert(
+            AccountEntity(
+                name = "微信零钱",
+                groupType = AccountGroup.WALLET,
+                currencyCode = "CNY",
+                balanceMicros = MoneyAmount.parseToMicros("300.00")!!
+            )
+        )
+
+        // 1. 跨币种转账含优惠：面值 100 USD、优惠 2 USD -> 实扣 98 USD，目标人民币按 100 * 7.20 = 720.00 CNY 到账
+        val crossTransfer = ledger.saveTransaction(
+            RecordTransactionRequest(
+                type = TransactionType.TRANSFER,
+                timestamp = millisOf(2026, 11, 22, 9, 0),
+                origAmountMicros = MoneyAmount.parseToMicros("98.00")!!,
+                origCurrency = "USD",
+                accountId = usdId,
+                toAccountId = cnyId,
+                discountAmountMicros = MoneyAmount.parseToMicros("2.00")!!
+            )
+        ).getOrThrow()
+        assertEquals(MoneyAmount.parseToMicros("98.00")!!, crossTransfer.accountAmountMicros)
+        assertEquals(MoneyAmount.parseToMicros("720.00")!!, crossTransfer.toAmountMicros)
+        assertEquals(MoneyAmount.parseToMicros("402.00")!!, accountDao.getById(usdId)!!.balanceMicros)
+        assertEquals(MoneyAmount.parseToMicros("1720.00")!!, accountDao.getById(cnyId)!!.balanceMicros)
+
+        // 2. 跨币种 0 元免单支出：resolveConversion 返回 0 且不除零
+        val zeroPreview = ledger.previewConversion(
+            origAmountMicros = 0L,
+            origCurrency = "USD",
+            accountId = cnyId
+        )
+        assertEquals(0L, zeroPreview.accountAmountMicros)
+        assertEquals(0L, zeroPreview.baseAmountMicros)
+        assertEquals(7_200_000L, zeroPreview.rateToAccountMicros)
+
+        val freeUsdExpense = ledger.saveTransaction(
+            RecordTransactionRequest(
+                type = TransactionType.EXPENSE,
+                timestamp = millisOf(2026, 11, 22, 10, 0),
+                origAmountMicros = 0L,
+                origCurrency = "USD",
+                accountId = cnyId,
+                discountAmountMicros = MoneyAmount.parseToMicros("20.00")!!
+            )
+        ).getOrThrow()
+        assertEquals(0L, freeUsdExpense.accountAmountMicros)
+        assertEquals(MoneyAmount.parseToMicros("20.00")!!, freeUsdExpense.discountAmountMicros)
+        assertEquals(MoneyAmount.parseToMicros("1720.00")!!, accountDao.getById(cnyId)!!.balanceMicros)
+
+        // 3. 批量迁移账户必须保留 discountAmountMicros 与 feeAmountMicros
+        val expWithBoth = ledger.saveTransaction(
+            RecordTransactionRequest(
+                type = TransactionType.EXPENSE,
+                timestamp = millisOf(2026, 11, 22, 11, 0),
+                origAmountMicros = MoneyAmount.parseToMicros("48.50")!!,
+                origCurrency = "CNY",
+                accountId = cnyId,
+                discountAmountMicros = MoneyAmount.parseToMicros("2.00")!!,
+                feeAmountMicros = MoneyAmount.parseToMicros("0.50")!!
+            )
+        ).getOrThrow()
+        assertEquals(1, ledger.batchMoveTransactionsAccount(listOf(expWithBoth.id), cny2Id).getOrThrow())
+        val moved = transactionDao.getById(expWithBoth.id)!!
+        assertEquals(cny2Id, moved.accountId)
+        assertEquals(MoneyAmount.parseToMicros("2.00")!!, moved.discountAmountMicros)
+        assertEquals(MoneyAmount.parseToMicros("0.50")!!, moved.feeAmountMicros)
+
+        // 4. 负优惠、负手续费、0 元且无优惠、面值 <= 0 均必须拦截
+        assertTrue(
+            ledger.saveTransaction(
+                RecordTransactionRequest(
+                    type = TransactionType.EXPENSE,
+                    origAmountMicros = MoneyAmount.parseToMicros("10.00")!!,
+                    origCurrency = "CNY",
+                    accountId = cnyId,
+                    discountAmountMicros = -1L
+                )
+            ).isFailure
+        )
+        assertTrue(
+            ledger.saveTransaction(
+                RecordTransactionRequest(
+                    type = TransactionType.EXPENSE,
+                    origAmountMicros = MoneyAmount.parseToMicros("10.00")!!,
+                    origCurrency = "CNY",
+                    accountId = cnyId,
+                    feeAmountMicros = -1L
+                )
+            ).isFailure
+        )
+        assertTrue(
+            ledger.saveTransaction(
+                RecordTransactionRequest(
+                    type = TransactionType.EXPENSE,
+                    origAmountMicros = 0L,
+                    origCurrency = "CNY",
+                    accountId = cnyId,
+                    discountAmountMicros = 0L
+                )
+            ).isFailure
+        )
+        assertTrue(
+            ledger.saveTransaction(
+                RecordTransactionRequest(
+                    type = TransactionType.TRANSFER,
+                    origAmountMicros = MoneyAmount.parseToMicros("10.00")!!,
+                    origCurrency = "CNY",
+                    accountId = cnyId,
+                    toAccountId = cny2Id,
+                    feeAmountMicros = MoneyAmount.parseToMicros("10.00")!!
+                )
+            ).isFailure
+        )
+    }
 }

@@ -58,7 +58,9 @@ import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.CurrencyExchange
 import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.rounded.ErrorOutline
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
+import androidx.compose.material.icons.rounded.LocalOffer
 import androidx.compose.material.icons.rounded.PhotoLibrary
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Replay
@@ -96,6 +98,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusDirection
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
@@ -132,12 +135,14 @@ import com.yubrae.app.ui.theme.tabular
 import com.yubrae.app.ui.viewmodel.KairoMainViewModel
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import java.math.BigDecimal
 import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.LocalTime
 import java.time.ZoneId
 import java.time.ZoneOffset
+import kotlin.math.abs
 
 internal fun quickRecordKeypadKeyHeightDp(screenHeightDp: Int): Int =
     if (screenHeightDp < 660) 40 else 44
@@ -151,8 +156,134 @@ private enum class RecordWorkspacePanel {
     CATEGORY,
     TAGS,
     ACCOUNT,
+    DISCOUNT_FEE,
     DATE_TIME,
     MORE
+}
+
+private data class DiscountFeeCalc(
+    val enteredMicros: Long,
+    val discountMicros: Long,
+    val feeMicros: Long,
+    val nominalMicros: Long,
+    val actualSubmitOrigMicros: Long,
+    val validationError: String?
+)
+
+private fun computeDiscountFeeCalc(
+    txType: String,
+    enteredAmountMicros: Long,
+    isExplicitZeroAmount: Boolean,
+    discountMicros: Long,
+    feeMicros: Long,
+    expenseAmountIsActualPaid: Boolean
+): DiscountFeeCalc {
+    val hasEntered = enteredAmountMicros > 0L || isExplicitZeroAmount
+    return when (txType) {
+        TransactionType.TRANSFER -> {
+            val nominal = enteredAmountMicros
+            val actualOut = nominal - discountMicros + feeMicros
+            val error = if (hasEntered && actualOut < 0L) "优惠不能大于转账金额" else null
+            DiscountFeeCalc(
+                enteredMicros = enteredAmountMicros,
+                discountMicros = discountMicros,
+                feeMicros = feeMicros,
+                nominalMicros = nominal,
+                actualSubmitOrigMicros = actualOut,
+                validationError = error
+            )
+        }
+        TransactionType.EXPENSE -> {
+            if (!expenseAmountIsActualPaid) {
+                val nominal = enteredAmountMicros
+                val actualPaid = nominal - discountMicros + feeMicros
+                val error = if (hasEntered && actualPaid < 0L) "优惠不能大于原价" else null
+                DiscountFeeCalc(
+                    enteredMicros = enteredAmountMicros,
+                    discountMicros = discountMicros,
+                    feeMicros = feeMicros,
+                    nominalMicros = nominal,
+                    actualSubmitOrigMicros = actualPaid,
+                    validationError = error
+                )
+            } else {
+                val actualPaid = enteredAmountMicros
+                val nominal = actualPaid + discountMicros - feeMicros
+                val error = when {
+                    hasEntered && nominal <= 0L && (discountMicros > 0L || feeMicros > 0L) ->
+                        if (discountMicros > 0L) "手续费过大，请检查原价与实付" else "手续费不能大于等于实付金额"
+                    else -> null
+                }
+                DiscountFeeCalc(
+                    enteredMicros = enteredAmountMicros,
+                    discountMicros = discountMicros,
+                    feeMicros = feeMicros,
+                    nominalMicros = nominal,
+                    actualSubmitOrigMicros = actualPaid,
+                    validationError = error
+                )
+            }
+        }
+        TransactionType.INCOME -> {
+            val nominal = enteredAmountMicros
+            val actualReceived = nominal - feeMicros
+            val error = if (hasEntered && actualReceived < 0L) "手续费不能大于收入金额" else null
+            DiscountFeeCalc(
+                enteredMicros = enteredAmountMicros,
+                discountMicros = 0L,
+                feeMicros = feeMicros,
+                nominalMicros = nominal,
+                actualSubmitOrigMicros = actualReceived,
+                validationError = error
+            )
+        }
+        else -> {
+            DiscountFeeCalc(
+                enteredMicros = enteredAmountMicros,
+                discountMicros = 0L,
+                feeMicros = 0L,
+                nominalMicros = enteredAmountMicros,
+                actualSubmitOrigMicros = enteredAmountMicros,
+                validationError = null
+            )
+        }
+    }
+}
+
+private fun formatTrimmedMicros(micros: Long): String {
+    val bd = MoneyAmount.microsToBigDecimal(abs(micros)).stripTrailingZeros()
+    return if (bd.compareTo(BigDecimal.ZERO) == 0) "0" else bd.toPlainString()
+}
+
+private fun sanitizeDecimalInput(raw: String): String {
+    val sb = StringBuilder(raw.length)
+    var dotSeen = false
+    var fracDigits = 0
+    var intDigits = 0
+    for (ch in raw) {
+        when {
+            ch.isDigit() -> {
+                if (dotSeen) {
+                    if (fracDigits < 4) {
+                        sb.append(ch)
+                        fracDigits++
+                    }
+                } else if (intDigits < 10) {
+                    sb.append(ch)
+                    intDigits++
+                }
+            }
+            ch == '.' && !dotSeen -> {
+                dotSeen = true
+                if (sb.isEmpty()) {
+                    sb.append('0')
+                    intDigits = 1
+                }
+                sb.append('.')
+            }
+        }
+    }
+    return sb.toString()
 }
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
@@ -277,7 +408,23 @@ fun QuickRecordSheet(
             when {
                 existingTransaction != null -> {
                     val digits = CurrencyCatalog.find(existingTransaction.origCurrency).minorDigits
-                    MoneyAmount.formatPlain(existingTransaction.origAmountMicros, digits, grouping = false)
+                    val hasDiscountOrFee = existingTransaction.type != TransactionType.ADJUST &&
+                        (existingTransaction.discountAmountMicros > 0L || existingTransaction.feeAmountMicros > 0L)
+                    val restoredMicros = when (existingTransaction.type) {
+                        TransactionType.EXPENSE, TransactionType.TRANSFER ->
+                            (existingTransaction.origAmountMicros +
+                                existingTransaction.discountAmountMicros -
+                                existingTransaction.feeAmountMicros).coerceAtLeast(0L)
+                        TransactionType.INCOME ->
+                            (existingTransaction.origAmountMicros + existingTransaction.feeAmountMicros)
+                                .coerceAtLeast(0L)
+                        else -> existingTransaction.origAmountMicros
+                    }
+                    if (hasDiscountOrFee) {
+                        formatTrimmedMicros(restoredMicros)
+                    } else {
+                        MoneyAmount.formatPlain(restoredMicros, digits, grouping = false)
+                    }
                 }
                 refundOfTransaction != null -> {
                     val digits = CurrencyCatalog.find(refundOfTransaction.origCurrency).minorDigits
@@ -298,6 +445,44 @@ fun QuickRecordSheet(
                 else -> ""
             }
         )
+    }
+    var discountInput by remember(stateKey) {
+        mutableStateOf(
+            if (existingTransaction != null &&
+                existingTransaction.type != TransactionType.INCOME &&
+                existingTransaction.type != TransactionType.ADJUST &&
+                existingTransaction.discountAmountMicros > 0L
+            ) {
+                formatTrimmedMicros(existingTransaction.discountAmountMicros)
+            } else {
+                ""
+            }
+        )
+    }
+    var feeInput by remember(stateKey) {
+        mutableStateOf(
+            if (existingTransaction != null &&
+                existingTransaction.type != TransactionType.ADJUST &&
+                existingTransaction.feeAmountMicros > 0L
+            ) {
+                formatTrimmedMicros(existingTransaction.feeAmountMicros)
+            } else {
+                ""
+            }
+        )
+    }
+    var expenseAmountIsActualPaid by remember(stateKey) { mutableStateOf(false) }
+
+    LaunchedEffect(txType) {
+        if (txType == TransactionType.INCOME && discountInput.isNotEmpty()) {
+            discountInput = ""
+        }
+        if (txType != TransactionType.EXPENSE && expenseAmountIsActualPaid) {
+            expenseAmountIsActualPaid = false
+        }
+        if (txType == TransactionType.ADJUST && activePanel == RecordWorkspacePanel.DISCOUNT_FEE) {
+            activePanel = RecordWorkspacePanel.CATEGORY
+        }
     }
 
     LaunchedEffect(accounts, stateKey) {
@@ -475,7 +660,17 @@ fun QuickRecordSheet(
     var editingRateField by remember { mutableStateOf(false) }
 
     var manualToAmountMicros by remember(stateKey) {
-        mutableStateOf(existingTransaction?.toAmountMicros)
+        mutableStateOf(
+            if (existingTransaction != null &&
+                existingTransaction.toAmountMicros != null &&
+                existingTransaction.toCurrency != null &&
+                !existingTransaction.toCurrency.equals(existingTransaction.origCurrency, ignoreCase = true)
+            ) {
+                existingTransaction.toAmountMicros
+            } else {
+                null
+            }
+        )
     }
     var manualTransferRateMicros by remember(stateKey) { mutableStateOf<Long?>(null) }
     var transferToAmountText by remember(stateKey) {
@@ -545,9 +740,52 @@ fun QuickRecordSheet(
     val selectedToAccount = remember(accounts, toAccountId) {
         accounts.firstOrNull { it.id == toAccountId }
     }
-    val parsedOrigMicros = remember(amountExpr) {
+    val enteredAmountBd = remember(amountExpr) {
+        QuickExprEval.evaluate(amountExpr)
+    }
+    val enteredAmountMicros = remember(amountExpr) {
         QuickExprEval.evaluateToMicros(amountExpr) ?: 0L
     }
+    val isExplicitZeroAmount = remember(amountExpr, enteredAmountBd) {
+        amountExpr.isNotBlank() &&
+            enteredAmountBd != null &&
+            enteredAmountBd.compareTo(BigDecimal.ZERO) == 0
+    }
+    val discountMicros = remember(txType, discountInput) {
+        if (txType == TransactionType.INCOME || txType == TransactionType.ADJUST) {
+            0L
+        } else {
+            (MoneyAmount.parseToMicros(discountInput) ?: 0L).coerceAtLeast(0L)
+        }
+    }
+    val feeMicros = remember(txType, feeInput) {
+        if (txType == TransactionType.ADJUST) {
+            0L
+        } else {
+            (MoneyAmount.parseToMicros(feeInput) ?: 0L).coerceAtLeast(0L)
+        }
+    }
+    val discountFeeCalc = remember(
+        txType,
+        enteredAmountMicros,
+        isExplicitZeroAmount,
+        discountMicros,
+        feeMicros,
+        expenseAmountIsActualPaid
+    ) {
+        computeDiscountFeeCalc(
+            txType = txType,
+            enteredAmountMicros = enteredAmountMicros,
+            isExplicitZeroAmount = isExplicitZeroAmount,
+            discountMicros = discountMicros,
+            feeMicros = feeMicros,
+            expenseAmountIsActualPaid = expenseAmountIsActualPaid
+        )
+    }
+    val actualSubmitOrigMicros = discountFeeCalc.actualSubmitOrigMicros
+    val nominalMicros = discountFeeCalc.nominalMicros
+    val previewSourceOrigMicros = actualSubmitOrigMicros.coerceAtLeast(0L)
+    val previewTransferToOrigMicros = nominalMicros.coerceAtLeast(0L)
 
     val needsSourceConversion = selectedAccount != null &&
         !origCurrency.equals(selectedAccount.currencyCode, ignoreCase = true)
@@ -557,7 +795,7 @@ fun QuickRecordSheet(
             (selectedAccount != null && !selectedToAccount.currencyCode.equals(selectedAccount.currencyCode, ignoreCase = true)))
 
     LaunchedEffect(
-        parsedOrigMicros,
+        previewSourceOrigMicros,
         origCurrency,
         selectedAccountId,
         manualAccountAmountMicros,
@@ -567,7 +805,7 @@ fun QuickRecordSheet(
         if (selectedAccount != null) {
             val result = runCatching {
                 viewModel.previewConversion(
-                    origAmountMicros = parsedOrigMicros,
+                    origAmountMicros = previewSourceOrigMicros,
                     origCurrency = origCurrency,
                     accountId = selectedAccount.id,
                     manualAccountAmountMicros = manualAccountAmountMicros,
@@ -590,7 +828,7 @@ fun QuickRecordSheet(
 
     LaunchedEffect(
         txType,
-        parsedOrigMicros,
+        previewTransferToOrigMicros,
         origCurrency,
         selectedAccountId,
         toAccountId,
@@ -602,19 +840,19 @@ fun QuickRecordSheet(
             if (toCode.equals(origCurrency, ignoreCase = true)) {
                 if (!editingTransferToAmountField) {
                     val digits = CurrencyCatalog.find(toCode).minorDigits
-                    transferToAmountText = MoneyAmount.formatPlain(parsedOrigMicros, digits, grouping = false)
+                    transferToAmountText = MoneyAmount.formatPlain(previewTransferToOrigMicros, digits, grouping = false)
                 }
                 if (!editingTransferRateField) {
                     transferRateText = "1.00"
                 }
             } else {
                 val effectiveRate = when {
-                    manualToAmountMicros != null && parsedOrigMicros > 0L ->
-                        MoneyAmount.computeRate(parsedOrigMicros, manualToAmountMicros!!)
+                    manualToAmountMicros != null && previewTransferToOrigMicros > 0L ->
+                        MoneyAmount.computeRate(previewTransferToOrigMicros, manualToAmountMicros!!)
                     manualTransferRateMicros != null -> manualTransferRateMicros!!
                     else -> viewModel.getRateQuote(origCurrency, toCode).rateMicros
                 }
-                val effectiveToMicros = manualToAmountMicros ?: MoneyAmount.convert(parsedOrigMicros, effectiveRate)
+                val effectiveToMicros = manualToAmountMicros ?: MoneyAmount.convert(previewTransferToOrigMicros, effectiveRate)
                 if (!editingTransferToAmountField) {
                     val digits = CurrencyCatalog.find(toCode).minorDigits
                     transferToAmountText = MoneyAmount.formatPlain(effectiveToMicros, digits, grouping = false)
@@ -656,6 +894,12 @@ fun QuickRecordSheet(
                             draft.type == TransactionType.TRANSFER
                         ) {
                             txType = draft.type
+                            if (draft.type == TransactionType.INCOME) {
+                                discountInput = ""
+                            }
+                            if (draft.type != TransactionType.EXPENSE) {
+                                expenseAmountIsActualPaid = false
+                            }
                         }
                         if (draft.origAmountMicros > 0L) {
                             val digits = CurrencyCatalog.find(draft.origCurrency).minorDigits
@@ -683,11 +927,27 @@ fun QuickRecordSheet(
     }
 
     val saveWithMode: (Boolean) -> Unit = { continueNext ->
-        val finalAmountMicros = QuickExprEval.evaluateToMicros(amountExpr)
+        val evaluatedBd = QuickExprEval.evaluate(amountExpr)
+        val evalPositiveMicros = QuickExprEval.evaluateToMicros(amountExpr)
+        val isZeroInput = amountExpr.isNotBlank() &&
+            evaluatedBd != null &&
+            evaluatedBd.compareTo(BigDecimal.ZERO) == 0
+        val enteredValid = evalPositiveMicros != null || isZeroInput
+        val calc = computeDiscountFeeCalc(
+            txType = txType,
+            enteredAmountMicros = evalPositiveMicros ?: 0L,
+            isExplicitZeroAmount = isZeroInput,
+            discountMicros = discountMicros,
+            feeMicros = feeMicros,
+            expenseAmountIsActualPaid = expenseAmountIsActualPaid
+        )
         val acct = selectedAccount
+        val canSaveZeroActual = calc.actualSubmitOrigMicros == 0L &&
+            calc.nominalMicros > 0L &&
+            (calc.discountMicros > 0L || (txType == TransactionType.INCOME && calc.feeMicros > 0L))
         when {
             acct == null -> viewModel.showMessage("请先选择账户")
-            finalAmountMicros == null || finalAmountMicros <= 0L -> {
+            !enteredValid -> {
                 viewModel.showMessage(
                     if (QuickExprEval.containsOperator(amountExpr)) {
                         "请输入有效金额或完善算式"
@@ -696,22 +956,41 @@ fun QuickRecordSheet(
                     }
                 )
             }
+            calc.validationError != null -> viewModel.showMessage(calc.validationError)
+            calc.nominalMicros <= 0L -> viewModel.showMessage("请输入有效金额")
+            calc.actualSubmitOrigMicros < 0L -> {
+                viewModel.showMessage(
+                    when (txType) {
+                        TransactionType.TRANSFER -> "优惠不能大于转账金额"
+                        TransactionType.INCOME -> "手续费不能大于收入金额"
+                        else -> "优惠不能大于原价"
+                    }
+                )
+            }
+            calc.actualSubmitOrigMicros == 0L && !canSaveZeroActual -> {
+                viewModel.showMessage("请输入有效金额")
+            }
             txType == TransactionType.TRANSFER && (selectedToAccount == null || selectedToAccount.id == acct.id) -> {
                 viewModel.showMessage("请选择不同的转入目标账户")
             }
             else -> {
+                val submitOrigMicros = calc.actualSubmitOrigMicros
+                val submitDiscountMicros = if (txType == TransactionType.INCOME || txType == TransactionType.ADJUST) 0L else calc.discountMicros
+                val submitFeeMicros = if (txType == TransactionType.ADJUST) 0L else calc.feeMicros
                 val req = RecordTransactionRequest(
                     existingId = existingTransaction?.id,
                     type = txType,
                     timestamp = timestampMillis,
-                    origAmountMicros = finalAmountMicros,
+                    origAmountMicros = submitOrigMicros,
                     origCurrency = origCurrency,
                     accountId = acct.id,
                     manualAccountAmountMicros = manualAccountAmountMicros,
                     manualRateToAccountMicros = manualRateToAccountMicros,
                     toAccountId = if (txType == TransactionType.TRANSFER) selectedToAccount?.id else null,
-                    manualToAmountMicros = if (txType == TransactionType.TRANSFER) {
-                        manualToAmountMicros ?: manualTransferRateMicros?.let { MoneyAmount.convert(finalAmountMicros, it) }
+                    manualToAmountMicros = if (txType == TransactionType.TRANSFER && needsTransferConversion) {
+                        manualToAmountMicros ?: manualTransferRateMicros?.let {
+                            MoneyAmount.convert(calc.nominalMicros, it)
+                        }
                     } else null,
                     categoryId = if (txType == TransactionType.TRANSFER || txType == TransactionType.ADJUST) null else selectedCategoryId,
                     merchant = merchant.trim(),
@@ -728,13 +1007,18 @@ fun QuickRecordSheet(
                     excludeFromBudget = excludeFromBudget,
                     refundOfTxId = existingTransaction?.refundOfTxId ?: refundOfTransaction?.id,
                     attachmentPaths = attachmentPaths.joinToString(";"),
-                    reimbursedTxId = existingTransaction?.reimbursedTxId
+                    reimbursedTxId = existingTransaction?.reimbursedTxId,
+                    discountAmountMicros = submitDiscountMicros,
+                    feeAmountMicros = submitFeeMicros
                 )
                 viewModel.saveTransaction(
                     request = req,
                     onSuccess = {
                         if (continueNext) {
                             amountExpr = ""
+                            discountInput = ""
+                            feeInput = ""
+                            expenseAmountIsActualPaid = false
                             merchant = ""
                             note = ""
                             tags = ""
@@ -928,6 +1212,12 @@ fun QuickRecordSheet(
                                     .clip(CircleShape)
                                     .clickable {
                                         txType = mode
+                                        if (mode == TransactionType.INCOME) {
+                                            discountInput = ""
+                                        }
+                                        if (mode != TransactionType.EXPENSE) {
+                                            expenseAmountIsActualPaid = false
+                                        }
                                         if (mode != TransactionType.TRANSFER) {
                                             val matchingCat = categories.firstOrNull {
                                                 it.id == selectedCategoryId && it.type == mode
@@ -941,6 +1231,8 @@ fun QuickRecordSheet(
                                             toAccountId = accounts.firstOrNull { it.id != selectedAccountId }?.id
                                         }
                                         if (activePanel != RecordWorkspacePanel.CATEGORY) {
+                                            focusManager.clearFocus()
+                                            imeInputFocused = false
                                             activePanel = RecordWorkspacePanel.CATEGORY
                                         }
                                     }
@@ -1213,9 +1505,9 @@ fun QuickRecordSheet(
                                         softWrap = false
                                     )
                                 }
-                                if (QuickExprEval.containsOperator(amountExpr) && parsedOrigMicros > 0L) {
+                                if (QuickExprEval.containsOperator(amountExpr) && enteredAmountMicros > 0L) {
                                     Text(
-                                        text = "= ${MoneyAmount.format(parsedOrigMicros, origCurrency, showCurrencyCode = false)}",
+                                        text = "= ${MoneyAmount.format(enteredAmountMicros, origCurrency, showCurrencyCode = false)}",
                                         style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp).tabular(),
                                         color = accentColor.copy(alpha = 0.85f),
                                         maxLines = 1,
@@ -1228,9 +1520,31 @@ fun QuickRecordSheet(
                         }
                     }
 
+                    // 优惠/手续费实时核算公式预览条
+                    if ((discountMicros > 0L || feeMicros > 0L) && txType != TransactionType.ADJUST) {
+                        DiscountFeeFormulaPreviewBar(
+                            txType = txType,
+                            origCurrency = origCurrency,
+                            hasEnteredAmount = enteredAmountMicros > 0L || isExplicitZeroAmount,
+                            calc = discountFeeCalc,
+                            onClick = {
+                                if (activePanel == RecordWorkspacePanel.DISCOUNT_FEE) {
+                                    focusManager.clearFocus()
+                                    imeInputFocused = false
+                                    activePanel = RecordWorkspacePanel.CATEGORY
+                                } else {
+                                    activePanel = RecordWorkspacePanel.DISCOUNT_FEE
+                                }
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 6.dp)
+                        )
+                    }
+
                     // 跨币种汇率折算微条
                     val baseHintText = preview
-                        ?.takeIf { !origCurrency.equals(baseCurrency, ignoreCase = true) && parsedOrigMicros > 0L }
+                        ?.takeIf { !origCurrency.equals(baseCurrency, ignoreCase = true) && previewSourceOrigMicros > 0L }
                         ?.let { "折算本币 ≈ ${MoneyAmount.format(it.baseAmountMicros, baseCurrency, showCurrencyCode = true)}" }
                     if (needsSourceConversion || needsTransferConversion || baseHintText != null) {
                         val canEditRate = needsSourceConversion || needsTransferConversion
@@ -1446,6 +1760,36 @@ fun QuickRecordSheet(
                             }
                         }
 
+                        RecordWorkspacePanel.DISCOUNT_FEE -> {
+                            DiscountFeePanel(
+                                txType = txType,
+                                currencyCode = origCurrency,
+                                currencySymbol = currencyInfo.symbol,
+                                discountInput = discountInput,
+                                onDiscountChange = { discountInput = it },
+                                feeInput = feeInput,
+                                onFeeChange = { feeInput = it },
+                                expenseAmountIsActualPaid = expenseAmountIsActualPaid,
+                                onExpenseModeChange = { expenseAmountIsActualPaid = it },
+                                calc = discountFeeCalc,
+                                onClear = {
+                                    discountInput = ""
+                                    feeInput = ""
+                                },
+                                onRequestImeFocus = { imeInputFocused = true },
+                                onReleaseImeFocus = {
+                                    imeInputFocused = false
+                                    focusManager.clearFocus()
+                                },
+                                onDone = {
+                                    focusManager.clearFocus()
+                                    imeInputFocused = false
+                                    activePanel = RecordWorkspacePanel.CATEGORY
+                                },
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        }
+
                         RecordWorkspacePanel.DATE_TIME -> {
                             DateTimeQuickPanel(
                                 timestampMillis = timestampMillis,
@@ -1488,7 +1832,7 @@ fun QuickRecordSheet(
                 }
             }
 
-            // 4. 底部高频工作台（仅保留 4 颗高价值属性胶囊 + 独立宽敞备注行 + 舒适键盘）
+            // 4. 底部高频工作台（高价值属性胶囊 + 独立宽敞备注行 + 舒适键盘）
             CompactHairlineDivider(startIndent = 0.dp)
 
             LazyRow(
@@ -1516,6 +1860,8 @@ fun QuickRecordSheet(
                         selected = activePanel == RecordWorkspacePanel.ACCOUNT || selectedAccount != null,
                         accentColor = selectedAccount?.let { Color(it.colorHex) } ?: MaterialTheme.colorScheme.error,
                         onClick = {
+                            focusManager.clearFocus()
+                            imeInputFocused = false
                             activePanel = if (activePanel == RecordWorkspacePanel.ACCOUNT) {
                                 RecordWorkspacePanel.CATEGORY
                             } else {
@@ -1526,6 +1872,43 @@ fun QuickRecordSheet(
                     )
                 }
 
+                if (txType != TransactionType.ADJUST) {
+                    item(key = "attr_discount_fee") {
+                        val hasDiscountOrFee = discountMicros > 0L || feeMicros > 0L
+                        val discountFeeChipLabel = when {
+                            discountMicros > 0L && feeMicros > 0L ->
+                                "惠${currencyInfo.symbol}${formatTrimmedMicros(discountMicros)}·费${currencyInfo.symbol}${formatTrimmedMicros(feeMicros)}"
+                            discountMicros > 0L ->
+                                "惠 ${currencyInfo.symbol}${formatTrimmedMicros(discountMicros)}"
+                            feeMicros > 0L ->
+                                "费 ${currencyInfo.symbol}${formatTrimmedMicros(feeMicros)}"
+                            txType == TransactionType.INCOME -> "手续费"
+                            else -> "优惠/手续费"
+                        }
+                        val discountFeeChipAccent = when {
+                            discountFeeCalc.validationError != null -> MaterialTheme.colorScheme.error
+                            discountMicros > 0L && feeMicros == 0L -> semantic.income
+                            feeMicros > 0L && discountMicros == 0L -> semantic.warning
+                            else -> MaterialTheme.colorScheme.primary
+                        }
+                        WorkbenchAttrChip(
+                            icon = Icons.Rounded.LocalOffer,
+                            label = discountFeeChipLabel,
+                            selected = activePanel == RecordWorkspacePanel.DISCOUNT_FEE || hasDiscountOrFee,
+                            accentColor = discountFeeChipAccent,
+                            onClick = {
+                                if (activePanel == RecordWorkspacePanel.DISCOUNT_FEE) {
+                                    focusManager.clearFocus()
+                                    imeInputFocused = false
+                                    activePanel = RecordWorkspacePanel.CATEGORY
+                                } else {
+                                    activePanel = RecordWorkspacePanel.DISCOUNT_FEE
+                                }
+                            }
+                        )
+                    }
+                }
+
                 item(key = "attr_datetime") {
                     WorkbenchAttrChip(
                         icon = Icons.Rounded.Schedule,
@@ -1533,6 +1916,8 @@ fun QuickRecordSheet(
                         selected = activePanel == RecordWorkspacePanel.DATE_TIME,
                         accentColor = MaterialTheme.colorScheme.primary,
                         onClick = {
+                            focusManager.clearFocus()
+                            imeInputFocused = false
                             activePanel = if (activePanel == RecordWorkspacePanel.DATE_TIME) {
                                 RecordWorkspacePanel.CATEGORY
                             } else {
@@ -1549,6 +1934,8 @@ fun QuickRecordSheet(
                         selected = activePanel == RecordWorkspacePanel.TAGS || selectedTagNames.isNotEmpty(),
                         accentColor = MaterialTheme.colorScheme.primary,
                         onClick = {
+                            focusManager.clearFocus()
+                            imeInputFocused = false
                             activePanel = if (activePanel == RecordWorkspacePanel.TAGS) {
                                 RecordWorkspacePanel.CATEGORY
                             } else {
@@ -1565,6 +1952,8 @@ fun QuickRecordSheet(
                         selected = activePanel == RecordWorkspacePanel.MORE || moreActiveCount > 0,
                         accentColor = MaterialTheme.colorScheme.primary,
                         onClick = {
+                            focusManager.clearFocus()
+                            imeInputFocused = false
                             activePanel = if (activePanel == RecordWorkspacePanel.MORE) {
                                 RecordWorkspacePanel.CATEGORY
                             } else {
@@ -2080,6 +2469,467 @@ private fun PanelHeaderRow(
                 modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
             )
         }
+    }
+}
+
+@Composable
+private fun DiscountFeeFormulaPreviewBar(
+    txType: String,
+    origCurrency: String,
+    hasEnteredAmount: Boolean,
+    calc: DiscountFeeCalc,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val semantic = KairoTheme.semantic
+    val errorMsg = calc.validationError
+    if (errorMsg != null) {
+        Surface(
+            shape = RoundedCornerShape(9.dp),
+            color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.78f),
+            border = BorderStroke(0.6.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.45f)),
+            modifier = modifier
+                .clip(RoundedCornerShape(9.dp))
+                .clickable(onClick = onClick)
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 9.dp, vertical = 5.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.ErrorOutline,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.size(14.dp)
+                )
+                Text(
+                    text = errorMsg,
+                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.5.sp),
+                    color = MaterialTheme.colorScheme.error,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    softWrap = false,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                Text(
+                    text = "去修改",
+                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
+                    color = MaterialTheme.colorScheme.error,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    softWrap = false
+                )
+            }
+        }
+        return
+    }
+
+    val formulaText = if (!hasEnteredAmount) {
+        "输入金额后自动核算"
+    } else {
+        when (txType) {
+            TransactionType.TRANSFER -> {
+                val outStr = MoneyAmount.format(calc.actualSubmitOrigMicros, origCurrency, showCurrencyCode = false)
+                val toStr = MoneyAmount.format(calc.nominalMicros, origCurrency, showCurrencyCode = false)
+                "实扣 $outStr → 到账 $toStr"
+            }
+            TransactionType.EXPENSE -> {
+                val origStr = MoneyAmount.format(calc.nominalMicros, origCurrency, showCurrencyCode = false)
+                val paidStr = MoneyAmount.format(calc.actualSubmitOrigMicros, origCurrency, showCurrencyCode = false)
+                "原价 $origStr → 实付 $paidStr"
+            }
+            TransactionType.INCOME -> {
+                val origStr = MoneyAmount.format(calc.nominalMicros, origCurrency, showCurrencyCode = false)
+                val recvStr = MoneyAmount.format(calc.actualSubmitOrigMicros, origCurrency, showCurrencyCode = false)
+                "原额 $origStr → 实收 $recvStr"
+            }
+            else -> ""
+        }
+    }
+
+    Surface(
+        shape = RoundedCornerShape(9.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.65f),
+        border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)),
+        modifier = modifier
+            .clip(RoundedCornerShape(9.dp))
+            .clickable(onClick = onClick)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+                .padding(horizontal = 9.dp, vertical = 5.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Text(
+                text = formulaText,
+                style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.5.sp).tabular(),
+                color = if (hasEnteredAmount) {
+                    MaterialTheme.colorScheme.onSurface
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
+                fontWeight = if (hasEnteredAmount) FontWeight.SemiBold else FontWeight.Medium,
+                maxLines = 1,
+                softWrap = false
+            )
+            if (calc.discountMicros > 0L) {
+                Surface(
+                    shape = CircleShape,
+                    color = semantic.incomeContainer
+                ) {
+                    Text(
+                        text = "惠 ${MoneyAmount.format(calc.discountMicros, origCurrency, showCurrencyCode = false)}",
+                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.5.sp).tabular(),
+                        color = semantic.income,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        softWrap = false,
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                    )
+                }
+            }
+            if (calc.feeMicros > 0L) {
+                Surface(
+                    shape = CircleShape,
+                    color = semantic.warningContainer
+                ) {
+                    Text(
+                        text = "费 ${MoneyAmount.format(calc.feeMicros, origCurrency, showCurrencyCode = false)}",
+                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.5.sp).tabular(),
+                        color = semantic.warning,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        softWrap = false,
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DiscountFeePanel(
+    txType: String,
+    currencyCode: String,
+    currencySymbol: String,
+    discountInput: String,
+    onDiscountChange: (String) -> Unit,
+    feeInput: String,
+    onFeeChange: (String) -> Unit,
+    expenseAmountIsActualPaid: Boolean,
+    onExpenseModeChange: (Boolean) -> Unit,
+    calc: DiscountFeeCalc,
+    onClear: () -> Unit,
+    onRequestImeFocus: () -> Unit,
+    onReleaseImeFocus: () -> Unit,
+    onDone: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val focusManager = LocalFocusManager.current
+    val semantic = KairoTheme.semantic
+    val showDiscount = txType != TransactionType.INCOME
+    val hasAnyInput = discountInput.isNotEmpty() || feeInput.isNotEmpty()
+    val isDiscountError = calc.validationError != null &&
+        showDiscount &&
+        !(txType == TransactionType.EXPENSE && expenseAmountIsActualPaid)
+    val isFeeError = calc.validationError != null && !isDiscountError
+
+    Column(
+        modifier = modifier.verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+            Text(
+                text = if (txType == TransactionType.INCOME) "手续费" else "优惠与手续费",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.Bold
+            )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                if (hasAnyInput) {
+                    Surface(
+                        shape = CircleShape,
+                        color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.65f),
+                        modifier = Modifier
+                            .clip(CircleShape)
+                            .clickable(onClick = onClear)
+                    ) {
+                        Text(
+                            text = "清空",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.error,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                            softWrap = false,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                        )
+                    }
+                }
+                Surface(
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.primaryContainer,
+                    modifier = Modifier
+                        .clip(CircleShape)
+                        .clickable {
+                            focusManager.clearFocus()
+                            onReleaseImeFocus()
+                            onDone()
+                        }
+                ) {
+                    Text(
+                        text = "完成",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        softWrap = false,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                    )
+                }
+            }
+        }
+
+        Surface(
+            shape = RoundedCornerShape(14.dp),
+            color = MaterialTheme.colorScheme.surfaceContainerLow,
+            border = BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Column(
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 11.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                if (showDiscount) {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        OutlinedTextField(
+                            value = discountInput,
+                            onValueChange = { onDiscountChange(sanitizeDecimalInput(it)) },
+                            label = {
+                                Text(
+                                    text = "优惠金额 ($currencyCode)",
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            },
+                            placeholder = {
+                                Text(
+                                    text = "0.00",
+                                    style = MaterialTheme.typography.bodyMedium.tabular(),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
+                                )
+                            },
+                            prefix = {
+                                Text(
+                                    text = currencySymbol,
+                                    color = semantic.income,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            },
+                            trailingIcon = if (discountInput.isNotEmpty()) {
+                                {
+                                    IconButton(
+                                        onClick = { onDiscountChange("") },
+                                        modifier = Modifier.size(28.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.Close,
+                                            contentDescription = "清空优惠金额",
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                    }
+                                }
+                            } else {
+                                null
+                            },
+                            singleLine = true,
+                            isError = isDiscountError,
+                            shape = RoundedCornerShape(12.dp),
+                            textStyle = MaterialTheme.typography.bodyLarge.copy(
+                                fontWeight = FontWeight.SemiBold
+                            ).tabular(),
+                            keyboardOptions = KeyboardOptions(
+                                keyboardType = KeyboardType.Decimal,
+                                imeAction = ImeAction.Next
+                            ),
+                            keyboardActions = KeyboardActions(
+                                onNext = { focusManager.moveFocus(FocusDirection.Down) }
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .onFocusChanged { if (it.isFocused) onRequestImeFocus() }
+                        )
+                        Text(
+                            text = when {
+                                txType == TransactionType.TRANSFER ->
+                                    "例如充 50 优惠 2，到账 50、实扣 48（免单填 50）"
+                                expenseAmountIsActualPaid ->
+                                    "例如实付 48 优惠 2，自动还原原价 50"
+                                else ->
+                                    "例如原价 50 优惠 2，实付 48（免单填 50）"
+                            },
+                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    OutlinedTextField(
+                        value = feeInput,
+                        onValueChange = { onFeeChange(sanitizeDecimalInput(it)) },
+                        label = {
+                            Text(
+                                text = "手续费 ($currencyCode)",
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        },
+                        placeholder = {
+                            Text(
+                                text = "0.00",
+                                style = MaterialTheme.typography.bodyMedium.tabular(),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f)
+                            )
+                        },
+                        prefix = {
+                            Text(
+                                text = currencySymbol,
+                                color = semantic.warning,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        },
+                        trailingIcon = if (feeInput.isNotEmpty()) {
+                            {
+                                IconButton(
+                                    onClick = { onFeeChange("") },
+                                    modifier = Modifier.size(28.dp)
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Close,
+                                        contentDescription = "清空手续费",
+                                        modifier = Modifier.size(16.dp)
+                                    )
+                                }
+                            }
+                        } else {
+                            null
+                        },
+                        singleLine = true,
+                        isError = isFeeError,
+                        shape = RoundedCornerShape(12.dp),
+                        textStyle = MaterialTheme.typography.bodyLarge.copy(
+                            fontWeight = FontWeight.SemiBold
+                        ).tabular(),
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.Decimal,
+                            imeAction = ImeAction.Done
+                        ),
+                        keyboardActions = KeyboardActions(
+                            onDone = {
+                                focusManager.clearFocus()
+                                onReleaseImeFocus()
+                            }
+                        ),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .onFocusChanged { if (it.isFocused) onRequestImeFocus() }
+                    )
+                    Text(
+                        text = when (txType) {
+                            TransactionType.TRANSFER ->
+                                "例如提现 100 手续费 0.1，实扣 100.1、到账 100"
+                            TransactionType.INCOME ->
+                                "例如收款 100 手续费 0.6，实际入账 99.4"
+                            else ->
+                                "例如服务费/跨行费 0.5，计入实际支付金额"
+                        },
+                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+
+                if (txType == TransactionType.EXPENSE) {
+                    Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                        Text(
+                            text = "上方金额计算方式",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            val options = listOf(
+                                Triple(false, "从金额减免/加收（默认）", 1.18f),
+                                Triple(true, "上方金额已是实付", 1f)
+                            )
+                            options.forEach { (isActual, label, weight) ->
+                                val selected = expenseAmountIsActualPaid == isActual
+                                Surface(
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = if (selected) {
+                                        MaterialTheme.colorScheme.primaryContainer
+                                    } else {
+                                        MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.7f)
+                                    },
+                                    border = BorderStroke(
+                                        width = if (selected) 1.dp else 0.5.dp,
+                                        color = if (selected) {
+                                            MaterialTheme.colorScheme.primary.copy(alpha = 0.65f)
+                                        } else {
+                                            MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f)
+                                        }
+                                    ),
+                                    modifier = Modifier
+                                        .weight(weight)
+                                        .clip(RoundedCornerShape(10.dp))
+                                        .clickable { onExpenseModeChange(isActual) }
+                                ) {
+                                    Box(
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 7.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            text = label,
+                                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
+                                            color = if (selected) {
+                                                MaterialTheme.colorScheme.onPrimaryContainer
+                                            } else {
+                                                MaterialTheme.colorScheme.onSurface
+                                            },
+                                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                                            maxLines = 1,
+                                            softWrap = false,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(6.dp))
     }
 }
 

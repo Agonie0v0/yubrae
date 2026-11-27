@@ -158,6 +158,16 @@ public struct StatsView: View {
         ).reduce(0) { $0 + $1.totalBaseMicros }
     }
 
+    private var periodDiscountFeeSummary: PeriodDiscountFeeSummary {
+        let r = activeRangeMillis
+        return store.computeDiscountFeeSummary(
+            startMillis: r.0,
+            endMillis: r.1,
+            ledgerId: activeLedgerId,
+            displayCurrency: baseCurrency
+        )
+    }
+
     private var budgetProgressList: [BudgetProgress] {
         let comps = Calendar.current.dateComponents([.year, .month], from: anchorDate)
         return store.computeBudgetProgress(
@@ -168,11 +178,15 @@ public struct StatsView: View {
     }
 
     public var body: some View {
+        let dfSummary = periodDiscountFeeSummary
         NavigationStack {
             ScrollView {
                 LazyVStack(spacing: 14) {
                     dimensionControlsCard
                     summaryMetricsCard
+                    if dfSummary.discountBaseMicros > 0 || dfSummary.feeBaseMicros > 0 {
+                        discountFeeSummaryCard(dfSummary)
+                    }
                     trendChartCard
                     categoryBreakdownCard
                     tagRankingCard
@@ -355,6 +369,95 @@ public struct StatsView: View {
                     .minimumScaleFactor(0.45)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+        }
+    }
+
+    private func discountFeeSummaryCard(_ summary: PeriodDiscountFeeSummary) -> some View {
+        let masked = store.settings.privacyMaskEnabled
+        return YubraeCard(palette: palette, padding: 12, cornerRadius: 14) {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 6) {
+                    Label("优惠与手续费", systemImage: "percent")
+                        .font(.caption.weight(.semibold))
+                        .foregroundColor(palette.textSecondary)
+                        .lineLimit(1)
+                    Spacer(minLength: 6)
+                    Text(baseCurrency)
+                        .font(.caption2.weight(.semibold))
+                        .foregroundColor(palette.textTertiary)
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
+                }
+
+                HStack(spacing: 10) {
+                    if summary.discountBaseMicros > 0 {
+                        let discStr = YubraeTheme.masked(
+                            MoneyAmount.format(summary.discountBaseMicros, currencyCode: baseCurrency),
+                            isMasked: masked
+                        )
+                        VStack(alignment: .leading, spacing: 3) {
+                            HStack(spacing: 4) {
+                                Text("累计已省")
+                                    .font(.caption2.weight(.medium))
+                                    .foregroundColor(palette.textSecondary)
+                                    .lineLimit(1)
+                                Spacer(minLength: 4)
+                                Text("\(summary.discountCount) 笔")
+                                    .font(.caption2.weight(.semibold).monospacedDigit())
+                                    .foregroundColor(palette.incomeColor)
+                                    .lineLimit(1)
+                                    .fixedSize(horizontal: true, vertical: false)
+                            }
+                            Text(discStr)
+                                .font(.subheadline.weight(.bold).monospacedDigit())
+                                .foregroundColor(palette.incomeColor)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.65)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 8)
+                        .background(
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .fill(palette.incomeColor.opacity(0.10))
+                        )
+                    }
+
+                    if summary.feeBaseMicros > 0 {
+                        let feeStr = YubraeTheme.masked(
+                            MoneyAmount.format(summary.feeBaseMicros, currencyCode: baseCurrency),
+                            isMasked: masked
+                        )
+                        VStack(alignment: .leading, spacing: 3) {
+                            HStack(spacing: 4) {
+                                Text("累计手续费")
+                                    .font(.caption2.weight(.medium))
+                                    .foregroundColor(palette.textSecondary)
+                                    .lineLimit(1)
+                                Spacer(minLength: 4)
+                                Text("\(summary.feeCount) 笔")
+                                    .font(.caption2.weight(.semibold).monospacedDigit())
+                                    .foregroundColor(palette.warningColor)
+                                    .lineLimit(1)
+                                    .fixedSize(horizontal: true, vertical: false)
+                            }
+                            Text(feeStr)
+                                .font(.subheadline.weight(.bold).monospacedDigit())
+                                .foregroundColor(palette.warningColor)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.65)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 8)
+                        .background(
+                            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                .fill(palette.warningColor.opacity(0.10))
+                        )
+                    }
+                }
+                .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 

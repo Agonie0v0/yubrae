@@ -123,6 +123,7 @@ class YimuCsvImporter(
         val refundCol: Int,
         val refundDetailCol: Int,
         val discountCol: Int,
+        val feeCol: Int,
         val merchantCol: Int,
         val itemCol: Int,
         val noteCol: Int,
@@ -164,7 +165,9 @@ class YimuCsvImporter(
         val excludeFromBudget: Boolean,
         val refundMicros: Long,
         val refundDetail: String,
-        val attachmentPayloads: List<Pair<String, ByteArray>>
+        val attachmentPayloads: List<Pair<String, ByteArray>>,
+        val discountAmountMicros: Long = 0L,
+        val feeAmountMicros: Long = 0L
     )
 
     private data class FileAnalysis(
@@ -511,12 +514,14 @@ class YimuCsvImporter(
                     row.manualToAmountMicros == null &&
                     row.origCurrency != toAccount.currencyCode
                 ) {
+                    val effectiveToOrig = (row.origAmountMicros + row.discountAmountMicros - row.feeAmountMicros)
+                        .takeIf { it > 0L } ?: row.origAmountMicros
                     val toRate = exchangeRateProvider.getRate(
                         fromCurrency = row.origCurrency,
                         toCurrency = toAccount.currencyCode,
                         onDate = row.dateString
                     ).rateMicros
-                    MoneyAmount.convert(row.origAmountMicros, toRate)
+                    MoneyAmount.convert(effectiveToOrig, toRate)
                 } else {
                     row.manualToAmountMicros
                 }
@@ -550,7 +555,9 @@ class YimuCsvImporter(
                     ledgerId = resolvedLedgerId,
                     excludeFromStats = row.excludeFromStats,
                     excludeFromBudget = row.excludeFromBudget,
-                    attachmentPaths = attachmentPathsString
+                    attachmentPaths = attachmentPathsString,
+                    discountAmountMicros = row.discountAmountMicros,
+                    feeAmountMicros = row.feeAmountMicros
                 )
 
                 val saveResult = ledgerService.saveTransaction(request)
@@ -740,8 +747,14 @@ class YimuCsvImporter(
             val rawAmountText = cellAt(row, mapping.amountCol)
             val rawCurrencyText = cellAt(row, mapping.currencyCol)
             val baseAmountCurrency = resolveCurrency(rawCurrencyText, rawAmountText, settings.baseCurrency)
+            val rawDiscount = cleanPlaceholder(cellAt(row, mapping.discountCol))
+            val parsedDiscountMicros = if (rawDiscount.isNotBlank()) parseAmountMicros(rawDiscount) else null
+            val rawFee = cleanPlaceholder(cellAt(row, mapping.feeCol))
+            val parsedFeeMicros = if (rawFee.isNotBlank()) parseAmountMicros(rawFee) else null
             val rowAmountMicros = parseAmountMicros(rawAmountText)
-            if (rowAmountMicros == null || rowAmountMicros <= 0L) {
+            if (rowAmountMicros == null ||
+                (rowAmountMicros <= 0L && (parsedDiscountMicros == null || parsedDiscountMicros <= 0L))
+            ) {
                 warnings.add("第 $rowNumber 行金额无效（$rawAmountText），已跳过")
                 continue
             }
@@ -796,6 +809,17 @@ class YimuCsvImporter(
             }
             val txType = typeResolution.first
             val typeImpliesExcludeStats = typeResolution.second
+
+            val discountAmountMicros = if (txType == TransactionType.INCOME) {
+                0L
+            } else {
+                (parsedDiscountMicros ?: 0L).coerceAtLeast(0L)
+            }
+            val feeAmountMicros = (parsedFeeMicros ?: 0L).coerceAtLeast(0L)
+            if (origAmountMicros <= 0L && (txType == TransactionType.INCOME || discountAmountMicros <= 0L)) {
+                warnings.add("第 $rowNumber 行金额无效（$rawAmountText），已跳过")
+                continue
+            }
 
             if (txType == TransactionType.TRANSFER && rawToAccount.isBlank()) {
                 warnings.add("第 $rowNumber 行转账缺少转入账户，已跳过")
@@ -918,7 +942,6 @@ class YimuCsvImporter(
             val rawMerchant = cleanPlaceholder(cellAt(row, mapping.merchantCol))
             val rawItem = cleanPlaceholder(cellAt(row, mapping.itemCol))
             val rawNote = cleanPlaceholder(cellAt(row, mapping.noteCol))
-            val rawDiscount = cleanPlaceholder(cellAt(row, mapping.discountCol))
             val rawAddress = cleanPlaceholder(cellAt(row, mapping.addressCol))
             val rawCreator = cleanPlaceholder(cellAt(row, mapping.creatorCol))
 
@@ -938,11 +961,11 @@ class YimuCsvImporter(
             if (rawNote.isNotBlank()) {
                 appendNotePart(rawNote)
             }
-            if (rawDiscount.isNotBlank()) {
-                val discountVal = parseAmountMicros(rawDiscount)
-                if (discountVal == null || discountVal > 0L) {
-                    appendNotePart("优惠 $rawDiscount", rawDiscount)
-                }
+            if (rawDiscount.isNotBlank() && parsedDiscountMicros == null) {
+                appendNotePart("优惠 $rawDiscount", rawDiscount)
+            }
+            if (rawFee.isNotBlank() && parsedFeeMicros == null) {
+                appendNotePart("手续费 $rawFee", rawFee)
             }
             if (rawRefundDetail.isNotBlank()) {
                 appendNotePart("退款明细:$rawRefundDetail", rawRefundDetail)
@@ -1064,7 +1087,9 @@ class YimuCsvImporter(
                     excludeFromBudget = excludeFromBudget,
                     refundMicros = refundMicros,
                     refundDetail = rawRefundDetail,
-                    attachmentPayloads = matchedAttachments
+                    attachmentPayloads = matchedAttachments,
+                    discountAmountMicros = discountAmountMicros,
+                    feeAmountMicros = feeAmountMicros
                 )
             )
         }
@@ -1162,6 +1187,10 @@ class YimuCsvImporter(
                 normalized,
                 listOf("优惠", "优惠金额")
             )
+            val feeCol = findFirstHeader(
+                normalized,
+                listOf("手续费", "服务费", "转账手续费")
+            )
             val merchantCol = findFirstHeader(
                 normalized,
                 listOf("交易对方", "商户", "商家", "商品", "商品说明", "商品名称")
@@ -1233,6 +1262,7 @@ class YimuCsvImporter(
                     (if (ledgerCol >= 0) 1 else 0) +
                     (if (multiCurrencyCol >= 0) 1 else 0) +
                     (if (refundCol >= 0) 1 else 0) +
+                    (if (feeCol >= 0) 1 else 0) +
                     (if (reimburseAccountCol >= 0) 1 else 0) +
                     (if (attachmentCols.isNotEmpty()) 1 else 0)
                 if (score > bestScore) {
@@ -1258,6 +1288,7 @@ class YimuCsvImporter(
                         refundCol = refundCol,
                         refundDetailCol = refundDetailCol,
                         discountCol = discountCol,
+                        feeCol = feeCol,
                         merchantCol = merchantCol,
                         itemCol = itemCol,
                         noteCol = noteCol,

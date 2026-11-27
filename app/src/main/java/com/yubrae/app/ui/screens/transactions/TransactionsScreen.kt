@@ -191,6 +191,7 @@ private val DayRowBottomShape = RoundedCornerShape(bottomStart = 14.dp, bottomEn
 private val CalendarCellShape = RoundedCornerShape(9.dp)
 private val MicroBadgeShape = RoundedCornerShape(5.dp)
 private val ExtraTagCountShape = RoundedCornerShape(6.dp)
+private val HeroDiscountBarShape = RoundedCornerShape(9.dp)
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class, ExperimentalLayoutApi::class)
 @Composable
@@ -443,6 +444,10 @@ fun TransactionsScreen(
                     expenseMicros = uiState.monthExpenseBaseMicros,
                     incomeMicros = uiState.monthIncomeBaseMicros,
                     balanceMicros = uiState.monthBalanceBaseMicros,
+                    monthDiscountBaseMicros = uiState.monthDiscountBaseMicros,
+                    monthFeeBaseMicros = uiState.monthFeeBaseMicros,
+                    monthDiscountCount = uiState.monthDiscountCount,
+                    monthFeeCount = uiState.monthFeeCount,
                     foreignCurrencySummaries = foreignCurrencySummaries,
                     privacyMasked = privacyMasked,
                     viewMode = viewMode,
@@ -1087,6 +1092,10 @@ private fun TransactionsTopHeaderCard(
     expenseMicros: Long,
     incomeMicros: Long,
     balanceMicros: Long,
+    monthDiscountBaseMicros: Long = 0L,
+    monthFeeBaseMicros: Long = 0L,
+    monthDiscountCount: Int = 0,
+    monthFeeCount: Int = 0,
     foreignCurrencySummaries: List<Triple<String, Long, Long>>,
     privacyMasked: Boolean,
     viewMode: TxViewMode,
@@ -1381,6 +1390,87 @@ private fun TransactionsTopHeaderCard(
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.padding(start = 2.dp, end = 4.dp)
                     )
+                }
+
+                // 本月优惠与手续费紧凑汇总条（均为 0 时完全隐藏不占位）
+                if (monthDiscountBaseMicros > 0L || monthFeeBaseMicros > 0L) {
+                    Surface(
+                        shape = HeroDiscountBarShape,
+                        color = pillBgColor.copy(alpha = 0.56f),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = 2.dp, end = 4.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 8.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            if (monthDiscountBaseMicros > 0L) {
+                                val discountAmtStr = formatPrivacyAmount(
+                                    privacyMasked,
+                                    MoneyAmount.format(monthDiscountBaseMicros, baseCurrency)
+                                )
+                                val countSuffix = if (monthDiscountCount > 0) " (${monthDiscountCount}笔)" else ""
+                                Text(
+                                    text = "本月已省 $discountAmtStr$countSuffix",
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        fontSize = 10.5.sp,
+                                        lineHeight = 14.sp
+                                    ).tabular(),
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = semantic.income,
+                                    maxLines = 1,
+                                    softWrap = false,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f, fill = false)
+                                )
+                            }
+                            if (monthDiscountBaseMicros > 0L && monthFeeBaseMicros > 0L) {
+                                Text(
+                                    text = "·",
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        fontSize = 10.5.sp,
+                                        lineHeight = 14.sp
+                                    ),
+                                    color = subtitleColor,
+                                    maxLines = 1,
+                                    softWrap = false
+                                )
+                            }
+                            if (monthFeeBaseMicros > 0L) {
+                                val feeAmtStr = formatPrivacyAmount(
+                                    privacyMasked,
+                                    MoneyAmount.format(monthFeeBaseMicros, baseCurrency)
+                                )
+                                val feeText = if (monthDiscountBaseMicros > 0L) {
+                                    "手续费 $feeAmtStr"
+                                } else {
+                                    val feeCountSuffix = if (monthFeeCount > 0) " (${monthFeeCount}笔)" else ""
+                                    "本月手续费 $feeAmtStr$feeCountSuffix"
+                                }
+                                Text(
+                                    text = feeText,
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        fontSize = 10.5.sp,
+                                        lineHeight = 14.sp
+                                    ).tabular(),
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = semantic.warning,
+                                    maxLines = 1,
+                                    softWrap = false,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = if (monthDiscountBaseMicros == 0L) {
+                                        Modifier.weight(1f, fill = false)
+                                    } else {
+                                        Modifier
+                                    }
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -2244,6 +2334,7 @@ private fun FlattenedTransactionRow(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun TransactionRowItem(
     tx: TransactionEntity,
@@ -2313,6 +2404,8 @@ private fun TransactionRowItem(
             )
         )
     }
+    val hasDiscount = tx.discountAmountMicros > 0L
+    val hasFee = tx.feeAmountMicros > 0L
     val secondaryAmountText = remember(
         isForeign,
         convertedBaseMicros,
@@ -2320,21 +2413,65 @@ private fun TransactionRowItem(
         tx.accountCurrency,
         tx.origCurrency,
         tx.accountAmountMicros,
+        tx.origAmountMicros,
+        tx.discountAmountMicros,
+        tx.feeAmountMicros,
         tx.type,
         tx.toCurrency,
         tx.toAmountMicros,
         privacyMasked
     ) {
+        val toCur = tx.toCurrency ?: tx.origCurrency
+        val isTransferDifferentTo = tx.type == TransactionType.TRANSFER &&
+            tx.toAmountMicros != null &&
+            (tx.discountAmountMicros > 0L ||
+                tx.feeAmountMicros > 0L ||
+                tx.toAmountMicros != tx.origAmountMicros ||
+                !toCur.equals(tx.origCurrency, ignoreCase = true))
         when {
+            isTransferDifferentTo -> {
+                val showToCode = !toCur.equals(tx.origCurrency, ignoreCase = true) ||
+                    !toCur.equals("CNY", ignoreCase = true)
+                val formattedTo = formatPrivacyAmount(
+                    privacyMasked,
+                    MoneyAmount.format(tx.toAmountMicros!!, toCur, showCurrencyCode = showToCode)
+                )
+                "到账 $formattedTo"
+            }
             isForeign -> formatPrivacyAmount(privacyMasked, "≈ ${MoneyAmount.format(convertedBaseMicros, baseCurrency)}")
             !tx.accountCurrency.equals(tx.origCurrency, ignoreCase = true) -> formatPrivacyAmount(
                 privacyMasked,
                 "账户 ${MoneyAmount.format(tx.accountAmountMicros, tx.accountCurrency, showCurrencyCode = true)}"
             )
-            tx.type == TransactionType.TRANSFER && tx.toCurrency != null && tx.toAmountMicros != null && !tx.toCurrency.equals(tx.origCurrency, true) -> formatPrivacyAmount(
-                privacyMasked,
-                "→ ${MoneyAmount.format(tx.toAmountMicros, tx.toCurrency, showCurrencyCode = true)}"
-            )
+            tx.type == TransactionType.EXPENSE && tx.discountAmountMicros > 0L -> {
+                val nominalMicros = (tx.origAmountMicros + tx.discountAmountMicros - tx.feeAmountMicros)
+                    .coerceAtLeast(0L)
+                if (nominalMicros > 0L && nominalMicros != tx.origAmountMicros) {
+                    val formattedNominal = formatPrivacyAmount(
+                        privacyMasked,
+                        MoneyAmount.format(
+                            nominalMicros,
+                            tx.origCurrency,
+                            showCurrencyCode = !tx.origCurrency.equals("CNY", ignoreCase = true)
+                        )
+                    )
+                    "原价 $formattedNominal"
+                } else {
+                    null
+                }
+            }
+            tx.type == TransactionType.INCOME && tx.feeAmountMicros > 0L -> {
+                val grossMicros = tx.origAmountMicros + tx.feeAmountMicros
+                val formattedGross = formatPrivacyAmount(
+                    privacyMasked,
+                    MoneyAmount.format(
+                        grossMicros,
+                        tx.origCurrency,
+                        showCurrencyCode = !tx.origCurrency.equals("CNY", ignoreCase = true)
+                    )
+                )
+                "原额 $formattedGross"
+            }
             else -> null
         }
     }
@@ -2491,15 +2628,37 @@ private fun TransactionRowItem(
                 }
             }
 
-            // 标签行：紧凑单行 TagBadgeChip(compact = true)，克制展示数量防撑高
-            if (txTags.isNotEmpty()) {
+            // 优惠 / 手续费徽章 + 标签行（紧凑流式排布，无内容时零占位）
+            if (hasDiscount || hasFee || txTags.isNotEmpty()) {
                 val visibleTags = txTags.take(2)
                 val extraCount = txTags.size - visibleTags.size
-                Row(
-                    modifier = Modifier.padding(top = 1.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                FlowRow(
+                    modifier = Modifier.padding(top = 2.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalArrangement = Arrangement.spacedBy(3.dp)
                 ) {
+                    if (hasDiscount) {
+                        val discountText = formatPrivacyAmount(
+                            privacyMasked,
+                            MoneyAmount.format(tx.discountAmountMicros, tx.origCurrency)
+                        )
+                        TxAmountMicroBadge(
+                            text = "惠 $discountText",
+                            containerColor = semantic.incomeContainer,
+                            contentColor = semantic.income
+                        )
+                    }
+                    if (hasFee) {
+                        val feeText = formatPrivacyAmount(
+                            privacyMasked,
+                            MoneyAmount.format(tx.feeAmountMicros, tx.origCurrency)
+                        )
+                        TxAmountMicroBadge(
+                            text = "费 $feeText",
+                            containerColor = semantic.warningContainer,
+                            contentColor = semantic.warning
+                        )
+                    }
                     visibleTags.forEach { tagName ->
                         val tag = tagMap[tagName]
                         TagBadgeChip(
@@ -2519,8 +2678,10 @@ private fun TransactionRowItem(
                                 style = MaterialTheme.typography.labelSmall.copy(
                                     fontSize = 10.sp,
                                     lineHeight = 13.sp
-                                ),
+                                ).tabular(),
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                softWrap = false,
                                 modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.5.dp)
                             )
                         }
@@ -2528,6 +2689,31 @@ private fun TransactionRowItem(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun TxAmountMicroBadge(
+    text: String,
+    containerColor: Color,
+    contentColor: Color
+) {
+    Surface(
+        shape = MicroBadgeShape,
+        color = containerColor
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelSmall.copy(
+                fontSize = 10.sp,
+                lineHeight = 13.sp
+            ).tabular(),
+            fontWeight = FontWeight.SemiBold,
+            color = contentColor,
+            maxLines = 1,
+            softWrap = false,
+            modifier = Modifier.padding(horizontal = 5.dp, vertical = 1.dp)
+        )
     }
 }
 
@@ -2597,6 +2783,7 @@ private fun TransactionDetailSheet(
         shape = YubraeSheetShape,
         containerColor = yubraeSheetContainerColor()
     ) {
+        val semantic = KairoTheme.semantic
         val isPendingStatus = transaction.status == TransactionStatus.PENDING
         Column(
             modifier = Modifier
@@ -2686,6 +2873,164 @@ private fun TransactionDetailSheet(
                             style = MaterialTheme.typography.bodySmall.tabular(),
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
+                    }
+                    if (transaction.discountAmountMicros > 0L || transaction.feeAmountMicros > 0L) {
+                        val showOrigCode = !transaction.origCurrency.equals("CNY", ignoreCase = true)
+                        CompactHairlineDivider(modifier = Modifier.padding(vertical = 4.dp))
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            when (transaction.type) {
+                                TransactionType.TRANSFER -> {
+                                    val resolvedToCur = transaction.toCurrency ?: transaction.origCurrency
+                                    val resolvedToMicros = transaction.toAmountMicros
+                                        ?: (transaction.origAmountMicros + transaction.discountAmountMicros - transaction.feeAmountMicros)
+                                            .coerceAtLeast(0L)
+                                    val showToCode = !resolvedToCur.equals("CNY", ignoreCase = true)
+                                    DetailAmountBreakdownRow(
+                                        label = "转出实扣",
+                                        value = formatPrivacyAmount(
+                                            privacyMasked,
+                                            MoneyAmount.format(
+                                                transaction.origAmountMicros,
+                                                transaction.origCurrency,
+                                                showCurrencyCode = showOrigCode
+                                            )
+                                        )
+                                    )
+                                    DetailAmountBreakdownRow(
+                                        label = "转入到账",
+                                        value = formatPrivacyAmount(
+                                            privacyMasked,
+                                            MoneyAmount.format(
+                                                resolvedToMicros,
+                                                resolvedToCur,
+                                                showCurrencyCode = showToCode
+                                            )
+                                        ),
+                                        valueColor = semantic.transfer,
+                                        bold = true
+                                    )
+                                    if (transaction.discountAmountMicros > 0L) {
+                                        DetailAmountBreakdownRow(
+                                            label = "已享优惠",
+                                            value = formatPrivacyAmount(
+                                                privacyMasked,
+                                                MoneyAmount.format(
+                                                    transaction.discountAmountMicros,
+                                                    transaction.origCurrency,
+                                                    showCurrencyCode = showOrigCode
+                                                )
+                                            ),
+                                            valueColor = semantic.income,
+                                            bold = true
+                                        )
+                                    }
+                                    if (transaction.feeAmountMicros > 0L) {
+                                        DetailAmountBreakdownRow(
+                                            label = "手续费",
+                                            value = formatPrivacyAmount(
+                                                privacyMasked,
+                                                MoneyAmount.format(
+                                                    transaction.feeAmountMicros,
+                                                    transaction.origCurrency,
+                                                    showCurrencyCode = showOrigCode
+                                                )
+                                            ),
+                                            valueColor = semantic.warning,
+                                            bold = true
+                                        )
+                                    }
+                                }
+                                TransactionType.EXPENSE -> {
+                                    val nominalMicros = (transaction.origAmountMicros + transaction.discountAmountMicros - transaction.feeAmountMicros)
+                                        .coerceAtLeast(0L)
+                                    DetailAmountBreakdownRow(
+                                        label = "商品原价",
+                                        value = formatPrivacyAmount(
+                                            privacyMasked,
+                                            MoneyAmount.format(
+                                                nominalMicros,
+                                                transaction.origCurrency,
+                                                showCurrencyCode = showOrigCode
+                                            )
+                                        )
+                                    )
+                                    if (transaction.discountAmountMicros > 0L) {
+                                        DetailAmountBreakdownRow(
+                                            label = "已享优惠",
+                                            value = formatPrivacyAmount(
+                                                privacyMasked,
+                                                "-${MoneyAmount.format(transaction.discountAmountMicros, transaction.origCurrency, showCurrencyCode = showOrigCode)}"
+                                            ),
+                                            valueColor = semantic.income,
+                                            bold = true
+                                        )
+                                    }
+                                    if (transaction.feeAmountMicros > 0L) {
+                                        DetailAmountBreakdownRow(
+                                            label = "手续费",
+                                            value = formatPrivacyAmount(
+                                                privacyMasked,
+                                                "+${MoneyAmount.format(transaction.feeAmountMicros, transaction.origCurrency, showCurrencyCode = showOrigCode)}"
+                                            ),
+                                            valueColor = semantic.warning,
+                                            bold = true
+                                        )
+                                    }
+                                    DetailAmountBreakdownRow(
+                                        label = "实际支付",
+                                        value = formatPrivacyAmount(
+                                            privacyMasked,
+                                            MoneyAmount.format(
+                                                transaction.origAmountMicros,
+                                                transaction.origCurrency,
+                                                showCurrencyCode = showOrigCode
+                                            )
+                                        ),
+                                        valueColor = semantic.expense,
+                                        bold = true
+                                    )
+                                }
+                                TransactionType.INCOME -> {
+                                    val grossMicros = transaction.origAmountMicros + transaction.feeAmountMicros
+                                    DetailAmountBreakdownRow(
+                                        label = "应收原额",
+                                        value = formatPrivacyAmount(
+                                            privacyMasked,
+                                            MoneyAmount.format(
+                                                grossMicros,
+                                                transaction.origCurrency,
+                                                showCurrencyCode = showOrigCode
+                                            )
+                                        )
+                                    )
+                                    if (transaction.feeAmountMicros > 0L) {
+                                        DetailAmountBreakdownRow(
+                                            label = "手续费",
+                                            value = formatPrivacyAmount(
+                                                privacyMasked,
+                                                "-${MoneyAmount.format(transaction.feeAmountMicros, transaction.origCurrency, showCurrencyCode = showOrigCode)}"
+                                            ),
+                                            valueColor = semantic.warning,
+                                            bold = true
+                                        )
+                                    }
+                                    DetailAmountBreakdownRow(
+                                        label = "实际入账",
+                                        value = formatPrivacyAmount(
+                                            privacyMasked,
+                                            MoneyAmount.format(
+                                                transaction.origAmountMicros,
+                                                transaction.origCurrency,
+                                                showCurrencyCode = showOrigCode
+                                            )
+                                        ),
+                                        valueColor = semantic.income,
+                                        bold = true
+                                    )
+                                }
+                                else -> Unit
+                            }
+                        }
                     }
                 }
             }
@@ -3104,6 +3449,37 @@ private fun BatchCategoryPickerDialog(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun DetailAmountBreakdownRow(
+    label: String,
+    value: String,
+    valueColor: Color = MaterialTheme.colorScheme.onSurface,
+    bold: Boolean = false
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            softWrap = false
+        )
+        Spacer(modifier = Modifier.width(12.dp))
+        Text(
+            text = value,
+            style = MaterialTheme.typography.bodySmall.tabular(),
+            fontWeight = if (bold) FontWeight.SemiBold else FontWeight.Medium,
+            color = valueColor,
+            maxLines = 1,
+            softWrap = false
+        )
     }
 }
 

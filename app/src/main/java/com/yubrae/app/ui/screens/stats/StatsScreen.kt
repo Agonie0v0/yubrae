@@ -195,6 +195,7 @@ private val StatsTopBarBottomShape = RoundedCornerShape(bottomStart = 18.dp, bot
 private val StatsProgressBarShape = RoundedCornerShape(4.dp)
 private val StatsBadgeShape = RoundedCornerShape(5.dp)
 private val StatsSummaryCardShape = RoundedCornerShape(10.dp)
+private val StatsDiscountTileShape = RoundedCornerShape(12.dp)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -588,6 +589,21 @@ fun StatsScreen(
                 },
                 modifier = Modifier.padding(horizontal = 12.dp)
             )
+        }
+
+        // 本期优惠与手续费轻量概览卡片（均为 0 时完全隐藏不占地）
+        if (uiState.periodDiscountBaseMicros > 0L || uiState.periodFeeBaseMicros > 0L) {
+            item(key = "period_discount_fee_overview", contentType = "discount_fee_overview") {
+                PeriodDiscountFeeOverviewCard(
+                    discountBaseMicros = uiState.periodDiscountBaseMicros,
+                    feeBaseMicros = uiState.periodFeeBaseMicros,
+                    discountCount = uiState.periodDiscountCount,
+                    feeCount = uiState.periodFeeCount,
+                    displayCurrency = uiState.displayCurrency,
+                    privacyMasked = privacyMasked,
+                    modifier = Modifier.padding(horizontal = 12.dp)
+                )
+            }
         }
 
         // 分类占比环形图 + 排行榜点击下钻明细
@@ -1413,6 +1429,185 @@ private fun TrendBarChartCard(
 }
 
 @Composable
+private fun PeriodDiscountFeeOverviewCard(
+    discountBaseMicros: Long,
+    feeBaseMicros: Long,
+    discountCount: Int,
+    feeCount: Int,
+    displayCurrency: String,
+    privacyMasked: Boolean,
+    modifier: Modifier = Modifier
+) {
+    val semantic = KairoTheme.semantic
+    val hasDiscount = discountBaseMicros > 0L
+    val hasFee = feeBaseMicros > 0L
+    if (!hasDiscount && !hasFee) return
+
+    YimuCard(modifier = modifier) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 11.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "优惠与手续费概览",
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    softWrap = false,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = displayCurrency,
+                    style = MaterialTheme.typography.labelSmall.tabular(),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    softWrap = false
+                )
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                if (hasDiscount) {
+                    DiscountFeeMetricTile(
+                        label = "累计已省（优惠）",
+                        count = discountCount,
+                        amountText = formatPrivacyAmount(
+                            privacyMasked,
+                            MoneyAmount.format(discountBaseMicros, displayCurrency)
+                        ),
+                        accentColor = semantic.income,
+                        containerColor = semantic.incomeContainer.copy(alpha = 0.52f),
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+                if (hasFee) {
+                    DiscountFeeMetricTile(
+                        label = "累计手续费",
+                        count = feeCount,
+                        amountText = formatPrivacyAmount(
+                            privacyMasked,
+                            MoneyAmount.format(feeBaseMicros, displayCurrency)
+                        ),
+                        accentColor = semantic.warning,
+                        containerColor = semantic.warningContainer.copy(alpha = 0.58f),
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DiscountFeeMetricTile(
+    label: String,
+    count: Int,
+    amountText: String,
+    accentColor: Color,
+    containerColor: Color,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        shape = StatsDiscountTileShape,
+        color = containerColor,
+        border = BorderStroke(0.5.dp, accentColor.copy(alpha = 0.24f)),
+        modifier = modifier
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 10.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.labelSmall.copy(
+                        fontSize = 10.5.sp,
+                        lineHeight = 14.sp
+                    ),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    softWrap = false,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false)
+                )
+                if (count > 0) {
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Surface(
+                        shape = StatsBadgeShape,
+                        color = accentColor.copy(alpha = 0.14f)
+                    ) {
+                        Text(
+                            text = "${count}笔",
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontSize = 9.5.sp,
+                                lineHeight = 12.sp
+                            ).tabular(),
+                            fontWeight = FontWeight.SemiBold,
+                            color = accentColor,
+                            maxLines = 1,
+                            softWrap = false,
+                            modifier = Modifier.padding(horizontal = 4.5.dp, vertical = 1.dp)
+                        )
+                    }
+                }
+            }
+            AutoResizeAmountText(
+                text = amountText,
+                baseStyle = MaterialTheme.typography.titleMedium.copy(
+                    fontSize = 16.sp,
+                    lineHeight = 20.sp
+                ).tabular(),
+                fontWeight = FontWeight.Bold,
+                color = accentColor,
+                minFontSize = 11.sp,
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+    }
+}
+
+@Composable
+private fun StatsTxDiscountFeeBadge(
+    text: String,
+    containerColor: Color,
+    contentColor: Color
+) {
+    Surface(
+        shape = StatsBadgeShape,
+        color = containerColor
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelSmall.copy(
+                fontSize = 10.sp,
+                lineHeight = 13.sp
+            ).tabular(),
+            fontWeight = FontWeight.SemiBold,
+            color = contentColor,
+            maxLines = 1,
+            softWrap = false,
+            modifier = Modifier.padding(horizontal = 4.5.dp, vertical = 1.dp)
+        )
+    }
+}
+
+@Composable
 private fun TrendSummaryMetricColumn(
     label: String,
     amountText: String,
@@ -1686,7 +1881,7 @@ private fun CategoryBreakdownCard(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 private fun CategoryDrillDownBottomSheet(
     stat: CategoryStat,
@@ -1901,11 +2096,33 @@ private fun CategoryDrillDownBottomSheet(
                                             overflow = TextOverflow.Ellipsis
                                         )
                                     }
-                                    if (txTags.isNotEmpty()) {
-                                        Row(
+                                    if (tx.discountAmountMicros > 0L || tx.feeAmountMicros > 0L || txTags.isNotEmpty()) {
+                                        FlowRow(
                                             horizontalArrangement = Arrangement.spacedBy(4.dp),
-                                            verticalAlignment = Alignment.CenterVertically
+                                            verticalArrangement = Arrangement.spacedBy(3.dp)
                                         ) {
+                                            if (tx.discountAmountMicros > 0L) {
+                                                val discountText = formatPrivacyAmount(
+                                                    privacyMasked,
+                                                    MoneyAmount.format(tx.discountAmountMicros, tx.origCurrency)
+                                                )
+                                                StatsTxDiscountFeeBadge(
+                                                    text = "惠 $discountText",
+                                                    containerColor = semantic.incomeContainer,
+                                                    contentColor = semantic.income
+                                                )
+                                            }
+                                            if (tx.feeAmountMicros > 0L) {
+                                                val feeText = formatPrivacyAmount(
+                                                    privacyMasked,
+                                                    MoneyAmount.format(tx.feeAmountMicros, tx.origCurrency)
+                                                )
+                                                StatsTxDiscountFeeBadge(
+                                                    text = "费 $feeText",
+                                                    containerColor = semantic.warningContainer,
+                                                    contentColor = semantic.warning
+                                                )
+                                            }
                                             txTags.take(2).forEach { tagName ->
                                                 val tagEntity = tagMap[tagName]
                                                 TagBadgeChip(
@@ -3314,7 +3531,7 @@ private fun TagBreakdownCard(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 private fun TagDrillDownBottomSheet(
     stat: TagStat,
@@ -3525,11 +3742,33 @@ private fun TagDrillDownBottomSheet(
                                             overflow = TextOverflow.Ellipsis
                                         )
                                     }
-                                    if (txTags.isNotEmpty()) {
-                                        Row(
+                                    if (tx.discountAmountMicros > 0L || tx.feeAmountMicros > 0L || txTags.isNotEmpty()) {
+                                        FlowRow(
                                             horizontalArrangement = Arrangement.spacedBy(4.dp),
-                                            verticalAlignment = Alignment.CenterVertically
+                                            verticalArrangement = Arrangement.spacedBy(3.dp)
                                         ) {
+                                            if (tx.discountAmountMicros > 0L) {
+                                                val discountText = formatPrivacyAmount(
+                                                    privacyMasked,
+                                                    MoneyAmount.format(tx.discountAmountMicros, tx.origCurrency)
+                                                )
+                                                StatsTxDiscountFeeBadge(
+                                                    text = "惠 $discountText",
+                                                    containerColor = semantic.incomeContainer,
+                                                    contentColor = semantic.income
+                                                )
+                                            }
+                                            if (tx.feeAmountMicros > 0L) {
+                                                val feeText = formatPrivacyAmount(
+                                                    privacyMasked,
+                                                    MoneyAmount.format(tx.feeAmountMicros, tx.origCurrency)
+                                                )
+                                                StatsTxDiscountFeeBadge(
+                                                    text = "费 $feeText",
+                                                    containerColor = semantic.warningContainer,
+                                                    contentColor = semantic.warning
+                                                )
+                                            }
                                             txTags.take(2).forEach { tagName ->
                                                 val tagEntity = tagMap[tagName]
                                                 TagBadgeChip(

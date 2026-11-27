@@ -1375,4 +1375,297 @@ final class LedgerStoreTests: XCTestCase {
         XCTAssertEqual(restoredStore.computeNetWorth(displayCurrency: "CNY").netWorthMicros, 2_150 * unit)
         XCTAssertEqual(restoredStore.computeIncludedDebtReceivableMicros(displayCurrency: "CNY"), 1_400 * unit)
     }
+
+    @MainActor
+    func testTransactionDiscountAndFeeTransferExpenseIncomeAndBackwardCompat() throws {
+        // 1. 验证缺少 discountAmountMicros / feeAmountMicros 的旧版 TransactionDto JSON 无损解码且默认为 0
+        let legacyTxJson = """
+        {
+          "id": 3001,
+          "type": "EXPENSE",
+          "timestamp": 1772352000000,
+          "origAmountMicros": 500000,
+          "origCurrency": "CNY",
+          "accountId": 1,
+          "accountAmountMicros": 500000,
+          "accountCurrency": "CNY",
+          "merchant": "旧版账单"
+        }
+        """
+        let decodedLegacy = try JSONDecoder().decode(TransactionDto.self, from: Data(legacyTxJson.utf8))
+        XCTAssertEqual(decodedLegacy.id, 3001)
+        XCTAssertEqual(decodedLegacy.origAmountMicros, 500_000)
+        XCTAssertEqual(decodedLegacy.discountAmountMicros, 0)
+        XCTAssertEqual(decodedLegacy.feeAmountMicros, 0)
+
+        let dir = makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let tz = TimeZone(secondsFromGMT: 8 * 3600)!
+        let store = LedgerStore(storageDirectory: dir, useKeychain: false, timeZone: tz)
+        let unit = MoneyAmount.amountScale
+
+        let debitId = try XCTUnwrap(store.accounts.first(where: { $0.name == "银行储蓄卡" })?.id)
+        let wechatId = try XCTUnwrap(store.accounts.first(where: { $0.name == "微信零钱" })?.id)
+        let usdId = try XCTUnwrap(store.accounts.first(where: { $0.currencyCode == "USD" })?.id)
+        let diningCat = try XCTUnwrap(store.categories.first(where: { $0.name == "餐饮美食" && $0.type == TransactionType.EXPENSE }))
+
+        // 预设基线余额：银行储蓄卡 1000 元，微信零钱 500 元，净资产 1500 元
+        _ = try store.calibrateAccountBalance(accountId: debitId, targetBalanceMicros: 1_000 * unit, createRecord: false)
+        _ = try store.calibrateAccountBalance(accountId: wechatId, targetBalanceMicros: 500 * unit, createRecord: false)
+        XCTAssertEqual(store.computeNetWorth(displayCurrency: "CNY").netWorthMicros, 1_500 * unit)
+
+        let baseTs: Int64 = 1_772_352_000_000 // 2026-03-01 16:00:00 +08:00
+
+        // 2. 转账充值 50 优惠 2：实扣 48、目标到账 50、净资产 +2
+        let rechargeTx = try store.saveTransaction(
+            RecordTransactionRequest(
+                type: TransactionType.TRANSFER,
+                timestamp: baseTs,
+                origAmountMicros: 48 * unit,
+                origCurrency: "CNY",
+                accountId: debitId,
+                toAccountId: wechatId,
+                merchant: "零钱充值立减",
+                discountAmountMicros: 2 * unit,
+                feeAmountMicros: 0
+            )
+        )
+        XCTAssertEqual(rechargeTx.accountAmountMicros, 48 * unit)
+        XCTAssertEqual(rechargeTx.toAmountMicros, 50 * unit)
+        XCTAssertEqual(rechargeTx.discountAmountMicros, 2 * unit)
+        XCTAssertEqual(rechargeTx.feeAmountMicros, 0)
+        XCTAssertEqual(store.account(byId: debitId)?.balanceMicros, 952 * unit)
+        XCTAssertEqual(store.account(byId: wechatId)?.balanceMicros, 550 * unit)
+        XCTAssertEqual(store.computeNetWorth(displayCurrency: "CNY").netWorthMicros, 1_502 * unit)
+
+        // 3. 转账提现 100 手续费 0.10：源实扣 100.10、目标到账 100、净资产 -0.10
+        let withdrawTx = try store.saveTransaction(
+            RecordTransactionRequest(
+                type: TransactionType.TRANSFER,
+                timestamp: baseTs + 10_000,
+                origAmountMicros: 1_001_000, // 100.10
+                origCurrency: "CNY",
+                accountId: wechatId,
+                toAccountId: debitId,
+                merchant: "零钱提现",
+                discountAmountMicros: 0,
+                feeAmountMicros: 1_000 // 0.10
+            )
+        )
+        XCTAssertEqual(withdrawTx.accountAmountMicros, 1_001_000)
+        XCTAssertEqual(withdrawTx.toAmountMicros, 1_000_000)
+        XCTAssertEqual(withdrawTx.discountAmountMicros, 0)
+        XCTAssertEqual(withdrawTx.feeAmountMicros, 1_000)
+        XCTAssertEqual(store.account(byId: wechatId)?.balanceMicros, 4_499_000) // 449.90
+        XCTAssertEqual(store.account(byId: debitId)?.balanceMicros, 10_520_000) // 1052.00
+        XCTAssertEqual(store.computeNetWorth(displayCurrency: "CNY").netWorthMicros, 15_019_000) // 1501.90
+
+        // 4. 满 50 减 50 零元免单转账：源 -0、目标 +50、净资产 +50，且 0 元换算不除零
+        let zeroPreview = store.previewConversion(
+            origAmountMicros: 0,
+            origCurrency: "USD",
+            accountId: debitId
+        )
+        XCTAssertEqual(zeroPreview.accountAmountMicros, 0)
+        XCTAssertEqual(zeroPreview.baseAmountMicros, 0)
+
+        let freeTransferTx = try store.saveTransaction(
+            RecordTransactionRequest(
+                type: TransactionType.TRANSFER,
+                timestamp: baseTs + 20_000,
+                origAmountMicros: 0,
+                origCurrency: "CNY",
+                accountId: debitId,
+                toAccountId: wechatId,
+                merchant: "满50减50免单充值",
+                discountAmountMicros: 50 * unit,
+                feeAmountMicros: 0
+            )
+        )
+        XCTAssertEqual(freeTransferTx.origAmountMicros, 0)
+        XCTAssertEqual(freeTransferTx.accountAmountMicros, 0)
+        XCTAssertEqual(freeTransferTx.toAmountMicros, 50 * unit)
+        XCTAssertEqual(freeTransferTx.discountAmountMicros, 50 * unit)
+        XCTAssertEqual(store.account(byId: debitId)?.balanceMicros, 10_520_000)
+        XCTAssertEqual(store.account(byId: wechatId)?.balanceMicros, 4_999_000) // 499.90
+        XCTAssertEqual(store.computeNetWorth(displayCurrency: "CNY").netWorthMicros, 15_519_000) // 1551.90
+
+        // 5. 支出 50 优惠 2：账户 -48、统计支出 48、computeDiscountFeeSummary 累计优惠 2（1 笔）
+        let expenseTs = baseTs + 30_000
+        let expenseTx = try store.saveTransaction(
+            RecordTransactionRequest(
+                type: TransactionType.EXPENSE,
+                timestamp: expenseTs,
+                origAmountMicros: 48 * unit,
+                origCurrency: "CNY",
+                accountId: wechatId,
+                categoryId: diningCat.id,
+                merchant: "外卖满减",
+                discountAmountMicros: 2 * unit,
+                feeAmountMicros: 0
+            )
+        )
+        XCTAssertEqual(expenseTx.discountAmountMicros, 2 * unit)
+        XCTAssertEqual(store.account(byId: wechatId)?.balanceMicros, 4_519_000) // 451.90
+
+        let expenseStats = store.computeCategoryStats(
+            startMillis: expenseTs - 1_000,
+            endMillis: expenseTs + 1_000,
+            type: TransactionType.EXPENSE,
+            displayCurrency: "CNY"
+        )
+        XCTAssertEqual(expenseStats.count, 1)
+        XCTAssertEqual(expenseStats[0].totalBaseMicros, 48 * unit)
+
+        let expenseDiscountSummary = store.computeDiscountFeeSummary(
+            startMillis: expenseTs - 1_000,
+            endMillis: expenseTs + 1_000,
+            displayCurrency: "CNY"
+        )
+        XCTAssertEqual(expenseDiscountSummary.discountBaseMicros, 2 * unit)
+        XCTAssertEqual(expenseDiscountSummary.discountCount, 1)
+        XCTAssertEqual(expenseDiscountSummary.feeBaseMicros, 0)
+        XCTAssertEqual(expenseDiscountSummary.feeCount, 0)
+
+        // 6. 收入 100 手续费 0.60：账户 +99.40、收入强制忽略优惠、computeDiscountFeeSummary 累计手续费 0.60（1 笔）
+        let incomeTs = baseTs + 40_000
+        let incomeTx = try store.saveTransaction(
+            RecordTransactionRequest(
+                type: TransactionType.INCOME,
+                timestamp: incomeTs,
+                origAmountMicros: 994_000, // 99.40
+                origCurrency: "CNY",
+                accountId: debitId,
+                merchant: "收款结算",
+                discountAmountMicros: 5 * unit, // INCOME 必须清零
+                feeAmountMicros: 6_000 // 0.60
+            )
+        )
+        XCTAssertEqual(incomeTx.discountAmountMicros, 0)
+        XCTAssertEqual(incomeTx.feeAmountMicros, 6_000)
+        XCTAssertEqual(store.account(byId: debitId)?.balanceMicros, 11_514_000) // 1151.40
+
+        let incomeFeeSummary = store.computeDiscountFeeSummary(
+            startMillis: incomeTs - 1_000,
+            endMillis: incomeTs + 1_000,
+            displayCurrency: "CNY"
+        )
+        XCTAssertEqual(incomeFeeSummary.discountBaseMicros, 0)
+        XCTAssertEqual(incomeFeeSummary.discountCount, 0)
+        XCTAssertEqual(incomeFeeSummary.feeBaseMicros, 6_000)
+        XCTAssertEqual(incomeFeeSummary.feeCount, 1)
+
+        // 全区间累计汇总：优惠 = 2 + 50 + 2 = 54 (3 笔)，手续费 = 0.10 + 0.60 = 0.70 (2 笔)
+        let fullSummary = store.computeDiscountFeeSummary(
+            startMillis: baseTs - 1_000,
+            endMillis: incomeTs + 1_000,
+            displayCurrency: "CNY"
+        )
+        XCTAssertEqual(fullSummary.discountBaseMicros, 54 * unit)
+        XCTAssertEqual(fullSummary.discountCount, 3)
+        XCTAssertEqual(fullSummary.feeBaseMicros, 7_000)
+        XCTAssertEqual(fullSummary.feeCount, 2)
+
+        // 7. 编辑修改优惠额与删除回滚余额精确复原
+        let debitBeforeEdit = try XCTUnwrap(store.account(byId: debitId)?.balanceMicros)
+        let wechatBeforeEdit = try XCTUnwrap(store.account(byId: wechatId)?.balanceMicros)
+
+        // 将充值 50 优惠 2（orig=48, discount=2）编辑为充值 50 优惠 5（orig=45, discount=5）
+        let editedRecharge = try store.saveTransaction(
+            RecordTransactionRequest(
+                existingId: rechargeTx.id,
+                type: TransactionType.TRANSFER,
+                timestamp: baseTs,
+                origAmountMicros: 45 * unit,
+                origCurrency: "CNY",
+                accountId: debitId,
+                toAccountId: wechatId,
+                merchant: "零钱充值立减（更正）",
+                discountAmountMicros: 5 * unit,
+                feeAmountMicros: 0
+            )
+        )
+        XCTAssertEqual(editedRecharge.accountAmountMicros, 45 * unit)
+        XCTAssertEqual(editedRecharge.toAmountMicros, 50 * unit)
+        XCTAssertEqual(editedRecharge.discountAmountMicros, 5 * unit)
+        XCTAssertEqual(store.account(byId: debitId)?.balanceMicros, debitBeforeEdit + 3 * unit)
+        XCTAssertEqual(store.account(byId: wechatId)?.balanceMicros, wechatBeforeEdit)
+
+        // 删除该笔编辑后的充值：源账户回加 45、目标账户回扣 50（净相对最初基线完全抵消该笔交易）
+        try store.deleteTransaction(id: editedRecharge.id)
+        XCTAssertEqual(store.account(byId: debitId)?.balanceMicros, debitBeforeEdit + 48 * unit)
+        XCTAssertEqual(store.account(byId: wechatId)?.balanceMicros, wechatBeforeEdit - 50 * unit)
+
+        // 验证 duplicateTransaction 透传 discountAmountMicros / feeAmountMicros
+        let duplicatedFree = try store.duplicateTransaction(id: freeTransferTx.id)
+        XCTAssertEqual(duplicatedFree.origAmountMicros, 0)
+        XCTAssertEqual(duplicatedFree.discountAmountMicros, 50 * unit)
+        XCTAssertEqual(duplicatedFree.toAmountMicros, 50 * unit)
+        try store.deleteTransaction(id: duplicatedFree.id)
+
+        // 验证跨币种优惠/手续费折算汇总与参数校验
+        store.saveCustomRate(from: "USD", to: "CNY", rateMicros: 7_000_000)
+        let usdTs = incomeTs + 20_000
+        _ = try store.saveTransaction(
+            RecordTransactionRequest(
+                type: TransactionType.EXPENSE,
+                timestamp: usdTs,
+                origAmountMicros: 9 * unit,
+                origCurrency: "USD",
+                accountId: usdId,
+                discountAmountMicros: 1 * unit,
+                feeAmountMicros: 0
+            )
+        )
+        let usdSummary = store.computeDiscountFeeSummary(
+            startMillis: usdTs - 1_000,
+            endMillis: usdTs + 1_000,
+            displayCurrency: "CNY"
+        )
+        XCTAssertEqual(usdSummary.discountBaseMicros, 7 * unit)
+        XCTAssertEqual(usdSummary.discountCount, 1)
+
+        // 负数优惠/手续费及 0 元无优惠支出必须抛出 nonPositiveAmount
+        XCTAssertThrowsError(
+            try store.saveTransaction(
+                RecordTransactionRequest(
+                    type: TransactionType.EXPENSE,
+                    origAmountMicros: 10 * unit,
+                    origCurrency: "CNY",
+                    accountId: wechatId,
+                    discountAmountMicros: -1
+                )
+            )
+        ) { error in
+            XCTAssertEqual(error as? LedgerStoreError, .nonPositiveAmount)
+        }
+        XCTAssertThrowsError(
+            try store.saveTransaction(
+                RecordTransactionRequest(
+                    type: TransactionType.EXPENSE,
+                    origAmountMicros: 0,
+                    origCurrency: "CNY",
+                    accountId: wechatId,
+                    discountAmountMicros: 0,
+                    feeAmountMicros: 0
+                )
+            )
+        ) { error in
+            XCTAssertEqual(error as? LedgerStoreError, .nonPositiveAmount)
+        }
+
+        // 8. 验证 JSON 编码字段名与 Android 端严格对齐，且持久化重载/加密备份往返无损保留
+        let encodedTxJson = String(data: try JSONEncoder().encode(expenseTx), encoding: .utf8) ?? ""
+        XCTAssertTrue(encodedTxJson.contains("\"discountAmountMicros\""))
+        XCTAssertTrue(encodedTxJson.contains("\"feeAmountMicros\""))
+
+        let backupData = try store.exportEncryptedBackup(passphrase: "discount-fee-key")
+        let dir2 = makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir2) }
+        let restoredStore = LedgerStore(storageDirectory: dir2, useKeychain: false, timeZone: tz)
+        _ = try restoredStore.importEncryptedBackup(backupData, passphrase: "discount-fee-key")
+        XCTAssertEqual(restoredStore.transactions.first(where: { $0.id == expenseTx.id })?.discountAmountMicros, 2 * unit)
+        XCTAssertEqual(restoredStore.transactions.first(where: { $0.id == incomeTx.id })?.feeAmountMicros, 6_000)
+        XCTAssertEqual(restoredStore.transactions.first(where: { $0.id == withdrawTx.id })?.feeAmountMicros, 1_000)
+    }
 }

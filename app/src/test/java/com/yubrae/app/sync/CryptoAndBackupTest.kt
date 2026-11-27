@@ -708,4 +708,139 @@ class CryptoAndBackupTest {
         assertEquals("旧备份联系人", restoredLegacyDebt.personName)
         assertFalse(restoredLegacyDebt.includeInNetWorth)
     }
+
+    @Test
+    fun backupSerializer_roundTripsTransactionDiscountAndFeeAndLegacyDefaultsToZero() = runTest {
+        val db = InMemorySyncDatabase()
+        val acc1 = AccountEntity(
+            id = 1L,
+            name = "储蓄卡",
+            groupType = AccountGroup.DEBIT,
+            currencyCode = "CNY",
+            balanceMicros = 10_000_000L
+        )
+        val acc2 = AccountEntity(
+            id = 2L,
+            name = "交通卡",
+            groupType = AccountGroup.WALLET,
+            currencyCode = "CNY",
+            balanceMicros = 500_000L
+        )
+        db.accountDao.insertAll(listOf(acc1, acc2))
+
+        val transferWithDiscount = TransactionEntity(
+            id = 101L,
+            type = TransactionType.TRANSFER,
+            timestamp = 1795300000000L,
+            origAmountMicros = 480_000L,
+            origCurrency = "CNY",
+            accountId = 1L,
+            accountAmountMicros = 480_000L,
+            accountCurrency = "CNY",
+            toAccountId = 2L,
+            toAmountMicros = 500_000L,
+            toCurrency = "CNY",
+            merchant = "公交卡充值",
+            note = "满50减2",
+            createdAt = 1795300000000L,
+            updatedAt = 1795300000000L,
+            discountAmountMicros = 20_000L,
+            feeAmountMicros = 0L
+        )
+        val transferWithFee = TransactionEntity(
+            id = 102L,
+            type = TransactionType.TRANSFER,
+            timestamp = 1795303600000L,
+            origAmountMicros = 1_001_000L,
+            origCurrency = "CNY",
+            accountId = 2L,
+            accountAmountMicros = 1_001_000L,
+            accountCurrency = "CNY",
+            toAccountId = 1L,
+            toAmountMicros = 1_000_000L,
+            toCurrency = "CNY",
+            merchant = "余额提现",
+            createdAt = 1795303600000L,
+            updatedAt = 1795303600000L,
+            discountAmountMicros = 0L,
+            feeAmountMicros = 1_000L
+        )
+        val expenseWithBoth = TransactionEntity(
+            id = 103L,
+            type = TransactionType.EXPENSE,
+            timestamp = 1795307200000L,
+            origAmountMicros = 485_000L,
+            origCurrency = "CNY",
+            accountId = 1L,
+            accountAmountMicros = 485_000L,
+            accountCurrency = "CNY",
+            merchant = "外卖点单",
+            createdAt = 1795307200000L,
+            updatedAt = 1795307200000L,
+            discountAmountMicros = 20_000L,
+            feeAmountMicros = 5_000L
+        )
+        db.transactionDao.insertAll(listOf(transferWithDiscount, transferWithFee, expenseWithBoth))
+
+        val serializer = db.createSerializer()
+        val exportedJson = serializer.exportToJson()
+        assertTrue(exportedJson.contains("\"discountAmountMicros\":20000"))
+        assertTrue(exportedJson.contains("\"feeAmountMicros\":1000"))
+
+        val decoded = serializer.decodeFromJson(exportedJson)
+        val dtoById = decoded.transactions.associateBy { it.id }
+        assertEquals(20_000L, dtoById[101L]!!.discountAmountMicros)
+        assertEquals(0L, dtoById[101L]!!.feeAmountMicros)
+        assertEquals(0L, dtoById[102L]!!.discountAmountMicros)
+        assertEquals(1_000L, dtoById[102L]!!.feeAmountMicros)
+        assertEquals(20_000L, dtoById[103L]!!.discountAmountMicros)
+        assertEquals(5_000L, dtoById[103L]!!.feeAmountMicros)
+
+        db.clearAllTables()
+        serializer.restoreFromJson(exportedJson)
+        val restoredById = db.transactionDao.getAll().associateBy { it.id }
+        assertEquals(transferWithDiscount, restoredById[101L])
+        assertEquals(transferWithFee, restoredById[102L])
+        assertEquals(expenseWithBoth, restoredById[103L])
+
+        // 旧版备份 JSON 缺失 discountAmountMicros / feeAmountMicros 字段时默认回退为 0L
+        val legacyTxJson = """
+            {
+              "formatVersion": 3,
+              "exportedAtMillis": 1795310000000,
+              "appName": "Yubrae",
+              "accounts": [
+                {
+                  "id": 1,
+                  "name": "旧账户",
+                  "groupType": "WALLET",
+                  "currencyCode": "CNY"
+                }
+              ],
+              "transactions": [
+                {
+                  "id": 201,
+                  "type": "EXPENSE",
+                  "timestamp": 1795300000000,
+                  "origAmountMicros": 350000,
+                  "origCurrency": "CNY",
+                  "accountId": 1,
+                  "accountAmountMicros": 350000,
+                  "accountCurrency": "CNY",
+                  "merchant": "旧版流水"
+                }
+              ]
+            }
+        """.trimIndent()
+
+        val legacyDecoded = serializer.decodeFromJson(legacyTxJson)
+        assertEquals(0L, legacyDecoded.transactions.single().discountAmountMicros)
+        assertEquals(0L, legacyDecoded.transactions.single().feeAmountMicros)
+
+        serializer.restoreFromJson(legacyTxJson)
+        val restoredLegacyTx = db.transactionDao.getAll().single()
+        assertEquals(201L, restoredLegacyTx.id)
+        assertEquals(0L, restoredLegacyTx.discountAmountMicros)
+        assertEquals(0L, restoredLegacyTx.feeAmountMicros)
+    }
 }

@@ -46,6 +46,7 @@ import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.ByteArrayInputStream
@@ -347,7 +348,9 @@ class YimuCsvImporterTest {
         assertEquals(origExpense.ledgerId, linkedRefund.ledgerId)
         assertEquals("退部分餐费", linkedRefund.note)
         assertEquals("外卖,聚餐,加班", origExpense.tags)
-        assertTrue(origExpense.note.contains("优惠 5.00"))
+        assertEquals(MoneyAmount.parseToMicros("5.00")!!, origExpense.discountAmountMicros)
+        assertEquals(0L, origExpense.feeAmountMicros)
+        assertFalse(origExpense.note.contains("优惠 5.00"))
         assertTrue(origExpense.note.contains("地址:软件园A座"))
         assertTrue(origExpense.note.contains("创建用户:张三"))
 
@@ -605,6 +608,87 @@ class YimuCsvImporterTest {
         assertTrue(env.transactionDao.getAll().all { it.ledgerId == activeLedgerId })
     }
 
+    @Test
+    fun importYimuCsv_parsesStructuredDiscountAndFeeColumnsAndKeepsNonNumericFallbackInNote() = runTest {
+        val env = TestEnv(enableExtendedDaos = true)
+        env.ledgerDao.insert(LedgerEntity(id = 1L, name = "默认账本", currencyCode = "CNY"))
+
+        val csv = """
+            日期,收支类型,金额,币种,类别,二级分类,账户,转入账户,账本,优惠,手续费,备注
+            2026-08-01 12:00:00,支出,48.00,CNY,餐饮美食,午餐,微信零钱,,默认账本,2.00,0,工作餐
+            2026-08-02 09:00:00,转账,48.00,CNY,,,招行储蓄卡,交通卡,默认账本,2.00,,充值满50减2
+            2026-08-03 10:00:00,转账,100.10,CNY,,,微信零钱,招行储蓄卡,默认账本,,0.10,零钱提现
+            2026-08-04 15:00:00,收入,99.40,CNY,兼职副业,,招行储蓄卡,,默认账本,,0.60,收款扣费
+            2026-08-05 18:00:00,支出,0.00,CNY,餐饮美食,咖啡,微信零钱,,默认账本,50.00,,满50减50免单
+            2026-08-06 20:00:00,支出,30.00,CNY,日用购物,,微信零钱,,默认账本,满减券,免收,非数字备注回退
+            2026-08-07 11:00:00,转账,98.00,USD,,,美元信用卡,欧元储蓄卡,默认账本,2.00,,跨币种优惠划转
+        """.trimIndent()
+
+        val preview = env.importer.previewFile(
+            "yimu_discount_fee.csv",
+            ByteArrayInputStream(csv.toByteArray(Charsets.UTF_8))
+        ).getOrThrow()
+        assertEquals(7, preview.totalRows)
+        assertEquals(7, preview.validRows)
+
+        val summary = env.importer.importFile(
+            "yimu_discount_fee.csv",
+            ByteArrayInputStream(csv.toByteArray(Charsets.UTF_8))
+        ).getOrThrow()
+        assertEquals(7, summary.importedCount)
+
+        val requests = env.ledgerService.savedRequests
+        assertEquals(7, requests.size)
+
+        // 1. 支出含优惠：不重复扣减金额，结构化写入 discountAmountMicros，不重复拼入备注
+        assertEquals(MoneyAmount.parseToMicros("48.00")!!, requests[0].origAmountMicros)
+        assertEquals(MoneyAmount.parseToMicros("2.00")!!, requests[0].discountAmountMicros)
+        assertEquals(0L, requests[0].feeAmountMicros)
+        assertEquals("工作餐", requests[0].note)
+
+        // 2. 同币种转账含优惠：manualToAmountMicros 为 null，交由仓库按 orig + discount - fee 推导 50.00
+        assertEquals(TransactionType.TRANSFER, requests[1].type)
+        assertEquals(MoneyAmount.parseToMicros("48.00")!!, requests[1].origAmountMicros)
+        assertEquals(MoneyAmount.parseToMicros("2.00")!!, requests[1].discountAmountMicros)
+        assertEquals(0L, requests[1].feeAmountMicros)
+        assertNull(requests[1].manualToAmountMicros)
+        assertEquals("充值满50减2", requests[1].note)
+
+        // 3. 同币种提现含手续费：结构化写入 feeAmountMicros，manualToAmountMicros 为 null
+        assertEquals(TransactionType.TRANSFER, requests[2].type)
+        assertEquals(MoneyAmount.parseToMicros("100.10")!!, requests[2].origAmountMicros)
+        assertEquals(0L, requests[2].discountAmountMicros)
+        assertEquals(MoneyAmount.parseToMicros("0.10")!!, requests[2].feeAmountMicros)
+        assertNull(requests[2].manualToAmountMicros)
+        assertEquals("零钱提现", requests[2].note)
+
+        // 4. 收入含手续费
+        assertEquals(TransactionType.INCOME, requests[3].type)
+        assertEquals(MoneyAmount.parseToMicros("99.40")!!, requests[3].origAmountMicros)
+        assertEquals(0L, requests[3].discountAmountMicros)
+        assertEquals(MoneyAmount.parseToMicros("0.60")!!, requests[3].feeAmountMicros)
+        assertEquals("收款扣费", requests[3].note)
+
+        // 5. 满 50 减 50 零元免单支出允许导入
+        assertEquals(TransactionType.EXPENSE, requests[4].type)
+        assertEquals(0L, requests[4].origAmountMicros)
+        assertEquals(MoneyAmount.parseToMicros("50.00")!!, requests[4].discountAmountMicros)
+        assertEquals("满50减50免单", requests[4].note)
+
+        // 6. 无法解析为数字的优惠/手续费文本保留到备注
+        assertEquals(MoneyAmount.parseToMicros("30.00")!!, requests[5].origAmountMicros)
+        assertEquals(0L, requests[5].discountAmountMicros)
+        assertEquals(0L, requests[5].feeAmountMicros)
+        assertTrue(requests[5].note.contains("优惠 满减券"))
+        assertTrue(requests[5].note.contains("手续费 免收"))
+
+        // 7. 跨币种转账含优惠：按有效面值 (98 + 2 = 100 USD) * 0.92 = 92.00 EUR 折算转入额
+        assertEquals(TransactionType.TRANSFER, requests[6].type)
+        assertEquals(MoneyAmount.parseToMicros("98.00")!!, requests[6].origAmountMicros)
+        assertEquals(MoneyAmount.parseToMicros("2.00")!!, requests[6].discountAmountMicros)
+        assertEquals(MoneyAmount.parseToMicros("92.00")!!, requests[6].manualToAmountMicros)
+    }
+
     private fun buildMinimalXlsx(
         sharedStringsXml: String,
         stylesXml: String,
@@ -801,7 +885,9 @@ class YimuCsvImporterTest {
                 excludeFromBudget = request.excludeFromBudget,
                 refundOfTxId = request.refundOfTxId,
                 attachmentPaths = request.attachmentPaths,
-                reimbursedTxId = request.reimbursedTxId
+                reimbursedTxId = request.reimbursedTxId,
+                discountAmountMicros = if (request.type == TransactionType.INCOME) 0L else request.discountAmountMicros,
+                feeAmountMicros = request.feeAmountMicros
             )
             val id = transactionDao.insert(entity)
             return Result.success(entity.copy(id = id))

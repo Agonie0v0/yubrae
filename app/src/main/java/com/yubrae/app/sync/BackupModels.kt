@@ -137,7 +137,9 @@ data class TransactionDto(
     val attachmentPaths: String = "",
     val reimbursedTxId: Long? = null,
     val createdAt: Long = 0L,
-    val updatedAt: Long = 0L
+    val updatedAt: Long = 0L,
+    val discountAmountMicros: Long = 0L,
+    val feeAmountMicros: Long = 0L
 )
 
 @Serializable
@@ -375,7 +377,7 @@ internal fun TransactionEntity.toDto() = TransactionDto(
     rateToAccountMicros, rateToBaseMicros, baseCurrency, categoryId, merchant,
     note, tags, reimburseStatus, sourceType, rawEventId, status,
     ledgerId, excludeFromStats, excludeFromBudget, refundOfTxId, attachmentPaths, reimbursedTxId,
-    createdAt, updatedAt
+    createdAt, updatedAt, discountAmountMicros, feeAmountMicros
 )
 
 internal fun TransactionDto.toEntity() = TransactionEntity(
@@ -384,7 +386,7 @@ internal fun TransactionDto.toEntity() = TransactionEntity(
     rateToAccountMicros, rateToBaseMicros, baseCurrency, categoryId, merchant,
     note, tags, reimburseStatus, sourceType, rawEventId, status,
     ledgerId, excludeFromStats, excludeFromBudget, refundOfTxId, attachmentPaths, reimbursedTxId,
-    createdAt, updatedAt
+    createdAt, updatedAt, discountAmountMicros, feeAmountMicros
 )
 
 internal fun CategoryEntity.toDto() = CategoryDto(

@@ -102,6 +102,16 @@ public struct TransactionsView: View {
         ).reduce(0) { $0 + $1.totalBaseMicros }
     }
 
+    private var monthDiscountFeeSummary: PeriodDiscountFeeSummary {
+        let range = monthRange
+        return store.computeDiscountFeeSummary(
+            startMillis: range.0,
+            endMillis: range.1,
+            ledgerId: activeLedgerFilterId,
+            displayCurrency: store.settings.baseCurrency
+        )
+    }
+
     private var groupedByDay: [DayTransactionGroup] {
         var bucketOrder: [String] = []
         var byKey: [String: [TransactionDto]] = [:]
@@ -283,6 +293,7 @@ public struct TransactionsView: View {
         let incText = YubraeTheme.masked(MoneyAmount.format(monthIncomeMicros, currencyCode: baseCur), isMasked: masked)
         let netMicros = monthIncomeMicros - monthExpenseMicros
         let netText = YubraeTheme.masked(MoneyAmount.format(netMicros, currencyCode: baseCur, showSign: true), isMasked: masked)
+        let dfSummary = monthDiscountFeeSummary
 
         return VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 8) {
@@ -395,6 +406,49 @@ public struct TransactionsView: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel("查看本月收支详情")
+
+            if dfSummary.discountBaseMicros > 0 || dfSummary.feeBaseMicros > 0 {
+                HStack(spacing: 8) {
+                    if dfSummary.discountBaseMicros > 0 {
+                        let discStr = YubraeTheme.masked(
+                            MoneyAmount.format(dfSummary.discountBaseMicros, currencyCode: baseCur),
+                            isMasked: masked
+                        )
+                        HStack(spacing: 4) {
+                            Image(systemName: "tag.fill")
+                                .font(.system(size: 10, weight: .semibold))
+                            Text("本月已省 \(discStr)")
+                                .font(.caption2.weight(.semibold).monospacedDigit())
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.75)
+                        }
+                        .foregroundColor(.white)
+                    }
+                    if dfSummary.discountBaseMicros > 0 && dfSummary.feeBaseMicros > 0 {
+                        Text("·")
+                            .font(.caption2.weight(.bold))
+                            .foregroundColor(.white.opacity(0.55))
+                    }
+                    if dfSummary.feeBaseMicros > 0 {
+                        let feeStr = YubraeTheme.masked(
+                            MoneyAmount.format(dfSummary.feeBaseMicros, currencyCode: baseCur),
+                            isMasked: masked
+                        )
+                        Text("手续费 \(feeStr)")
+                            .font(.caption2.weight(.semibold).monospacedDigit())
+                            .foregroundColor(.white.opacity(0.92))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.75)
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(Color.white.opacity(0.15))
+                )
+            }
         }
         .padding(18)
         .background(
@@ -697,6 +751,25 @@ public struct TransactionsView: View {
                 .foregroundColor(palette.textSecondary)
                 .lineLimit(1)
 
+                if tx.discountAmountMicros > 0 || tx.feeAmountMicros > 0 {
+                    HStack(spacing: 5) {
+                        if tx.discountAmountMicros > 0 {
+                            let discStr = YubraeTheme.masked(
+                                MoneyAmount.format(tx.discountAmountMicros, currencyCode: tx.origCurrency),
+                                isMasked: masked
+                            )
+                            badgeTag("惠 \(discStr)", color: palette.incomeColor)
+                        }
+                        if tx.feeAmountMicros > 0 {
+                            let feeStr = YubraeTheme.masked(
+                                MoneyAmount.format(tx.feeAmountMicros, currencyCode: tx.origCurrency),
+                                isMasked: masked
+                            )
+                            badgeTag("费 \(feeStr)", color: palette.warningColor)
+                        }
+                    }
+                }
+
                 if !tx.note.isEmpty || !txTags.isEmpty {
                     HStack(spacing: 4) {
                         ForEach(txTags.prefix(2), id: \.self) { t in
@@ -723,13 +796,34 @@ public struct TransactionsView: View {
                     .foregroundColor(amountColor)
                     .lineLimit(1)
                     .fixedSize(horizontal: true, vertical: false)
-                if tx.origCurrency != tx.accountCurrency {
+                if tx.type == TransactionType.TRANSFER, let toAmt = tx.toAmountMicros {
+                    let toCur = CurrencyCatalog.normalize(tx.toCurrency ?? tx.origCurrency)
+                    let origCur = CurrencyCatalog.normalize(tx.origCurrency)
+                    if tx.discountAmountMicros > 0 || tx.feeAmountMicros > 0 || toCur != origCur || toAmt != tx.origAmountMicros {
+                        let toFmt = MoneyAmount.format(toAmt, currencyCode: toCur, showCurrencyCode: true)
+                        Text("到账 \(YubraeTheme.masked(toFmt, isMasked: masked))")
+                            .font(.caption2.monospacedDigit())
+                            .foregroundColor(palette.textSecondary)
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
+                    }
+                } else if tx.origCurrency != tx.accountCurrency {
                     let accFmt = MoneyAmount.format(tx.accountAmountMicros, currencyCode: tx.accountCurrency, showCurrencyCode: true)
                     Text("实扣 \(YubraeTheme.masked(accFmt, isMasked: masked))")
-                        .font(.caption2)
+                        .font(.caption2.monospacedDigit())
                         .foregroundColor(palette.textTertiary)
                         .lineLimit(1)
                         .fixedSize(horizontal: true, vertical: false)
+                } else if tx.type == TransactionType.EXPENSE && tx.discountAmountMicros > 0 {
+                    let nominalMicros = tx.origAmountMicros + tx.discountAmountMicros - tx.feeAmountMicros
+                    if nominalMicros > 0 && nominalMicros != tx.origAmountMicros {
+                        let nomFmt = MoneyAmount.format(nominalMicros, currencyCode: tx.origCurrency, showCurrencyCode: true)
+                        Text("原价 \(YubraeTheme.masked(nomFmt, isMasked: masked))")
+                            .font(.caption2.monospacedDigit())
+                            .foregroundColor(palette.textTertiary)
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
+                    }
                 }
             }
             .layoutPriority(1)
@@ -740,7 +834,7 @@ public struct TransactionsView: View {
 
     private func badgeTag(_ text: String, color: Color) -> some View {
         Text(text)
-            .font(.system(size: 10, weight: .semibold))
+            .font(.system(size: 10, weight: .semibold).monospacedDigit())
             .foregroundColor(color)
             .lineLimit(1)
             .fixedSize(horizontal: true, vertical: false)

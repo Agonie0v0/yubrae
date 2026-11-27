@@ -50,7 +50,9 @@ data class RecordTransactionRequest(
     val excludeFromBudget: Boolean = false,
     val refundOfTxId: Long? = null,
     val attachmentPaths: String = "",
-    val reimbursedTxId: Long? = null
+    val reimbursedTxId: Long? = null,
+    val discountAmountMicros: Long = 0L,
+    val feeAmountMicros: Long = 0L
 )
 
 data class ConversionPreview(

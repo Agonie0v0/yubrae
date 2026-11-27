@@ -1,13 +1,21 @@
 import Combine
+import Foundation
 import SwiftUI
 import UIKit
 
-private enum IOSRecordWorkspacePanel {
+private enum IOSRecordWorkspacePanel: Equatable {
     case category
     case tags
     case account
+    case discountFee
     case dateTime
     case more
+}
+
+private enum IOSQuickRecordFocusField: Hashable {
+    case note
+    case discount
+    case fee
 }
 
 public struct QuickRecordSheet: View {
@@ -20,6 +28,9 @@ public struct QuickRecordSheet: View {
     @State private var txType: String
     @State private var activePanel: IOSRecordWorkspacePanel = .category
     @State private var amountExpr: String
+    @State private var discountInput: String
+    @State private var feeInput: String
+    @State private var expenseAmountIsActualPaid: Bool = false
     @State private var origCurrency: String
     @State private var selectedAccountId: Int64
     @State private var selectedToAccountId: Int64?
@@ -54,7 +65,7 @@ public struct QuickRecordSheet: View {
     // 跨币种与弹窗控制
     @State private var showCurrencySheet = false
     @State private var isKeyboardVisible = false
-    private var shouldShowKeypad: Bool { !isKeyboardVisible && !noteFocused }
+    private var shouldShowKeypad: Bool { !isKeyboardVisible && focusedField == nil }
     @State private var showForexOverride = false
     @State private var manualAccountAmountText: String = ""
     @State private var manualRateText: String = ""
@@ -65,7 +76,7 @@ public struct QuickRecordSheet: View {
     @State private var inSheetToast: String?
     @State private var inSheetToastTask: Task<Void, Never>?
 
-    @FocusState private var noteFocused: Bool
+    @FocusState private var focusedField: IOSQuickRecordFocusField?
 
     public init(
         store: LedgerStore,
@@ -86,7 +97,27 @@ public struct QuickRecordSheet: View {
             let resolvedType = tx.type == TransactionType.ADJUST ? TransactionType.EXPENSE : tx.type
             _txType = State(initialValue: resolvedType)
             let digits = CurrencyCatalog.find(tx.origCurrency).minorDigits
-            _amountExpr = State(initialValue: MoneyAmount.formatPlain(abs(tx.origAmountMicros), minorDigits: digits, grouping: false))
+            let resolvedDiscount: Int64 = (resolvedType == TransactionType.INCOME || tx.type == TransactionType.ADJUST)
+                ? 0
+                : max(Int64(0), tx.discountAmountMicros)
+            let resolvedFee: Int64 = tx.type == TransactionType.ADJUST
+                ? 0
+                : max(Int64(0), tx.feeAmountMicros)
+            let rawOrig = abs(tx.origAmountMicros)
+            let restoredNominal: Int64
+            switch resolvedType {
+            case TransactionType.INCOME:
+                restoredNominal = max(Int64(0), rawOrig + resolvedFee)
+            case TransactionType.EXPENSE, TransactionType.TRANSFER:
+                let candidate = rawOrig + resolvedDiscount - resolvedFee
+                restoredNominal = candidate > 0 ? candidate : rawOrig
+            default:
+                restoredNominal = rawOrig
+            }
+            _amountExpr = State(initialValue: MoneyAmount.formatPlain(restoredNominal, minorDigits: digits, grouping: false))
+            _discountInput = State(initialValue: resolvedDiscount > 0 ? Self.formatCompactDecimalInput(resolvedDiscount) : "")
+            _feeInput = State(initialValue: resolvedFee > 0 ? Self.formatCompactDecimalInput(resolvedFee) : "")
+            _expenseAmountIsActualPaid = State(initialValue: false)
             _origCurrency = State(initialValue: tx.origCurrency)
             _selectedAccountId = State(initialValue: tx.accountId)
             _selectedToAccountId = State(initialValue: tx.toAccountId ?? secondAccountId)
@@ -164,6 +195,9 @@ public struct QuickRecordSheet: View {
 
             _txType = State(initialValue: resolvedType)
             _amountExpr = State(initialValue: resolvedAmountExpr)
+            _discountInput = State(initialValue: "")
+            _feeInput = State(initialValue: "")
+            _expenseAmountIsActualPaid = State(initialValue: false)
             _origCurrency = State(initialValue: resolvedCurrency)
             _selectedAccountId = State(initialValue: resolvedAccountId)
             _selectedToAccountId = State(initialValue: resolvedToAccountId)
@@ -204,8 +238,105 @@ public struct QuickRecordSheet: View {
         selectedCategory?.parentId.flatMap { store.category(byId: $0) }
     }
 
-    private var parsedAmountMicros: Int64 {
+    private var evaluatedEnteredDecimal: Decimal? {
+        QuickExprEvaluator.evaluate(amountExpr)
+    }
+
+    private var hasValidEnteredAmount: Bool {
+        guard let dec = evaluatedEnteredDecimal else { return false }
+        return dec >= 0
+    }
+
+    private var enteredAmountMicros: Int64 {
         QuickExprEvaluator.evaluateToMicros(amountExpr) ?? 0
+    }
+
+    private var parsedDiscountMicros: Int64 {
+        guard txType != TransactionType.INCOME else { return 0 }
+        return max(Int64(0), MoneyAmount.parseToMicros(discountInput) ?? 0)
+    }
+
+    private var parsedFeeMicros: Int64 {
+        max(Int64(0), MoneyAmount.parseToMicros(feeInput) ?? 0)
+    }
+
+    private var hasDiscountOrFee: Bool {
+        parsedDiscountMicros > 0 || parsedFeeMicros > 0
+    }
+
+    private var nominalAmountMicros: Int64 {
+        switch txType {
+        case TransactionType.EXPENSE:
+            return expenseAmountIsActualPaid
+                ? (enteredAmountMicros + parsedDiscountMicros - parsedFeeMicros)
+                : enteredAmountMicros
+        case TransactionType.TRANSFER, TransactionType.INCOME:
+            return enteredAmountMicros
+        default:
+            return enteredAmountMicros
+        }
+    }
+
+    private var actualSubmitOrigMicros: Int64 {
+        switch txType {
+        case TransactionType.TRANSFER:
+            return enteredAmountMicros - parsedDiscountMicros + parsedFeeMicros
+        case TransactionType.EXPENSE:
+            return expenseAmountIsActualPaid
+                ? enteredAmountMicros
+                : (enteredAmountMicros - parsedDiscountMicros + parsedFeeMicros)
+        case TransactionType.INCOME:
+            return enteredAmountMicros - parsedFeeMicros
+        default:
+            return enteredAmountMicros
+        }
+    }
+
+    private var discountFeeFormulaError: String? {
+        let trimmedAmount = amountExpr.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedAmount.isEmpty else { return nil }
+        switch txType {
+        case TransactionType.TRANSFER:
+            if actualSubmitOrigMicros < 0 {
+                return "优惠不能大于转账金额"
+            }
+            return nil
+        case TransactionType.EXPENSE:
+            if expenseAmountIsActualPaid {
+                if hasValidEnteredAmount && (enteredAmountMicros > 0 || parsedDiscountMicros > 0) && nominalAmountMicros <= 0 {
+                    return "手续费不能大于实付与优惠之和"
+                }
+                return nil
+            } else {
+                if actualSubmitOrigMicros < 0 {
+                    return "优惠不能大于原价"
+                }
+                return nil
+            }
+        case TransactionType.INCOME:
+            if actualSubmitOrigMicros < 0 {
+                return "手续费不能大于收入金额"
+            }
+            return nil
+        default:
+            return nil
+        }
+    }
+
+    private var discountFeeCapsuleLabel: String {
+        let disc = parsedDiscountMicros
+        let fee = parsedFeeMicros
+        if disc <= 0 && fee <= 0 {
+            return txType == TransactionType.INCOME ? "手续费" : "优惠/手续费"
+        }
+        let sym = CurrencyCatalog.find(origCurrency).symbol
+        if disc > 0 && fee > 0 {
+            return "惠\(sym)\(Self.formatCompactDecimalInput(disc))·费\(sym)\(Self.formatCompactDecimalInput(fee))"
+        }
+        if disc > 0 {
+            return "惠 \(sym)\(Self.formatCompactDecimalInput(disc))"
+        }
+        return "费 \(sym)\(Self.formatCompactDecimalInput(fee))"
     }
 
     private var amountAccentColor: Color {
@@ -217,12 +348,12 @@ public struct QuickRecordSheet: View {
     }
 
     private var conversionPreview: ConversionPreview? {
-        guard parsedAmountMicros > 0, selectedAccountId > 0 else { return nil }
+        guard actualSubmitOrigMicros > 0, selectedAccountId > 0 else { return nil }
         let manualAcc = MoneyAmount.parseToMicros(manualAccountAmountText)
         let manualRate = MoneyAmount.parseRateToMicros(manualRateText)
         let dateStr = DefaultSeedData.formatISODate(epochMillis: Int64((txDate.timeIntervalSince1970 * 1000.0).rounded()))
         return store.previewConversion(
-            origAmountMicros: parsedAmountMicros,
+            origAmountMicros: actualSubmitOrigMicros,
             origCurrency: origCurrency,
             accountId: selectedAccountId,
             manualAccountAmountMicros: manualAcc,
@@ -289,7 +420,7 @@ public struct QuickRecordSheet: View {
                 }
                 .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
                     isKeyboardVisible = false
-                    noteFocused = false
+                    focusedField = nil
                 }
             }
             .background(palette.background.ignoresSafeArea())
@@ -305,10 +436,30 @@ public struct QuickRecordSheet: View {
         .onChange(of: amountExpr) { _ in
             validationMessage = nil
         }
+        .onChange(of: discountInput) { _ in
+            validationMessage = nil
+        }
+        .onChange(of: feeInput) { _ in
+            validationMessage = nil
+        }
+        .onChange(of: expenseAmountIsActualPaid) { _ in
+            validationMessage = nil
+        }
+        .onChange(of: activePanel) { newPanel in
+            if newPanel != .discountFee && (focusedField == .discount || focusedField == .fee) {
+                dismissSystemKeyboard()
+            }
+        }
         .onChange(of: txType) { newType in
             syncCategoryForTypeChange(newType)
             isCreatingCategory = false
             categorySearchQuery = ""
+            if newType == TransactionType.INCOME {
+                discountInput = ""
+                expenseAmountIsActualPaid = false
+            } else if newType == TransactionType.TRANSFER {
+                expenseAmountIsActualPaid = false
+            }
             if activePanel != .category {
                 activePanel = .category
             }
@@ -528,8 +679,8 @@ public struct QuickRecordSheet: View {
                                 .minimumScaleFactor(0.65)
                                 .truncationMode(.head)
                                 .layoutPriority(1)
-                            if QuickExprEvaluator.containsOperator(amountExpr), parsedAmountMicros > 0 {
-                                Text("= \(MoneyAmount.format(parsedAmountMicros, currencyCode: origCurrency))")
+                            if QuickExprEvaluator.containsOperator(amountExpr), enteredAmountMicros > 0 {
+                                Text("= \(MoneyAmount.format(enteredAmountMicros, currencyCode: origCurrency))")
                                     .font(.caption2.weight(.medium))
                                     .monospacedDigit()
                                     .foregroundColor(amountAccentColor.opacity(0.85))
@@ -540,6 +691,10 @@ public struct QuickRecordSheet: View {
                     .buttonStyle(.plain)
                     .layoutPriority(1)
                 }
+            }
+
+            if hasDiscountOrFee {
+                discountFeeFormulaPreviewBar
             }
 
             if let preview = conversionPreview,
@@ -586,6 +741,97 @@ public struct QuickRecordSheet: View {
         .padding(.bottom, 6)
     }
 
+    private var discountFeeFormulaPreviewBar: some View {
+        let trimmedAmount = amountExpr.trimmingCharacters(in: .whitespacesAndNewlines)
+        let formulaError = discountFeeFormulaError
+        let disc = parsedDiscountMicros
+        let fee = parsedFeeMicros
+
+        return Button {
+            activePanel = .discountFee
+        } label: {
+            if let err = formulaError {
+                HStack(spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.caption2)
+                        .foregroundColor(palette.dangerColor)
+                    Text(err)
+                        .font(.caption2.weight(.semibold))
+                        .foregroundColor(palette.dangerColor)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                    Spacer(minLength: 4)
+                    Text("去调整")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundColor(palette.dangerColor)
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
+                }
+                .padding(.horizontal, 9)
+                .padding(.vertical, 6)
+                .background(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(palette.dangerColor.opacity(0.12))
+                )
+            } else {
+                let equationText: String = {
+                    if trimmedAmount.isEmpty {
+                        return "输入金额后自动核算实付/到账"
+                    }
+                    let nomFmt = MoneyAmount.format(max(Int64(0), nominalAmountMicros), currencyCode: origCurrency)
+                    let actFmt = MoneyAmount.format(max(Int64(0), actualSubmitOrigMicros), currencyCode: origCurrency)
+                    switch txType {
+                    case TransactionType.TRANSFER:
+                        return "实扣 \(actFmt) → 到账 \(nomFmt)"
+                    case TransactionType.INCOME:
+                        return "原额 \(nomFmt) → 实收 \(actFmt)"
+                    default:
+                        return "原价 \(nomFmt) → 实付 \(actFmt)"
+                    }
+                }()
+
+                HStack(spacing: 5) {
+                    Text(equationText)
+                        .font(.caption2.weight(.semibold).monospacedDigit())
+                        .foregroundColor(trimmedAmount.isEmpty ? palette.textSecondary : palette.textPrimary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
+                    Spacer(minLength: 4)
+                    if disc > 0 {
+                        discountFeeMiniBadge(
+                            "惠 \(MoneyAmount.format(disc, currencyCode: origCurrency))",
+                            color: palette.incomeColor
+                        )
+                    }
+                    if fee > 0 {
+                        discountFeeMiniBadge(
+                            "费 \(MoneyAmount.format(fee, currencyCode: origCurrency))",
+                            color: palette.warningColor
+                        )
+                    }
+                }
+                .padding(.horizontal, 9)
+                .padding(.vertical, 6)
+                .background(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(palette.surfaceSecondary)
+                )
+            }
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func discountFeeMiniBadge(_ text: String, color: Color) -> some View {
+        Text(text)
+            .font(.system(size: 10, weight: .semibold).monospacedDigit())
+            .foregroundColor(color)
+            .lineLimit(1)
+            .fixedSize(horizontal: true, vertical: false)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(Capsule().fill(color.opacity(0.14)))
+    }
+
     // MARK: - 3. 中部大视野工作区
 
     @ViewBuilder
@@ -601,6 +847,8 @@ public struct QuickRecordSheet: View {
             tagsWorkspaceView
         case .account:
             accountWorkspaceView
+        case .discountFee:
+            discountFeeWorkspaceView
         case .dateTime:
             dateTimeWorkspaceView
         case .more:
@@ -1385,6 +1633,263 @@ public struct QuickRecordSheet: View {
         }
     }
 
+    private var discountFeeWorkspaceView: some View {
+        let curInfo = CurrencyCatalog.find(origCurrency)
+        let isIncome = txType == TransactionType.INCOME
+        let isTransfer = txType == TransactionType.TRANSFER
+        let isExpense = txType == TransactionType.EXPENSE
+
+        return ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 8) {
+                    Text(isIncome ? "手续费设置" : "优惠与手续费")
+                        .font(.subheadline.weight(.bold))
+                        .foregroundColor(palette.textPrimary)
+                        .lineLimit(1)
+                    Spacer(minLength: 6)
+                    if !discountInput.isEmpty || !feeInput.isEmpty {
+                        Button("清空") {
+                            discountInput = ""
+                            feeInput = ""
+                        }
+                        .font(.caption.weight(.semibold))
+                        .foregroundColor(palette.dangerColor)
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
+                        .buttonStyle(.plain)
+                    }
+                    Button {
+                        dismissSystemKeyboard()
+                        activePanel = .category
+                    } label: {
+                        Text("完成")
+                            .font(.caption.weight(.bold))
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
+                            .foregroundColor(palette.onPrimary)
+                            .padding(.horizontal, 11)
+                            .padding(.vertical, 5)
+                            .background(Capsule().fill(palette.primary))
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                if isExpense {
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(spacing: 8) {
+                            discountModeCapsule(
+                                title: "从金额减免/加收",
+                                selected: !expenseAmountIsActualPaid
+                            ) {
+                                expenseAmountIsActualPaid = false
+                            }
+                            discountModeCapsule(
+                                title: "当前已是实付",
+                                selected: expenseAmountIsActualPaid
+                            ) {
+                                expenseAmountIsActualPaid = true
+                            }
+                        }
+                        Text(
+                            expenseAmountIsActualPaid
+                                ? "上方金额直接记为最终实付，仅额外记录享受的优惠或手续费"
+                                : "上方输入商品原价，自动减去优惠并加上手续费得到实际支付"
+                        )
+                        .font(.caption2)
+                        .foregroundColor(palette.textSecondary)
+                    }
+                }
+
+                if !isIncome {
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(spacing: 6) {
+                            Text("优惠金额 (\(curInfo.code))")
+                                .font(.caption.weight(.semibold))
+                                .foregroundColor(palette.textPrimary)
+                                .lineLimit(1)
+                            discountFeeMiniBadge("省钱", color: palette.incomeColor)
+                            Spacer(minLength: 0)
+                        }
+                        HStack(spacing: 8) {
+                            Text(curInfo.symbol)
+                                .font(.subheadline.weight(.bold))
+                                .foregroundColor(palette.incomeColor)
+                                .lineLimit(1)
+                                .fixedSize(horizontal: true, vertical: false)
+                            TextField("0.00", text: $discountInput)
+                                .keyboardType(.decimalPad)
+                                .font(.subheadline.weight(.semibold).monospacedDigit())
+                                .focused($focusedField, equals: .discount)
+                            if !discountInput.isEmpty {
+                                Button {
+                                    discountInput = ""
+                                } label: {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .font(.caption)
+                                        .foregroundColor(palette.textTertiary)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 9)
+                        .background(RoundedRectangle(cornerRadius: 10).fill(palette.surface))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 10)
+                                .strokeBorder(
+                                    focusedField == .discount ? palette.incomeColor : palette.outline,
+                                    lineWidth: focusedField == .discount ? 1.2 : 0.7
+                                )
+                        )
+                        Text(
+                            isTransfer
+                                ? "例如充 ¥50 优惠 ¥2，目标账户到账 ¥50、转出实扣 ¥48（支持全额满减 0 元单）"
+                                : "例如原价 ¥50 满减 ¥2，实际支付 ¥48（支持全额满减 0 元免单）"
+                        )
+                        .font(.caption2)
+                        .foregroundColor(palette.textTertiary)
+                    }
+                }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 6) {
+                        Text("手续费 (\(curInfo.code))")
+                            .font(.caption.weight(.semibold))
+                            .foregroundColor(palette.textPrimary)
+                            .lineLimit(1)
+                        discountFeeMiniBadge(isIncome ? "扣减" : "加收", color: palette.warningColor)
+                        Spacer(minLength: 0)
+                    }
+                    HStack(spacing: 8) {
+                        Text(curInfo.symbol)
+                            .font(.subheadline.weight(.bold))
+                            .foregroundColor(palette.warningColor)
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
+                        TextField("0.00", text: $feeInput)
+                            .keyboardType(.decimalPad)
+                            .font(.subheadline.weight(.semibold).monospacedDigit())
+                            .focused($focusedField, equals: .fee)
+                        if !feeInput.isEmpty {
+                            Button {
+                                feeInput = ""
+                            } label: {
+                                Image(systemName: "xmark.circle.fill")
+                                    .font(.caption)
+                                    .foregroundColor(palette.textTertiary)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 9)
+                    .background(RoundedRectangle(cornerRadius: 10).fill(palette.surface))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 10)
+                            .strokeBorder(
+                                focusedField == .fee ? palette.warningColor : palette.outline,
+                                lineWidth: focusedField == .fee ? 1.2 : 0.7
+                            )
+                    )
+                    Text(
+                        isTransfer
+                            ? "例如提现 ¥100 手续费 ¥0.1，转出实扣 ¥100.1、目标到账 ¥100"
+                            : (isIncome
+                                ? "例如收款 ¥100 平台服务费 ¥0.6，实际入账 ¥99.4"
+                                : "例如跨币种/分期服务费，将计入实际支付金额")
+                    )
+                    .font(.caption2)
+                    .foregroundColor(palette.textTertiary)
+                }
+
+                if hasDiscountOrFee || enteredAmountMicros > 0 {
+                    VStack(spacing: 6) {
+                        let nomLabel = isTransfer ? "目标到账面值" : (isIncome ? "应收原额" : "商品原价")
+                        let actLabel = isTransfer ? "转出实扣" : (isIncome ? "实际入账" : "实际支付")
+                        discountFeeBreakdownRow(
+                            label: nomLabel,
+                            value: MoneyAmount.format(max(Int64(0), nominalAmountMicros), currencyCode: origCurrency),
+                            valueColor: palette.textPrimary
+                        )
+                        if parsedDiscountMicros > 0 {
+                            discountFeeBreakdownRow(
+                                label: "已享优惠",
+                                value: "-\(MoneyAmount.format(parsedDiscountMicros, currencyCode: origCurrency))",
+                                valueColor: palette.incomeColor
+                            )
+                        }
+                        if parsedFeeMicros > 0 {
+                            discountFeeBreakdownRow(
+                                label: "手续费",
+                                value: "\(isIncome ? "-" : "+")\(MoneyAmount.format(parsedFeeMicros, currencyCode: origCurrency))",
+                                valueColor: palette.warningColor
+                            )
+                        }
+                        Divider().overlay(palette.outline)
+                        if let err = discountFeeFormulaError {
+                            Text(err)
+                                .font(.caption.weight(.semibold))
+                                .foregroundColor(palette.dangerColor)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        } else {
+                            discountFeeBreakdownRow(
+                                label: actLabel,
+                                value: MoneyAmount.format(max(Int64(0), actualSubmitOrigMicros), currencyCode: origCurrency),
+                                valueColor: amountAccentColor,
+                                bold: true
+                            )
+                        }
+                    }
+                    .padding(11)
+                    .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(palette.surface))
+                    .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(palette.outline, lineWidth: 0.6))
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.bottom, 10)
+        }
+    }
+
+    private func discountModeCapsule(title: String, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .font(.caption.weight(selected ? .bold : .medium))
+                .foregroundColor(selected ? palette.primary : palette.textSecondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 7)
+                .padding(.horizontal, 8)
+                .background(
+                    Capsule().fill(selected ? palette.accentSoftFill : palette.surface)
+                )
+                .overlay(
+                    Capsule().strokeBorder(selected ? palette.primary : palette.outline, lineWidth: selected ? 1 : 0.7)
+                )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func discountFeeBreakdownRow(
+        label: String,
+        value: String,
+        valueColor: Color,
+        bold: Bool = false
+    ) -> some View {
+        HStack(spacing: 8) {
+            Text(label)
+                .font(bold ? .caption.weight(.bold) : .caption)
+                .foregroundColor(bold ? palette.textPrimary : palette.textSecondary)
+                .lineLimit(1)
+            Spacer(minLength: 6)
+            Text(value)
+                .font((bold ? Font.subheadline.weight(.bold) : Font.caption.weight(.semibold)).monospacedDigit())
+                .foregroundColor(valueColor)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+        }
+    }
+
     private var transferWorkspaceView: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
@@ -1605,10 +2110,19 @@ public struct QuickRecordSheet: View {
         }
     }
 
-    // MARK: - 4. 底部高频工作台（精简 4 胶囊 + 独立备注 + 计算器键盘）
+    // MARK: - 4. 底部高频工作台（精简 5 胶囊 + 独立备注 + 计算器键盘）
 
     private var workbenchAttrBar: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
+        let dfSelected = activePanel == .discountFee || hasDiscountOrFee
+        let dfTint: Color? = {
+            if activePanel == .discountFee { return palette.primary }
+            if parsedDiscountMicros > 0 && parsedFeeMicros == 0 { return palette.incomeColor }
+            if parsedFeeMicros > 0 && parsedDiscountMicros == 0 { return palette.warningColor }
+            if hasDiscountOrFee { return palette.primary }
+            return nil
+        }()
+
+        return ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
                 attrButton(
                     icon: "wallet.pass.fill",
@@ -1617,6 +2131,20 @@ public struct QuickRecordSheet: View {
                     maxLabelWidth: 120
                 ) {
                     activePanel = activePanel == .account ? .category : .account
+                }
+
+                attrButton(
+                    icon: "percent",
+                    label: discountFeeCapsuleLabel,
+                    selected: dfSelected,
+                    accentTint: dfTint
+                ) {
+                    if activePanel == .discountFee {
+                        dismissSystemKeyboard()
+                        activePanel = .category
+                    } else {
+                        activePanel = .discountFee
+                    }
                 }
 
                 attrButton(
@@ -1653,29 +2181,34 @@ public struct QuickRecordSheet: View {
         label: String,
         selected: Bool,
         maxLabelWidth: CGFloat? = nil,
+        accentTint: Color? = nil,
         action: @escaping () -> Void
     ) -> some View {
-        Button(action: action) {
+        let fgColor: Color = selected ? (accentTint ?? palette.primary) : palette.textSecondary
+        let bgColor: Color = selected
+            ? (accentTint.map { $0.opacity(0.14) } ?? palette.accentSoftFill)
+            : palette.surfaceSecondary
+        return Button(action: action) {
             HStack(spacing: 4) {
                 Image(systemName: icon)
                     .font(.caption2)
                 if let maxLabelWidth {
                     Text(label)
-                        .font(.caption2.weight(selected ? .semibold : .medium))
+                        .font(.caption2.weight(selected ? .semibold : .medium).monospacedDigit())
                         .lineLimit(1)
                         .truncationMode(.tail)
                         .frame(maxWidth: maxLabelWidth)
                 } else {
                     Text(label)
-                        .font(.caption2.weight(selected ? .semibold : .medium))
+                        .font(.caption2.weight(selected ? .semibold : .medium).monospacedDigit())
                         .lineLimit(1)
                         .fixedSize(horizontal: true, vertical: false)
                 }
             }
-            .foregroundColor(selected ? palette.primary : palette.textSecondary)
+            .foregroundColor(fgColor)
             .padding(.vertical, 7)
             .padding(.horizontal, 10)
-            .background(Capsule().fill(selected ? palette.accentSoftFill : palette.surfaceSecondary))
+            .background(Capsule().fill(bgColor))
         }
         .buttonStyle(.plain)
     }
@@ -1711,7 +2244,7 @@ public struct QuickRecordSheet: View {
                 .foregroundColor(palette.textSecondary)
             TextField(merchant.isEmpty ? "添加备注…" : "备注（商户：\(merchant)）", text: $note)
                 .font(.subheadline)
-                .focused($noteFocused)
+                .focused($focusedField, equals: .note)
                 .submitLabel(.done)
             if !note.isEmpty {
                 Button {
@@ -1860,7 +2393,7 @@ public struct QuickRecordSheet: View {
     }
 
     private func dismissSystemKeyboard() {
-        noteFocused = false
+        focusedField = nil
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
     }
 
@@ -2000,11 +2533,49 @@ public struct QuickRecordSheet: View {
 
     private func saveBill(continueNext: Bool) {
         validationMessage = nil
-        guard parsedAmountMicros > 0 else {
-            validationMessage = QuickExprEvaluator.containsOperator(amountExpr)
-                ? "请输入有效金额或完善算式"
-                : "请输入大于 0 的有效金额"
-            return
+        let discount = parsedDiscountMicros
+        let fee = parsedFeeMicros
+        let actualOrig = actualSubmitOrigMicros
+        let nominal = nominalAmountMicros
+
+        if txType == TransactionType.EXPENSE && expenseAmountIsActualPaid {
+            guard hasValidEnteredAmount else {
+                validationMessage = QuickExprEvaluator.containsOperator(amountExpr)
+                    ? "请输入有效金额或完善算式"
+                    : "请输入有效的实付金额"
+                return
+            }
+            if actualOrig < 0 {
+                validationMessage = "实付金额不能为负数"
+                return
+            }
+            if nominal <= 0 {
+                validationMessage = fee > 0 ? "手续费不能大于实付与优惠之和" : "请输入大于 0 的有效金额"
+                return
+            }
+            if actualOrig == 0 && discount <= 0 {
+                validationMessage = "请输入大于 0 的有效金额"
+                return
+            }
+        } else {
+            guard enteredAmountMicros > 0 else {
+                validationMessage = QuickExprEvaluator.containsOperator(amountExpr)
+                    ? "请输入有效金额或完善算式"
+                    : "请输入大于 0 的有效金额"
+                return
+            }
+            if actualOrig < 0 {
+                validationMessage = discountFeeFormulaError ?? "优惠或手续费超出金额范围"
+                return
+            }
+            if nominal <= 0 {
+                validationMessage = "请输入大于 0 的有效金额"
+                return
+            }
+            if actualOrig == 0 && txType != TransactionType.INCOME && discount <= 0 {
+                validationMessage = "请输入大于 0 的有效金额"
+                return
+            }
         }
         guard selectedAccountId > 0 else {
             validationMessage = "请先在「资产」页创建一个账户"
@@ -2025,7 +2596,7 @@ public struct QuickRecordSheet: View {
             existingId: editingTransaction?.id,
             type: txType,
             timestamp: Int64((txDate.timeIntervalSince1970 * 1000.0).rounded()),
-            origAmountMicros: parsedAmountMicros,
+            origAmountMicros: actualOrig,
             origCurrency: origCurrency,
             accountId: selectedAccountId,
             manualAccountAmountMicros: manualAcc,
@@ -2045,13 +2616,18 @@ public struct QuickRecordSheet: View {
             excludeFromBudget: excludeFromBudget,
             refundOfTxId: editingTransaction?.refundOfTxId,
             attachmentPaths: editingTransaction?.attachmentPaths ?? "",
-            reimbursedTxId: editingTransaction?.reimbursedTxId
+            reimbursedTxId: editingTransaction?.reimbursedTxId,
+            discountAmountMicros: txType == TransactionType.INCOME ? 0 : discount,
+            feeAmountMicros: fee
         )
 
         do {
             _ = try store.saveTransaction(request)
             if continueNext {
                 amountExpr = ""
+                discountInput = ""
+                feeInput = ""
+                expenseAmountIsActualPaid = false
                 merchant = ""
                 note = ""
                 selectedTags = []
@@ -2071,6 +2647,19 @@ public struct QuickRecordSheet: View {
         } catch {
             validationMessage = error.localizedDescription
         }
+    }
+
+    private static func formatCompactDecimalInput(_ amountMicros: Int64) -> String {
+        let absMicros: Int64 = amountMicros == Int64.min ? Int64.max : abs(amountMicros)
+        let dec = MoneyAmount.microsToDecimal(absMicros)
+        let formatter = NumberFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.numberStyle = .decimal
+        formatter.usesGroupingSeparator = false
+        formatter.minimumFractionDigits = 0
+        formatter.maximumFractionDigits = 4
+        formatter.roundingMode = .halfUp
+        return formatter.string(from: NSDecimalNumber(decimal: dec)) ?? "0"
     }
 
     private func showInSheetToast(_ message: String) {

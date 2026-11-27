@@ -1577,6 +1577,25 @@ public struct AccountDetailView: View {
                 .font(.caption)
                 .foregroundColor(palette.textSecondary)
 
+                if tx.discountAmountMicros > 0 || tx.feeAmountMicros > 0 {
+                    HStack(spacing: 5) {
+                        if tx.discountAmountMicros > 0 {
+                            let discStr = YubraeTheme.masked(
+                                MoneyAmount.format(tx.discountAmountMicros, currencyCode: tx.origCurrency),
+                                isMasked: masked
+                            )
+                            smallBadge("惠 \(discStr)", color: palette.incomeColor)
+                        }
+                        if tx.feeAmountMicros > 0 {
+                            let feeStr = YubraeTheme.masked(
+                                MoneyAmount.format(tx.feeAmountMicros, currencyCode: tx.origCurrency),
+                                isMasked: masked
+                            )
+                            smallBadge("费 \(feeStr)", color: palette.warningColor)
+                        }
+                    }
+                }
+
                 if !tx.note.isEmpty || !txTags.isEmpty {
                     HStack(spacing: 4) {
                         ForEach(txTags.prefix(2), id: \.self) { t in
@@ -1598,13 +1617,36 @@ public struct AccountDetailView: View {
             Spacer(minLength: 6)
 
             HStack(spacing: 6) {
+                let hasDiscountOrFee = tx.discountAmountMicros > 0 || tx.feeAmountMicros > 0
                 VStack(alignment: .trailing, spacing: 2) {
                     Text(YubraeTheme.masked(deltaFormatted, isMasked: masked))
                         .font(.subheadline.weight(.bold).monospacedDigit())
                         .foregroundColor(deltaColor)
                         .lineLimit(1)
                         .fixedSize(horizontal: true, vertical: false)
-                    if CurrencyCatalog.normalize(tx.origCurrency) != cur {
+                    if tx.type == TransactionType.TRANSFER && tx.accountId == acc.id,
+                       let toAmt = tx.toAmountMicros {
+                        let toCur = CurrencyCatalog.normalize(tx.toCurrency ?? tx.origCurrency)
+                        if hasDiscountOrFee || toCur != cur || toAmt != tx.accountAmountMicros {
+                            let toFmt = MoneyAmount.format(toAmt, currencyCode: toCur, showCurrencyCode: true)
+                            Text("到账 \(YubraeTheme.masked(toFmt, isMasked: masked))")
+                                .font(.caption2.monospacedDigit())
+                                .foregroundColor(palette.textTertiary)
+                                .lineLimit(1)
+                                .fixedSize(horizontal: true, vertical: false)
+                        }
+                    } else if tx.type == TransactionType.TRANSFER && tx.toAccountId == acc.id {
+                        let fromCur = CurrencyCatalog.normalize(tx.accountCurrency.isEmpty ? tx.origCurrency : tx.accountCurrency)
+                        let toAmt = tx.toAmountMicros ?? tx.accountAmountMicros
+                        if hasDiscountOrFee || fromCur != cur || tx.accountAmountMicros != toAmt {
+                            let outFmt = MoneyAmount.format(tx.accountAmountMicros, currencyCode: fromCur, showCurrencyCode: true)
+                            Text("实扣 \(YubraeTheme.masked(outFmt, isMasked: masked))")
+                                .font(.caption2.monospacedDigit())
+                                .foregroundColor(palette.textTertiary)
+                                .lineLimit(1)
+                                .fixedSize(horizontal: true, vertical: false)
+                        }
+                    } else if CurrencyCatalog.normalize(tx.origCurrency) != cur {
                         let origFmt = MoneyAmount.format(tx.origAmountMicros, currencyCode: tx.origCurrency, showCurrencyCode: true)
                         Text("原币 \(YubraeTheme.masked(origFmt, isMasked: masked))")
                             .font(.caption2.monospacedDigit())
@@ -1774,7 +1816,7 @@ public struct AccountDetailView: View {
 
     private func smallBadge(_ text: String, color: Color) -> some View {
         Text(text)
-            .font(.system(size: 10, weight: .semibold))
+            .font(.system(size: 10, weight: .semibold).monospacedDigit())
             .foregroundColor(color)
             .lineLimit(1)
             .fixedSize(horizontal: true, vertical: false)

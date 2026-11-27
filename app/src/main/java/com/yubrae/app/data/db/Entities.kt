@@ -208,7 +208,9 @@ data class TransactionEntity(
     @ColumnInfo(name = "attachment_paths") val attachmentPaths: String = "",
     @ColumnInfo(name = "reimbursed_tx_id") val reimbursedTxId: Long? = null,
     @ColumnInfo(name = "created_at") val createdAt: Long = System.currentTimeMillis(),
-    @ColumnInfo(name = "updated_at") val updatedAt: Long = System.currentTimeMillis()
+    @ColumnInfo(name = "updated_at") val updatedAt: Long = System.currentTimeMillis(),
+    @ColumnInfo(name = "discount_amount_micros") val discountAmountMicros: Long = 0L,
+    @ColumnInfo(name = "fee_amount_micros") val feeAmountMicros: Long = 0L
 )
 
 @Entity(tableName = "categories")

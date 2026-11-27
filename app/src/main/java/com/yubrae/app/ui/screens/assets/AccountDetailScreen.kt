@@ -191,6 +191,8 @@ private object AccountTxTypeFilter {
     )
 }
 
+private val AccountTxMiniBadgeShape = RoundedCornerShape(5.dp)
+
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun AccountDetailScreen(
@@ -2963,11 +2965,35 @@ private fun AccountDayTransactionGroupCard(
                             }
                         }
 
-                        if (parsedTags.isNotEmpty()) {
+                        val hasDiscount = tx.discountAmountMicros > 0L
+                        val hasFee = tx.feeAmountMicros > 0L
+                        if (hasDiscount || hasFee || parsedTags.isNotEmpty()) {
                             FlowRow(
                                 horizontalArrangement = Arrangement.spacedBy(4.dp),
                                 verticalArrangement = Arrangement.spacedBy(4.dp)
                             ) {
+                                if (hasDiscount) {
+                                    val discountLabel = formatPrivacyAmount(
+                                        privacyMasked,
+                                        MoneyAmount.format(tx.discountAmountMicros, tx.origCurrency)
+                                    )
+                                    TxMiniFlagBadge(
+                                        text = "惠 $discountLabel",
+                                        containerColor = semantic.incomeContainer,
+                                        contentColor = semantic.income
+                                    )
+                                }
+                                if (hasFee) {
+                                    val feeLabel = formatPrivacyAmount(
+                                        privacyMasked,
+                                        MoneyAmount.format(tx.feeAmountMicros, tx.origCurrency)
+                                    )
+                                    TxMiniFlagBadge(
+                                        text = "费 $feeLabel",
+                                        containerColor = semantic.warningContainer,
+                                        contentColor = semantic.warning
+                                    )
+                                }
                                 parsedTags.take(3).forEach { tagName ->
                                     TagBadgeChip(
                                         name = tagName,
@@ -2978,7 +3004,7 @@ private fun AccountDayTransactionGroupCard(
                                 if (parsedTags.size > 3) {
                                     Text(
                                         text = "+${parsedTags.size - 3}",
-                                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp).tabular(),
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                         maxLines = 1,
                                         softWrap = false
@@ -2989,6 +3015,14 @@ private fun AccountDayTransactionGroupCard(
                     }
 
                     Spacer(modifier = Modifier.width(6.dp))
+
+                    val isTransferOut = tx.type == TransactionType.TRANSFER &&
+                        tx.accountId == account.id &&
+                        tx.toAccountId != account.id
+                    val isTransferInOnly = tx.type == TransactionType.TRANSFER &&
+                        tx.toAccountId == account.id &&
+                        tx.accountId != account.id
+                    val hasDiscountOrFee = tx.discountAmountMicros > 0L || tx.feeAmountMicros > 0L
 
                     Column(horizontalAlignment = Alignment.End) {
                         Text(
@@ -3007,7 +3041,49 @@ private fun AccountDayTransactionGroupCard(
                             maxLines = 1,
                             softWrap = false
                         )
-                        if (!tx.origCurrency.equals(account.currencyCode, ignoreCase = true)) {
+                        val transferSubText = when {
+                            isTransferOut && tx.toAmountMicros != null && (
+                                hasDiscountOrFee ||
+                                    tx.toAmountMicros != tx.accountAmountMicros ||
+                                    (tx.toCurrency != null && !tx.toCurrency.equals(account.currencyCode, ignoreCase = true))
+                                ) -> {
+                                val toCur = tx.toCurrency ?: tx.origCurrency
+                                val formattedTo = formatPrivacyAmount(
+                                    privacyMasked,
+                                    MoneyAmount.format(
+                                        amountMicros = tx.toAmountMicros,
+                                        currencyCode = toCur,
+                                        showCurrencyCode = !toCur.equals("CNY", ignoreCase = true)
+                                    )
+                                )
+                                "到账 $formattedTo"
+                            }
+                            isTransferInOnly && (
+                                hasDiscountOrFee ||
+                                    (tx.toAmountMicros != null && tx.toAmountMicros != tx.accountAmountMicros) ||
+                                    !tx.accountCurrency.equals(account.currencyCode, ignoreCase = true)
+                                ) -> {
+                                val formattedOut = formatPrivacyAmount(
+                                    privacyMasked,
+                                    MoneyAmount.format(
+                                        amountMicros = tx.accountAmountMicros,
+                                        currencyCode = tx.accountCurrency,
+                                        showCurrencyCode = !tx.accountCurrency.equals("CNY", ignoreCase = true)
+                                    )
+                                )
+                                "实扣 $formattedOut"
+                            }
+                            else -> null
+                        }
+                        if (transferSubText != null) {
+                            Text(
+                                text = transferSubText,
+                                style = MaterialTheme.typography.labelSmall.tabular(),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                softWrap = false
+                            )
+                        } else if (!tx.origCurrency.equals(account.currencyCode, ignoreCase = true)) {
                             Text(
                                 text = formatPrivacyAmount(
                                     privacyMasked,
@@ -3030,6 +3106,26 @@ private fun AccountDayTransactionGroupCard(
                                 maxLines = 1,
                                 softWrap = false
                             )
+                        } else if (tx.type == TransactionType.EXPENSE && tx.discountAmountMicros > 0L) {
+                            val nominalMicros = (tx.origAmountMicros + tx.discountAmountMicros - tx.feeAmountMicros)
+                                .coerceAtLeast(0L)
+                            if (nominalMicros > 0L && nominalMicros != tx.origAmountMicros) {
+                                val nominalFormatted = formatPrivacyAmount(
+                                    privacyMasked,
+                                    MoneyAmount.format(
+                                        amountMicros = nominalMicros,
+                                        currencyCode = tx.origCurrency,
+                                        showCurrencyCode = !tx.origCurrency.equals("CNY", ignoreCase = true)
+                                    )
+                                )
+                                Text(
+                                    text = "原价 $nominalFormatted",
+                                    style = MaterialTheme.typography.labelSmall.tabular(),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    softWrap = false
+                                )
+                            }
                         }
                     }
 
@@ -3115,16 +3211,17 @@ private fun TxMiniFlagBadge(
     contentColor: Color
 ) {
     Surface(
-        shape = RoundedCornerShape(4.dp),
+        shape = AccountTxMiniBadgeShape,
         color = containerColor
     ) {
         Text(
             text = text,
-            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp).tabular(),
+            fontWeight = FontWeight.SemiBold,
             color = contentColor,
             maxLines = 1,
             softWrap = false,
-            modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp)
+            modifier = Modifier.padding(horizontal = 4.5.dp, vertical = 1.dp)
         )
     }
 }

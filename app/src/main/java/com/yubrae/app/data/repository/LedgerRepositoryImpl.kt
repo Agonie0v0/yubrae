@@ -166,8 +166,36 @@ class LedgerRepositoryImpl(
         ) {
             return Result.failure(IllegalArgumentException("不支持的交易类型: ${request.type}"))
         }
-        if (request.type != TransactionType.ADJUST && request.origAmountMicros <= 0L) {
-            return Result.failure(IllegalArgumentException("交易金额必须大于 0"))
+        if (request.discountAmountMicros < 0L || request.feeAmountMicros < 0L) {
+            return Result.failure(IllegalArgumentException("优惠金额与手续费不能为负数"))
+        }
+
+        val normalizedDiscountMicros: Long
+        val normalizedFeeMicros: Long
+        when (request.type) {
+            TransactionType.EXPENSE, TransactionType.TRANSFER -> {
+                normalizedDiscountMicros = request.discountAmountMicros
+                normalizedFeeMicros = request.feeAmountMicros
+                val nominalMicros = request.origAmountMicros + normalizedDiscountMicros - normalizedFeeMicros
+                if (request.origAmountMicros < 0L ||
+                    nominalMicros <= 0L ||
+                    (request.origAmountMicros <= 0L && normalizedDiscountMicros <= 0L)
+                ) {
+                    return Result.failure(IllegalArgumentException("交易金额必须大于 0（免单需填优惠金额）"))
+                }
+            }
+            TransactionType.INCOME -> {
+                normalizedDiscountMicros = 0L
+                normalizedFeeMicros = request.feeAmountMicros
+                val nominalMicros = request.origAmountMicros + normalizedFeeMicros
+                if (request.origAmountMicros < 0L || nominalMicros <= 0L) {
+                    return Result.failure(IllegalArgumentException("收入金额必须大于 0"))
+                }
+            }
+            else -> {
+                normalizedDiscountMicros = 0L
+                normalizedFeeMicros = 0L
+            }
         }
 
         val sourceAccount = accountDao.getById(request.accountId)
@@ -202,6 +230,7 @@ class LedgerRepositoryImpl(
             val toAccount = accountDao.getById(targetId)
                 ?: return Result.failure(IllegalArgumentException("目标账户不存在: $targetId"))
             val toCurrency = LedgerAnalytics.normalizeCurrency(toAccount.currencyCode)
+            val effectiveTransferToOrig = request.origAmountMicros + normalizedDiscountMicros - normalizedFeeMicros
             val toAmount = when {
                 request.manualToAmountMicros != null -> {
                     if (request.manualToAmountMicros <= 0L) {
@@ -209,11 +238,13 @@ class LedgerRepositoryImpl(
                     }
                     request.manualToAmountMicros
                 }
-                toCurrency == origCurrency -> request.origAmountMicros
-                toCurrency == accountCurrency -> conversion.accountAmountMicros
+                toCurrency == origCurrency -> effectiveTransferToOrig
+                toCurrency == accountCurrency &&
+                    normalizedDiscountMicros == 0L &&
+                    normalizedFeeMicros == 0L -> conversion.accountAmountMicros
                 else -> {
                     val toQuote = exchangeRateProvider.getRate(origCurrency, toCurrency, onDate = txDate)
-                    MoneyAmount.convert(request.origAmountMicros, toQuote.rateMicros)
+                    MoneyAmount.convert(effectiveTransferToOrig, toQuote.rateMicros)
                 }
             }
             resolvedToAccountId = toAccount.id
@@ -271,7 +302,9 @@ class LedgerRepositoryImpl(
             attachmentPaths = request.attachmentPaths,
             reimbursedTxId = request.reimbursedTxId,
             createdAt = createdAt,
-            updatedAt = now
+            updatedAt = now,
+            discountAmountMicros = normalizedDiscountMicros,
+            feeAmountMicros = normalizedFeeMicros
         )
 
         val saved = if (existingId != null) {
@@ -1363,6 +1396,54 @@ class LedgerRepositoryImpl(
         val accountAmountMicros: Long
         val rateToAccountMicros: Long
         val accountRateSource: String
+
+        if (origAmountMicros == 0L) {
+            accountAmountMicros = 0L
+            when {
+                manualRateToAccountMicros != null && manualRateToAccountMicros > 0L -> {
+                    rateToAccountMicros = manualRateToAccountMicros
+                    accountRateSource = SOURCE_MANUAL_RATE
+                }
+                origCurrency == accountCurrency -> {
+                    rateToAccountMicros = MoneyAmount.RATE_SCALE
+                    accountRateSource = ExchangeRateRepositoryImpl.SOURCE_IDENTITY
+                }
+                else -> {
+                    val quote = exchangeRateProvider.getRate(origCurrency, accountCurrency, onDate = onDate)
+                    rateToAccountMicros = quote.rateMicros
+                    accountRateSource = quote.source
+                }
+            }
+
+            val rateToBaseMicros: Long
+            var finalSource = accountRateSource
+            when {
+                origCurrency == baseCurrency -> {
+                    rateToBaseMicros = MoneyAmount.RATE_SCALE
+                }
+                accountCurrency == baseCurrency -> {
+                    rateToBaseMicros = rateToAccountMicros
+                }
+                else -> {
+                    val baseQuote = exchangeRateProvider.getRate(origCurrency, baseCurrency, onDate = onDate)
+                    rateToBaseMicros = baseQuote.rateMicros
+                    if (origCurrency == accountCurrency) {
+                        finalSource = baseQuote.source
+                    }
+                }
+            }
+            return ConversionPreview(
+                origAmountMicros = 0L,
+                origCurrency = origCurrency,
+                accountAmountMicros = 0L,
+                accountCurrency = accountCurrency,
+                rateToAccountMicros = rateToAccountMicros,
+                baseAmountMicros = 0L,
+                baseCurrency = baseCurrency,
+                rateToBaseMicros = rateToBaseMicros,
+                rateSource = finalSource
+            )
+        }
 
         when {
             manualAccountAmountMicros != null -> {

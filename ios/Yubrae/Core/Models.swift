@@ -928,6 +928,8 @@ public struct TransactionDto: Identifiable, Hashable, Codable, Sendable {
     public var reimbursedTxId: Int64?
     public var createdAt: Int64
     public var updatedAt: Int64
+    public var discountAmountMicros: Int64
+    public var feeAmountMicros: Int64
 
     public init(
         id: Int64 = 0,
@@ -959,7 +961,9 @@ public struct TransactionDto: Identifiable, Hashable, Codable, Sendable {
         attachmentPaths: String = "",
         reimbursedTxId: Int64? = nil,
         createdAt: Int64 = 0,
-        updatedAt: Int64 = 0
+        updatedAt: Int64 = 0,
+        discountAmountMicros: Int64 = 0,
+        feeAmountMicros: Int64 = 0
     ) {
         self.id = id
         self.type = type
@@ -991,10 +995,12 @@ public struct TransactionDto: Identifiable, Hashable, Codable, Sendable {
         self.reimbursedTxId = reimbursedTxId
         self.createdAt = createdAt
         self.updatedAt = updatedAt
+        self.discountAmountMicros = discountAmountMicros
+        self.feeAmountMicros = feeAmountMicros
     }
 
     enum CodingKeys: String, CodingKey {
-        case id, type, timestamp, origAmountMicros, origCurrency, accountId, accountAmountMicros, accountCurrency, toAccountId, toAmountMicros, toCurrency, rateToAccountMicros, rateToBaseMicros, baseCurrency, categoryId, merchant, note, tags, reimburseStatus, sourceType, rawEventId, status, ledgerId, excludeFromStats, excludeFromBudget, refundOfTxId, attachmentPaths, reimbursedTxId, createdAt, updatedAt
+        case id, type, timestamp, origAmountMicros, origCurrency, accountId, accountAmountMicros, accountCurrency, toAccountId, toAmountMicros, toCurrency, rateToAccountMicros, rateToBaseMicros, baseCurrency, categoryId, merchant, note, tags, reimburseStatus, sourceType, rawEventId, status, ledgerId, excludeFromStats, excludeFromBudget, refundOfTxId, attachmentPaths, reimbursedTxId, createdAt, updatedAt, discountAmountMicros, feeAmountMicros
     }
 
     public init(from decoder: Decoder) throws {
@@ -1029,6 +1035,8 @@ public struct TransactionDto: Identifiable, Hashable, Codable, Sendable {
         self.reimbursedTxId = try c.decodeIfPresent(Int64.self, forKey: .reimbursedTxId)
         self.createdAt = try c.decodeIfPresent(Int64.self, forKey: .createdAt) ?? 0
         self.updatedAt = try c.decodeIfPresent(Int64.self, forKey: .updatedAt) ?? 0
+        self.discountAmountMicros = try c.decodeIfPresent(Int64.self, forKey: .discountAmountMicros) ?? 0
+        self.feeAmountMicros = try c.decodeIfPresent(Int64.self, forKey: .feeAmountMicros) ?? 0
     }
 }
 
@@ -1668,6 +1676,8 @@ public struct RecordTransactionRequest: Sendable {
     public var refundOfTxId: Int64?
     public var attachmentPaths: String
     public var reimbursedTxId: Int64?
+    public var discountAmountMicros: Int64
+    public var feeAmountMicros: Int64
 
     public init(
         existingId: Int64? = nil,
@@ -1693,7 +1703,9 @@ public struct RecordTransactionRequest: Sendable {
         excludeFromBudget: Bool = false,
         refundOfTxId: Int64? = nil,
         attachmentPaths: String = "",
-        reimbursedTxId: Int64? = nil
+        reimbursedTxId: Int64? = nil,
+        discountAmountMicros: Int64 = 0,
+        feeAmountMicros: Int64 = 0
     ) {
         self.existingId = existingId
         self.type = type
@@ -1719,6 +1731,8 @@ public struct RecordTransactionRequest: Sendable {
         self.refundOfTxId = refundOfTxId
         self.attachmentPaths = attachmentPaths
         self.reimbursedTxId = reimbursedTxId
+        self.discountAmountMicros = discountAmountMicros
+        self.feeAmountMicros = feeAmountMicros
     }
 }
 
@@ -1926,5 +1940,24 @@ public struct CreditBillingCycleSummary: Equatable, Sendable {
         self.cycleRepaidMicros = cycleRepaidMicros
         self.daysUntilBilling = daysUntilBilling
         self.daysUntilRepayment = daysUntilRepayment
+    }
+}
+
+public struct PeriodDiscountFeeSummary: Equatable, Sendable {
+    public let discountBaseMicros: Int64
+    public let feeBaseMicros: Int64
+    public let discountCount: Int
+    public let feeCount: Int
+
+    public init(
+        discountBaseMicros: Int64 = 0,
+        feeBaseMicros: Int64 = 0,
+        discountCount: Int = 0,
+        feeCount: Int = 0
+    ) {
+        self.discountBaseMicros = discountBaseMicros
+        self.feeBaseMicros = feeBaseMicros
+        self.discountCount = discountCount
+        self.feeCount = feeCount
     }
 }

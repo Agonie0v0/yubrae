@@ -126,7 +126,11 @@ data class TransactionsUiState(
     val groupedDays: List<DayTransactionGroup> = emptyList(),
     val pendingTransactions: List<TransactionEntity> = emptyList(),
     val pendingCount: Int = 0,
-    val baseAmountByTxId: Map<Long, Long> = emptyMap()
+    val baseAmountByTxId: Map<Long, Long> = emptyMap(),
+    val monthDiscountBaseMicros: Long = 0L,
+    val monthFeeBaseMicros: Long = 0L,
+    val monthDiscountCount: Int = 0,
+    val monthFeeCount: Int = 0
 )
 
 internal fun matchesTransactionSearchQuery(
@@ -211,7 +215,11 @@ data class StatsUiState(
     val tagStats: List<TagStat> = emptyList(),
     val budgetProgressList: List<BudgetProgress> = emptyList(),
     val totalCategoryAmountMicros: Long = 0L,
-    val isLoading: Boolean = false
+    val isLoading: Boolean = false,
+    val periodDiscountBaseMicros: Long = 0L,
+    val periodFeeBaseMicros: Long = 0L,
+    val periodDiscountCount: Int = 0,
+    val periodFeeCount: Int = 0
 )
 
 private data class StatsInputSnapshot(
@@ -368,18 +376,45 @@ class KairoMainViewModel(
         }
         var monthExpense = 0L
         var monthIncome = 0L
+        var monthDiscount = 0L
+        var monthFee = 0L
+        var monthDiscountCount = 0
+        var monthFeeCount = 0
+        val origToBaseRateCache = HashMap<String, Long>()
         for (tx in inMonthLedger) {
             val baseMicros = baseAmountByTxId.getOrPut(tx.id) {
                 convertTxToDisplayBase(tx, base, rates)
             }
-            if (tx.status == TransactionStatus.CONFIRMED && !tx.excludeFromStats) {
-                when (tx.type) {
-                    TransactionType.EXPENSE -> monthExpense += baseMicros
-                    TransactionType.INCOME -> {
-                        if (tx.refundOfTxId != null) {
-                            monthExpense -= baseMicros
-                        } else {
-                            monthIncome += baseMicros
+            if (tx.status == TransactionStatus.CONFIRMED) {
+                if (tx.discountAmountMicros > 0L) {
+                    monthDiscount += convertOrigAmountToDisplay(
+                        amountMicros = tx.discountAmountMicros,
+                        origCurrency = tx.origCurrency,
+                        displayCurrency = base,
+                        rates = rates,
+                        rateCache = origToBaseRateCache
+                    )
+                    monthDiscountCount++
+                }
+                if (tx.feeAmountMicros > 0L) {
+                    monthFee += convertOrigAmountToDisplay(
+                        amountMicros = tx.feeAmountMicros,
+                        origCurrency = tx.origCurrency,
+                        displayCurrency = base,
+                        rates = rates,
+                        rateCache = origToBaseRateCache
+                    )
+                    monthFeeCount++
+                }
+                if (!tx.excludeFromStats) {
+                    when (tx.type) {
+                        TransactionType.EXPENSE -> monthExpense += baseMicros
+                        TransactionType.INCOME -> {
+                            if (tx.refundOfTxId != null) {
+                                monthExpense -= baseMicros
+                            } else {
+                                monthIncome += baseMicros
+                            }
                         }
                     }
                 }
@@ -443,7 +478,11 @@ class KairoMainViewModel(
             groupedDays = groupedDays,
             pendingTransactions = pending,
             pendingCount = pending.size,
-            baseAmountByTxId = baseAmountByTxId
+            baseAmountByTxId = baseAmountByTxId,
+            monthDiscountBaseMicros = monthDiscount,
+            monthFeeBaseMicros = monthFee,
+            monthDiscountCount = monthDiscountCount,
+            monthFeeCount = monthFeeCount
         )
     }
         .flowOn(Dispatchers.Default)
@@ -678,6 +717,36 @@ class KairoMainViewModel(
                 displayCurrency = params.displayCurrency,
                 activeLedgerId = params.activeLedgerId
             )
+            var periodDiscount = 0L
+            var periodFee = 0L
+            var periodDiscountCount = 0
+            var periodFeeCount = 0
+            val origToDisplayRateCache = HashMap<String, Long>()
+            for (tx in snapshot.txs) {
+                if (tx.status != TransactionStatus.CONFIRMED) continue
+                if (params.activeLedgerId > 0L && tx.ledgerId != params.activeLedgerId) continue
+                if (tx.timestamp !in windowStart..windowEnd) continue
+                if (tx.discountAmountMicros > 0L) {
+                    periodDiscount += convertOrigAmountToDisplay(
+                        amountMicros = tx.discountAmountMicros,
+                        origCurrency = tx.origCurrency,
+                        displayCurrency = params.displayCurrency,
+                        rates = snapshot.rates,
+                        rateCache = origToDisplayRateCache
+                    )
+                    periodDiscountCount++
+                }
+                if (tx.feeAmountMicros > 0L) {
+                    periodFee += convertOrigAmountToDisplay(
+                        amountMicros = tx.feeAmountMicros,
+                        origCurrency = tx.origCurrency,
+                        displayCurrency = params.displayCurrency,
+                        rates = snapshot.rates,
+                        rateCache = origToDisplayRateCache
+                    )
+                    periodFeeCount++
+                }
+            }
             emit(
                 StatsUiState(
                     selectedMonth = params.month,
@@ -694,7 +763,11 @@ class KairoMainViewModel(
                     tagStats = tagStats,
                     budgetProgressList = budgetProgress,
                     totalCategoryAmountMicros = catStats.sumOf { it.totalBaseMicros },
-                    isLoading = false
+                    isLoading = false,
+                    periodDiscountBaseMicros = periodDiscount,
+                    periodFeeBaseMicros = periodFee,
+                    periodDiscountCount = periodDiscountCount,
+                    periodFeeCount = periodFeeCount
                 )
             )
         }
@@ -1006,7 +1079,9 @@ class KairoMainViewModel(
                         excludeFromBudget = tx.excludeFromBudget,
                         refundOfTxId = null,
                         attachmentPaths = "",
-                        reimbursedTxId = null
+                        reimbursedTxId = null,
+                        discountAmountMicros = tx.discountAmountMicros,
+                        feeAmountMicros = tx.feeAmountMicros
                     )
                 )
             }
@@ -1443,7 +1518,9 @@ class KairoMainViewModel(
                         excludeFromBudget = tx.excludeFromBudget,
                         refundOfTxId = tx.refundOfTxId,
                         attachmentPaths = tx.attachmentPaths,
-                        reimbursedTxId = tx.reimbursedTxId
+                        reimbursedTxId = tx.reimbursedTxId,
+                        discountAmountMicros = tx.discountAmountMicros,
+                        feeAmountMicros = tx.feeAmountMicros
                     )
                 )
             }
@@ -2063,6 +2140,21 @@ class KairoMainViewModel(
         }
         val rate = resolveRateFromList(tx.baseCurrency, displayBaseCurrency, rates)
         return MoneyAmount.convert(frozenBaseAmount, rate)
+    }
+
+    private fun convertOrigAmountToDisplay(
+        amountMicros: Long,
+        origCurrency: String,
+        displayCurrency: String,
+        rates: List<ExchangeRateEntity>,
+        rateCache: MutableMap<String, Long>
+    ): Long {
+        if (amountMicros <= 0L) return 0L
+        val from = LedgerAnalytics.normalizeCurrency(origCurrency)
+        val to = LedgerAnalytics.normalizeCurrency(displayCurrency)
+        if (from == to) return amountMicros
+        val rate = rateCache.getOrPut(from) { resolveRateFromList(from, to, rates) }
+        return MoneyAmount.convert(amountMicros, rate)
     }
 
     fun resolveRateFromList(

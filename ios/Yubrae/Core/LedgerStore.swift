@@ -667,7 +667,9 @@ public final class LedgerStore: ObservableObject {
             status: TransactionStatus.CONFIRMED,
             ledgerId: orig.ledgerId,
             excludeFromStats: orig.excludeFromStats,
-            excludeFromBudget: orig.excludeFromBudget
+            excludeFromBudget: orig.excludeFromBudget,
+            discountAmountMicros: orig.discountAmountMicros,
+            feeAmountMicros: orig.feeAmountMicros
         )
         let saved = try saveTransactionInternal(req)
         persist()
@@ -1699,6 +1701,60 @@ public final class LedgerStore: ObservableObject {
         }
     }
 
+    public func computeDiscountFeeSummary(
+        startMillis: Int64,
+        endMillis: Int64,
+        ledgerId: Int64 = 0,
+        displayCurrency: String? = nil
+    ) -> PeriodDiscountFeeSummary {
+        let targetCurrency = CurrencyCatalog.normalize(displayCurrency ?? settings.baseCurrency)
+        var rateCache: [String: Int64] = [:]
+        var totalDiscount: Int64 = 0
+        var totalFee: Int64 = 0
+        var discountCount = 0
+        var feeCount = 0
+
+        for tx in transactions {
+            guard tx.status == TransactionStatus.CONFIRMED,
+                  tx.timestamp >= startMillis,
+                  tx.timestamp <= endMillis else { continue }
+            if ledgerId > 0 && tx.ledgerId != ledgerId { continue }
+            guard tx.discountAmountMicros > 0 || tx.feeAmountMicros > 0 else { continue }
+
+            let origCur = CurrencyCatalog.normalize(tx.origCurrency)
+            let rate: Int64
+            if origCur == targetCurrency {
+                rate = MoneyAmount.rateScale
+            } else if let cached = rateCache[origCur] {
+                rate = cached
+            } else {
+                let fetched = getRate(from: origCur, to: targetCurrency).rateMicros
+                rateCache[origCur] = fetched
+                rate = fetched
+            }
+
+            if tx.discountAmountMicros > 0 {
+                totalDiscount += origCur == targetCurrency
+                    ? tx.discountAmountMicros
+                    : MoneyAmount.convert(amountMicros: tx.discountAmountMicros, rateMicros: rate)
+                discountCount += 1
+            }
+            if tx.feeAmountMicros > 0 {
+                totalFee += origCur == targetCurrency
+                    ? tx.feeAmountMicros
+                    : MoneyAmount.convert(amountMicros: tx.feeAmountMicros, rateMicros: rate)
+                feeCount += 1
+            }
+        }
+
+        return PeriodDiscountFeeSummary(
+            discountBaseMicros: totalDiscount,
+            feeBaseMicros: totalFee,
+            discountCount: discountCount,
+            feeCount: feeCount
+        )
+    }
+
     public func computeBudgetProgress(
         year: Int,
         month: Int,
@@ -2408,9 +2464,34 @@ public final class LedgerStore: ObservableObject {
         guard validTypes.contains(request.type) else {
             throw LedgerStoreError.unsupportedTransactionType(request.type)
         }
-        if request.type != TransactionType.ADJUST && request.origAmountMicros <= 0 {
+        guard request.discountAmountMicros >= 0 && request.feeAmountMicros >= 0 else {
             throw LedgerStoreError.nonPositiveAmount
         }
+
+        let discount: Int64
+        let fee: Int64
+        switch request.type {
+        case TransactionType.EXPENSE, TransactionType.TRANSFER:
+            discount = request.discountAmountMicros
+            fee = request.feeAmountMicros
+            let nominal = request.origAmountMicros + discount - fee
+            guard request.origAmountMicros >= 0 && nominal > 0 && (request.origAmountMicros > 0 || discount > 0) else {
+                throw LedgerStoreError.nonPositiveAmount
+            }
+        case TransactionType.INCOME:
+            discount = 0
+            fee = request.feeAmountMicros
+            let nominal = request.origAmountMicros + fee
+            guard request.origAmountMicros >= 0 && nominal > 0 else {
+                throw LedgerStoreError.nonPositiveAmount
+            }
+        case TransactionType.ADJUST:
+            discount = 0
+            fee = 0
+        default:
+            throw LedgerStoreError.unsupportedTransactionType(request.type)
+        }
+
         guard let sourceAccount = account(byId: request.accountId) else {
             throw LedgerStoreError.accountNotFound(request.accountId)
         }
@@ -2445,17 +2526,18 @@ public final class LedgerStore: ObservableObject {
                 throw LedgerStoreError.accountNotFound(targetId)
             }
             let toCur = CurrencyCatalog.normalize(toAccount.currencyCode)
+            let effectiveTransferToOrig = request.origAmountMicros + discount - fee
             let toAmount: Int64
             if let manualTo = request.manualToAmountMicros {
                 guard manualTo > 0 else { throw LedgerStoreError.nonPositiveAmount }
                 toAmount = manualTo
             } else if toCur == origCurrency {
-                toAmount = request.origAmountMicros
-            } else if toCur == accountCurrency {
+                toAmount = effectiveTransferToOrig
+            } else if toCur == accountCurrency && discount == 0 && fee == 0 {
                 toAmount = conversion.accountAmountMicros
             } else {
                 let quote = getRate(from: origCurrency, to: toCur, onDate: txDate)
-                toAmount = MoneyAmount.convert(amountMicros: request.origAmountMicros, rateMicros: quote.rateMicros)
+                toAmount = MoneyAmount.convert(amountMicros: effectiveTransferToOrig, rateMicros: quote.rateMicros)
             }
             resolvedToAccountId = toAccount.id
             resolvedToAmountMicros = toAmount
@@ -2511,7 +2593,9 @@ public final class LedgerStore: ObservableObject {
             attachmentPaths: request.attachmentPaths,
             reimbursedTxId: request.reimbursedTxId,
             createdAt: createdAt,
-            updatedAt: now
+            updatedAt: now,
+            discountAmountMicros: discount,
+            feeAmountMicros: fee
         )
 
         if let idx = existingIndex {
@@ -2532,6 +2616,48 @@ public final class LedgerStore: ObservableObject {
         manualRateToAccountMicros: Int64?,
         onDate: String?
     ) -> ConversionPreview {
+        if origAmountMicros == 0 {
+            let rateToAccountMicros: Int64
+            let accountRateSource: String
+            if let manualRate = manualRateToAccountMicros, manualRate > 0 {
+                rateToAccountMicros = manualRate
+                accountRateSource = Self.sourceManualRate
+            } else if origCurrency == accountCurrency {
+                rateToAccountMicros = MoneyAmount.rateScale
+                accountRateSource = Self.sourceIdentity
+            } else {
+                let quote = getRate(from: origCurrency, to: accountCurrency, onDate: onDate)
+                rateToAccountMicros = quote.rateMicros
+                accountRateSource = quote.source
+            }
+
+            let rateToBaseMicros: Int64
+            var finalSource = accountRateSource
+            if origCurrency == baseCurrency {
+                rateToBaseMicros = MoneyAmount.rateScale
+            } else if accountCurrency == baseCurrency {
+                rateToBaseMicros = rateToAccountMicros
+            } else {
+                let baseQuote = getRate(from: origCurrency, to: baseCurrency, onDate: onDate)
+                rateToBaseMicros = baseQuote.rateMicros
+                if origCurrency == accountCurrency {
+                    finalSource = baseQuote.source
+                }
+            }
+
+            return ConversionPreview(
+                origAmountMicros: 0,
+                origCurrency: origCurrency,
+                accountAmountMicros: 0,
+                accountCurrency: accountCurrency,
+                rateToAccountMicros: rateToAccountMicros,
+                baseAmountMicros: 0,
+                baseCurrency: baseCurrency,
+                rateToBaseMicros: rateToBaseMicros,
+                rateSource: finalSource
+            )
+        }
+
         let accountAmountMicros: Int64
         let rateToAccountMicros: Int64
         let accountRateSource: String
