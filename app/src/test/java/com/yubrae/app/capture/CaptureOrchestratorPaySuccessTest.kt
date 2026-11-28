@@ -1,9 +1,11 @@
 package com.yubrae.app.capture
 
+import com.yubrae.app.capture.screen.CheckoutSessionTracker
 import com.yubrae.app.capture.screen.ScreenBillParser
 import com.yubrae.app.capture.screen.ScreenPageKind
 import com.yubrae.app.capture.screen.ScreenParseOutcome
 import com.yubrae.app.capture.screen.ScreenSnapshot
+import com.yubrae.app.capture.screen.ScreenTextNode
 import com.yubrae.app.core.contract.ParsedBillDraft
 import com.yubrae.app.core.model.MoneyAmount
 import com.yubrae.app.data.db.AccountAliasEntity
@@ -23,6 +25,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -778,5 +781,251 @@ class CaptureOrchestratorPaySuccessTest {
         val upgraded = transactionDao.getById(r1.transactionId!!)!!
         assertEquals("书亦烧仙草(蔡家店)", upgraded.merchant)
         assertEquals(takeoutCategory.id, upgraded.categoryId)
+    }
+
+    @Test
+    fun capturesTaobaoFlashSaleViaCheckoutFsmThenMergesAlipayBillDetailWithoutDuplicate() = runTest {
+        val mybankAccountId = accountDao.insert(
+            AccountEntity(
+                name = "支付宝·网商银行",
+                groupType = AccountGroup.DEBIT,
+                currencyCode = "CNY"
+            )
+        )
+        aliasDao.insertAll(
+            listOf(
+                AccountAliasEntity(
+                    accountId = mybankAccountId,
+                    matchType = AliasMatchType.CARD_LAST4,
+                    pattern = "6978",
+                    priority = 95
+                ),
+                AccountAliasEntity(
+                    accountId = mybankAccountId,
+                    matchType = AliasMatchType.KEYWORD,
+                    pattern = "网商银行",
+                    priority = 110
+                )
+            )
+        )
+
+        val orchestrator = buildOrchestrator()
+        val testZone = ZoneId.of("Asia/Shanghai")
+        val screenParser = ScreenBillParser(zoneId = testZone)
+        val tracker = CheckoutSessionTracker()
+        val accounts = accountDao.getAll()
+        val aliases = aliasDao.getEnabled()
+        val categories = categoryDao.getAll()
+        val takeoutCategory = categoryDao.findByNameAndType("外卖", TransactionType.EXPENSE)!!
+
+        val stage0TimeMillis = LocalDateTime.of(2026, 11, 28, 21, 5, 0)
+            .atZone(testZone)
+            .toInstant()
+            .toEpochMilli()
+
+        // 1. Stage 0：淘宝闪购确认订单页（记录真实门店、商品、外卖线索，绝不落账）
+        val stage0Snapshot = ScreenSnapshot(
+            packageName = "com.taobao.taobao",
+            className = "com.taobao.order.ConfirmOrderActivity",
+            texts = listOf(
+                "淘宝闪购",
+                "确认订单",
+                "书亦烧仙草(蔡家店) >",
+                "烧仙草大杯 x1",
+                "打包费 ¥1.00",
+                "配送费 ¥2.00",
+                "已优惠 ¥3.00",
+                "实付 ¥12.66",
+                "提交订单"
+            ),
+            capturedAtMillis = stage0TimeMillis
+        )
+        assertFalse(screenParser.isExplicitUnpaidOrFailedScreen(stage0Snapshot))
+        assertEquals(ScreenPageKind.UNKNOWN, screenParser.classifyPage(stage0Snapshot))
+        val stage0Ctx = screenParser.extractPendingCheckout(stage0Snapshot)
+        assertNotNull(stage0Ctx)
+        assertFalse(stage0Ctx!!.isCashierStage)
+        assertTrue(stage0Ctx.isTakeout)
+        assertEquals("书亦烧仙草(蔡家店)", stage0Ctx.merchant)
+        tracker.recordCheckout(stage0Ctx)
+        assertEquals(0, transactionDao.getAll().size)
+
+        // 2. Stage 1：支付宝支付收银台弹窗（金额 + 优惠 + 网商银行，绝不落账）
+        val stage1Snapshot = ScreenSnapshot(
+            packageName = "com.eg.android.AlipayGphone",
+            className = "com.alipay.android.msp.ui.views.MspContainerActivity",
+            texts = listOf(
+                "付款详情",
+                "¥12.66",
+                "淘宝闪购",
+                "支付优惠", "-¥3.00",
+                "付款方式", "网商银行储蓄卡(6978)",
+                "确认付款"
+            ),
+            capturedAtMillis = stage0TimeMillis + 4_000L
+        )
+        assertFalse(screenParser.isExplicitUnpaidOrFailedScreen(stage1Snapshot))
+        assertEquals(ScreenPageKind.UNKNOWN, screenParser.classifyPage(stage1Snapshot))
+        assertTrue(screenParser.shouldRecordDiagnosticLog(stage1Snapshot))
+        val stage1Ctx = screenParser.extractPendingCheckout(stage1Snapshot)
+        assertNotNull(stage1Ctx)
+        assertTrue(stage1Ctx!!.isCashierStage)
+        assertEquals(MoneyAmount.parseToMicros("12.66"), stage1Ctx.origAmountMicros)
+        assertEquals(MoneyAmount.parseToMicros("3.00"), stage1Ctx.discountAmountMicros)
+        tracker.recordCheckout(stage1Ctx)
+        assertEquals(0, transactionDao.getAll().size)
+
+        // 3. 支付完成回到淘宝「支付成功 + 查看订单」（无金额 + 底层隐藏「购物车」节点）-> 状态机立即合成落账
+        val bounceNodes = listOf(
+            ScreenTextNode("购物车", isVisibleToUser = false),
+            ScreenTextNode("提交订单", isVisibleToUser = false),
+            ScreenTextNode("支付成功", isVisibleToUser = true),
+            ScreenTextNode("查看订单", isVisibleToUser = true),
+            ScreenTextNode("返回首页", isVisibleToUser = true)
+        )
+        val bounceSnapshot = ScreenSnapshot(
+            packageName = "com.taobao.taobao",
+            className = "com.taobao.pay.PaySuccessActivity",
+            texts = bounceNodes.map { it.text },
+            nodes = bounceNodes,
+            capturedAtMillis = stage0TimeMillis + 9_000L
+        )
+        assertFalse(screenParser.isExplicitUnpaidOrFailedScreen(bounceSnapshot))
+        // 单帧常规解析因屏幕无金额产出 draft == null
+        val directOutcome = screenParser.parse(bounceSnapshot, aliases, accounts, categories)
+        assertNull(directOutcome.draft)
+        assertTrue(tracker.hasActivePendingCheckout(bounceSnapshot.capturedAtMillis))
+
+        val completionSignal = screenParser.detectCheckoutCompletionSignal(bounceSnapshot)
+        assertNotNull(completionSignal)
+        assertEquals(ScreenPageKind.PAY_SUCCESS, completionSignal!!.pageKind)
+
+        val confirmedOutcome = tracker.consumeIfConfirmed(
+            snapshot = bounceSnapshot,
+            signal = completionSignal,
+            parser = screenParser,
+            aliases = aliases,
+            accounts = accounts,
+            categories = categories
+        )
+        assertNotNull(confirmedOutcome)
+        assertFalse(tracker.hasActivePendingCheckout(bounceSnapshot.capturedAtMillis + 500L))
+
+        val r1 = orchestrator.handleScreenCapture(bounceSnapshot, confirmedOutcome!!)
+        assertEquals(ParseStatus.MATCHED_LOCAL, r1.status)
+        assertFalse(r1.mergedIntoExisting)
+        assertNotNull(r1.transactionId)
+        assertEquals(1, promptTriggerCount)
+        assertEquals(1, transactionDao.getAll().size)
+
+        val createdTx = transactionDao.getById(r1.transactionId!!)!!
+        assertEquals(MoneyAmount.parseToMicros("12.66"), createdTx.origAmountMicros)
+        assertEquals("书亦烧仙草(蔡家店)", createdTx.merchant)
+        assertEquals(takeoutCategory.id, createdTx.categoryId)
+        assertEquals(mybankAccountId, createdTx.accountId)
+        assertTrue("Expected discount note, got: ${createdTx.note}", createdTx.note.contains("已优惠3.00"))
+        assertEquals(-MoneyAmount.parseToMicros("12.66")!!, accountDao.getById(mybankAccountId)!!.balanceMicros)
+
+        // 4. 随后点开支付宝账单详情页 -> CaptureOrchestrator 自动融合为同一笔（补全单号，账单总数仍为 1，不重复弹窗）
+        val alipayOrderNo = "202611282200148899006677"
+        val alipayDetailSnapshot = ScreenSnapshot(
+            packageName = "com.eg.android.AlipayGphone",
+            className = "com.alipay.mobile.bill.detail.ui.BillDetailActivity",
+            texts = listOf(
+                "账单详情",
+                "淘宝闪购",
+                "支出12.66元",
+                "交易成功",
+                "支付时间", "2026-11-28 21:05:08",
+                "付款方式", "网商银行储蓄卡(6978)",
+                "订单号", alipayOrderNo
+            ),
+            capturedAtMillis = stage0TimeMillis + 44_000L
+        )
+        val detailOutcome = screenParser.parse(alipayDetailSnapshot, aliases, accounts, categories)
+        assertEquals(ScreenPageKind.BILL_DETAIL, detailOutcome.pageKind)
+        assertNotNull(detailOutcome.draft)
+
+        val r2 = orchestrator.handleScreenCapture(alipayDetailSnapshot, detailOutcome)
+        assertEquals(ParseStatus.MERGED_DEDUP, r2.status)
+        assertTrue(r2.mergedIntoExisting)
+        assertEquals(r1.transactionId, r2.transactionId)
+        assertEquals(1, transactionDao.getAll().size)
+        assertEquals(1, promptTriggerCount)
+
+        val mergedTx = transactionDao.getById(r1.transactionId!!)!!
+        assertEquals(MoneyAmount.parseToMicros("12.66"), mergedTx.origAmountMicros)
+        assertEquals("书亦烧仙草(蔡家店)", mergedTx.merchant)
+        assertEquals(takeoutCategory.id, mergedTx.categoryId)
+        assertEquals(mybankAccountId, mergedTx.accountId)
+        assertTrue("Expected merged note to contain orderNo, got: ${mergedTx.note}", mergedTx.note.contains("单号:$alipayOrderNo"))
+        assertEquals(-MoneyAmount.parseToMicros("12.66")!!, accountDao.getById(mybankAccountId)!!.balanceMicros)
+    }
+
+    @Test
+    fun doesNotRecordTransactionWhenUserCancelsCheckoutAndReturnsToUnpaidScreen() = runTest {
+        val orchestrator = buildOrchestrator()
+        val testZone = ZoneId.of("Asia/Shanghai")
+        val screenParser = ScreenBillParser(zoneId = testZone)
+        val tracker = CheckoutSessionTracker()
+        val accounts = accountDao.getAll()
+        val aliases = aliasDao.getEnabled()
+        val categories = categoryDao.getAll()
+        val baseTime = 1_732_850_000_000L
+
+        val stage0Snapshot = ScreenSnapshot(
+            packageName = "com.taobao.taobao",
+            className = "com.taobao.order.ConfirmOrderActivity",
+            texts = listOf("淘宝闪购", "确认订单", "书亦烧仙草(蔡家店) >", "烧仙草大杯 x1", "实付 ¥12.66", "提交订单"),
+            capturedAtMillis = baseTime
+        )
+        tracker.recordCheckout(screenParser.extractPendingCheckout(stage0Snapshot)!!)
+
+        val stage1Snapshot = ScreenSnapshot(
+            packageName = "com.eg.android.AlipayGphone",
+            className = "com.alipay.android.msp.ui.views.MspContainerActivity",
+            texts = listOf("付款详情", "¥12.66", "淘宝闪购", "付款方式", "余额宝", "确认付款"),
+            capturedAtMillis = baseTime + 3_000L
+        )
+        tracker.recordCheckout(screenParser.extractPendingCheckout(stage1Snapshot)!!)
+        assertTrue(tracker.hasActivePendingCheckout(baseTime + 4_000L))
+
+        // 用户取消支付退回「待付款」页 -> 立刻清空待确认上下文，0 落账
+        val unpaidSnapshot = ScreenSnapshot(
+            packageName = "com.taobao.taobao",
+            className = "com.taobao.order.detail.OrderDetailActivity",
+            texts = listOf("订单详情", "待付款", "等待买家付款", "书亦烧仙草(蔡家店)", "实付 ¥12.66", "去支付"),
+            capturedAtMillis = baseTime + 6_000L
+        )
+        assertTrue(screenParser.isExplicitUnpaidOrFailedScreen(unpaidSnapshot))
+        tracker.markExplicitCancelOrUnpaid(unpaidSnapshot.capturedAtMillis)
+        assertFalse(tracker.hasActivePendingCheckout(baseTime + 6_500L))
+
+        val unpaidOutcome = screenParser.parse(unpaidSnapshot, aliases, accounts, categories)
+        assertNull(unpaidOutcome.draft)
+
+        // 随后误入或浏览另一笔历史已接单页面（无金额）-> 因状态机已清空，绝不落账
+        val otherOrderSnapshot = ScreenSnapshot(
+            packageName = "com.taobao.taobao",
+            className = "com.taobao.order.detail.OrderDetailActivity",
+            texts = listOf("淘宝闪购", "商家已接单", "预计21:40送达", "催单", "联系商家"),
+            capturedAtMillis = baseTime + 9_000L
+        )
+        val signal = screenParser.detectCheckoutCompletionSignal(otherOrderSnapshot)
+        assertNotNull(signal)
+        assertNull(tracker.consumeIfConfirmed(otherOrderSnapshot, signal!!, screenParser, aliases, accounts, categories))
+
+        // 验证即使未命中的待付款页写入诊断日志，也绝不会新建交易或弹悬浮窗
+        val diagOutcome = ScreenParseOutcome(
+            pageKind = ScreenPageKind.UNKNOWN,
+            draft = null,
+            summaryText = unpaidSnapshot.texts.joinToString("\n"),
+            ignoredReason = "待付款/支付失败/已取消页面，不触发记账"
+        )
+        val diagResult = orchestrator.handleScreenCapture(unpaidSnapshot, diagOutcome)
+        assertEquals(ParseStatus.IGNORED, diagResult.status)
+        assertNull(diagResult.transactionId)
+        assertEquals(0, transactionDao.getAll().size)
+        assertEquals(0, promptTriggerCount)
     }
 }

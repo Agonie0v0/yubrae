@@ -2811,4 +2811,385 @@ class ScreenBillParserTest {
         assertEquals(ScreenPageKind.UNKNOWN, feedOutcome.pageKind)
         assertNull(feedOutcome.draft)
     }
+
+    @Test
+    fun isolatesHiddenBackgroundBlockersWithoutBreakingWeChatWebView() = runTest {
+        val fullAccDao = FakeAccountDao()
+        val fullAliasDao = FakeAccountAliasDao()
+        val fullCatDao = FakeCategoryDao()
+        DefaultSeedData.ensureAccountsAndTransitCard(fullAccDao, fullAliasDao)
+        DefaultSeedData.ensurePresetCategories(fullCatDao)
+        val fullAccounts = fullAccDao.getAll()
+        val fullAliases = fullAliasDao.getEnabled()
+        val fullCategories = fullCatDao.getAll()
+
+        // 1. 淘宝前景支付成功页，底层隐藏 Tab 栏含「购物车」及背景页「提交订单」「确认付款」「待付款」「¥99.00」
+        val taobaoPayNodes = listOf(
+            ScreenTextNode("购物车", topPx = 2200, heightPx = 60, isVisibleToUser = false),
+            ScreenTextNode("提交订单", topPx = 2100, heightPx = 80, isVisibleToUser = false),
+            ScreenTextNode("确认付款", topPx = 2000, heightPx = 80, isVisibleToUser = false),
+            ScreenTextNode("待付款", topPx = 400, heightPx = 60, isVisibleToUser = false),
+            ScreenTextNode("¥99.00", topPx = 500, heightPx = 90, isVisibleToUser = false),
+            ScreenTextNode("支付成功", topPx = 220, heightPx = 72, isVisibleToUser = true),
+            ScreenTextNode("淘宝闪购", topPx = 310, heightPx = 44, isVisibleToUser = true),
+            ScreenTextNode("书亦烧仙草(蔡家店)", topPx = 370, heightPx = 48, isVisibleToUser = true),
+            ScreenTextNode("¥", topPx = 450, heightPx = 96, isVisibleToUser = true),
+            ScreenTextNode("12.66", topPx = 450, heightPx = 96, isVisibleToUser = false), // 合并片段任一可见即视为可见
+            ScreenTextNode("查看订单", topPx = 620, heightPx = 70, isVisibleToUser = true),
+            ScreenTextNode("返回首页", topPx = 620, heightPx = 70, isVisibleToUser = true)
+        )
+        val taobaoPaySnapshot = ScreenSnapshot(
+            packageName = "com.taobao.taobao",
+            className = "com.taobao.pay.PaySuccessActivity",
+            texts = taobaoPayNodes.map { it.text },
+            nodes = taobaoPayNodes,
+            screenHeightPx = 2400
+        )
+        val taobaoPayOutcome = parser.parse(taobaoPaySnapshot, fullAliases, fullAccounts, fullCategories)
+        assertEquals(ScreenPageKind.PAY_SUCCESS, taobaoPayOutcome.pageKind)
+        assertNotNull(taobaoPayOutcome.draft)
+        assertEquals(MoneyAmount.parseToMicros("12.66"), taobaoPayOutcome.draft!!.origAmountMicros)
+        assertEquals("书亦烧仙草(蔡家店)", taobaoPayOutcome.draft!!.merchant)
+        assertEquals("外卖", taobaoPayOutcome.draft!!.categoryName)
+
+        // 2. 淘宝闪购外卖进度页 + 底层隐藏「购物车」/「提交订单」不再误杀
+        val takeoutOrderNodes = listOf(
+            ScreenTextNode("购物车", isVisibleToUser = false),
+            ScreenTextNode("提交订单", isVisibleToUser = false),
+            ScreenTextNode("淘宝闪购", isVisibleToUser = true),
+            ScreenTextNode("等待商家接单", isVisibleToUser = true),
+            ScreenTextNode("预计21:28送达", isVisibleToUser = true),
+            ScreenTextNode("书亦烧仙草(蔡家店) >", isVisibleToUser = true),
+            ScreenTextNode("烧仙草大杯 x1", isVisibleToUser = true),
+            ScreenTextNode("实付 ¥12.66", isVisibleToUser = true),
+            ScreenTextNode("催单", isVisibleToUser = true)
+        )
+        val takeoutOrderSnapshot = ScreenSnapshot(
+            packageName = "com.taobao.taobao",
+            className = "com.taobao.order.detail.OrderDetailActivity",
+            texts = takeoutOrderNodes.map { it.text },
+            nodes = takeoutOrderNodes
+        )
+        val takeoutOrderOutcome = parser.parse(takeoutOrderSnapshot, fullAliases, fullAccounts, fullCategories)
+        assertEquals(ScreenPageKind.ORDER_DETAIL, takeoutOrderOutcome.pageKind)
+        assertEquals(MoneyAmount.parseToMicros("12.66"), takeoutOrderOutcome.draft!!.origAmountMicros)
+        assertEquals("书亦烧仙草(蔡家店)", takeoutOrderOutcome.draft!!.merchant)
+        assertEquals("外卖", takeoutOrderOutcome.draft!!.categoryName)
+
+        // 3. 支付宝前景付款成功 + 底层隐藏「确认付款」不再误杀
+        val alipayOverlayNodes = listOf(
+            ScreenTextNode("确认付款", isVisibleToUser = false),
+            ScreenTextNode("立即支付", isVisibleToUser = false),
+            ScreenTextNode("付款成功", isVisibleToUser = true),
+            ScreenTextNode("¥12.66", isVisibleToUser = true),
+            ScreenTextNode("淘宝闪购", isVisibleToUser = true)
+        )
+        val alipayOverlaySnapshot = ScreenSnapshot(
+            packageName = "com.eg.android.AlipayGphone",
+            className = "com.alipay.android.msp.ui.views.MspContainerActivity",
+            texts = alipayOverlayNodes.map { it.text },
+            nodes = alipayOverlayNodes
+        )
+        val alipayOverlayOutcome = parser.parse(alipayOverlaySnapshot, fullAliases, fullAccounts, fullCategories)
+        assertEquals(ScreenPageKind.PAY_SUCCESS, alipayOverlayOutcome.pageKind)
+        assertEquals(MoneyAmount.parseToMicros("12.66"), alipayOverlayOutcome.draft!!.origAmountMicros)
+
+        // 4. 微信 WebView 全树 isVisibleToUser=false 仍 100% 正常解析
+        val allFalseWebViewNodes = listOf(
+            ScreenTextNode("哆哆酸辣粉", isVisibleToUser = false),
+            ScreenTextNode("-16.00", isVisibleToUser = false),
+            ScreenTextNode("当前状态", isVisibleToUser = false),
+            ScreenTextNode("支付成功", isVisibleToUser = false),
+            ScreenTextNode("支付方式", isVisibleToUser = false),
+            ScreenTextNode("零钱", isVisibleToUser = false),
+            ScreenTextNode("交易单号", isVisibleToUser = false),
+            ScreenTextNode("4500000576202611280001", isVisibleToUser = false),
+            ScreenTextNode("本服务由财付通提供", isVisibleToUser = false)
+        )
+        val allFalseWebViewSnapshot = ScreenSnapshot(
+            packageName = "com.tencent.mm",
+            className = "com.tencent.mm.plugin.webview.ui.tools.MMWebViewUI",
+            texts = allFalseWebViewNodes.map { it.text },
+            nodes = allFalseWebViewNodes
+        )
+        val allFalseOutcome = parser.parse(allFalseWebViewSnapshot, fullAliases, fullAccounts, fullCategories)
+        assertEquals(ScreenPageKind.BILL_DETAIL, allFalseOutcome.pageKind)
+        assertEquals(MoneyAmount.parseToMicros("16.00"), allFalseOutcome.draft!!.origAmountMicros)
+        assertEquals("哆哆酸辣粉", allFalseOutcome.draft!!.merchant)
+
+        // 5. 微信 WebView 仅顶部原生标题栏可见、主体正文均为 isVisibleToUser=false 时仍 100% 回退全树解析
+        val chromeVisibleWebViewNodes = listOf(
+            ScreenTextNode("返回", isVisibleToUser = true),
+            ScreenTextNode("账单详情", isVisibleToUser = true),
+            ScreenTextNode("更多", isVisibleToUser = true)
+        ) + allFalseWebViewNodes
+        val chromeVisibleSnapshot = ScreenSnapshot(
+            packageName = "com.tencent.mm",
+            className = "com.tencent.mm.plugin.webview.ui.tools.MMWebViewUI",
+            texts = chromeVisibleWebViewNodes.map { it.text },
+            nodes = chromeVisibleWebViewNodes
+        )
+        val chromeVisibleOutcome = parser.parse(chromeVisibleSnapshot, fullAliases, fullAccounts, fullCategories)
+        assertEquals(ScreenPageKind.BILL_DETAIL, chromeVisibleOutcome.pageKind)
+        assertEquals(MoneyAmount.parseToMicros("16.00"), chromeVisibleOutcome.draft!!.origAmountMicros)
+        assertEquals("哆哆酸辣粉", chromeVisibleOutcome.draft!!.merchant)
+    }
+
+    @Test
+    fun extractsStage0AndStage1PendingCheckoutAndRejectsNonCheckoutPages() {
+        val baseTime = 1_732_800_000_000L
+
+        // 1. Stage 0：淘宝闪购确认订单页（提取真实门店、商品、实付、优惠、外卖标记）
+        val stage0Snapshot = ScreenSnapshot(
+            packageName = "com.taobao.taobao",
+            className = "com.taobao.order.ConfirmOrderActivity",
+            texts = listOf(
+                "淘宝闪购",
+                "确认订单",
+                "立即送出",
+                "预计21:28送达",
+                "书亦烧仙草(蔡家店) >",
+                "烧仙草大杯 x1",
+                "¥15.00",
+                "打包费 ¥1.00",
+                "配送费 ¥2.00",
+                "已优惠 ¥5.34",
+                "实付 ¥12.66",
+                "提交订单"
+            ),
+            capturedAtMillis = baseTime
+        )
+        val stage0 = parser.extractPendingCheckout(stage0Snapshot)
+        assertNotNull(stage0)
+        assertFalse(stage0!!.isCashierStage)
+        assertEquals("com.taobao.taobao", stage0.sourcePackage)
+        assertEquals("书亦烧仙草(蔡家店)", stage0.merchant)
+        assertTrue(stage0.goodsSummary.contains("烧仙草大杯"))
+        assertEquals(MoneyAmount.parseToMicros("12.66"), stage0.origAmountMicros)
+        assertEquals(MoneyAmount.parseToMicros("5.34"), stage0.discountAmountMicros)
+        assertTrue(stage0.isTakeout)
+
+        // 2. Stage 1：支付宝收银台弹窗（精确金额、优惠、网商银行储蓄卡尾号）
+        val stage1Alipay = ScreenSnapshot(
+            packageName = "com.eg.android.AlipayGphone",
+            className = "com.alipay.android.msp.ui.views.MspContainerActivity",
+            texts = listOf(
+                "付款详情",
+                "¥12.66",
+                "淘宝闪购",
+                "支付优惠", "-¥3.00",
+                "付款方式", "网商银行储蓄卡(6978)",
+                "确认付款"
+            ),
+            capturedAtMillis = baseTime + 3_000L
+        )
+        val cashier1 = parser.extractPendingCheckout(stage1Alipay)
+        assertNotNull(cashier1)
+        assertTrue(cashier1!!.isCashierStage)
+        assertEquals("com.eg.android.AlipayGphone", cashier1.sourcePackage)
+        assertEquals(MoneyAmount.parseToMicros("12.66"), cashier1.origAmountMicros)
+        assertEquals(MoneyAmount.parseToMicros("3.00"), cashier1.discountAmountMicros)
+        assertEquals("网商银行储蓄卡(6978)", cashier1.paymentMethodText)
+        assertEquals("6978", cashier1.accountHint)
+        assertTrue(cashier1.isTakeout)
+
+        // 3. Stage 1：花呗带可用额度噪声 + 立即付款按钮金额，不被 5000.00 额度或未选中银行卡污染
+        val stage1Huabei = ScreenSnapshot(
+            packageName = "com.eg.android.AlipayGphone",
+            className = "com.alipay.android.msp.ui.views.MspContainerActivity",
+            texts = listOf(
+                "付款详情",
+                "¥18.80",
+                "红包抵扣 -¥2.00",
+                "付款方式", "花呗(可用额度5000.00)",
+                "招商银行信用卡(6688)",
+                "立即付款 ¥18.80"
+            ),
+            capturedAtMillis = baseTime + 5_000L
+        )
+        val cashier2 = parser.extractPendingCheckout(stage1Huabei)
+        assertNotNull(cashier2)
+        assertTrue(cashier2!!.isCashierStage)
+        assertEquals(MoneyAmount.parseToMicros("18.80"), cashier2.origAmountMicros)
+        assertEquals(MoneyAmount.parseToMicros("2.00"), cashier2.discountAmountMicros)
+        assertEquals("花呗", cashier2.paymentMethodText)
+        assertEquals("", cashier2.accountHint)
+
+        // 4. Stage 1：淘宝内嵌 MSP 弹窗浮在不可见的「提交订单」之上
+        val embeddedMspNodes = listOf(
+            ScreenTextNode("提交订单", isVisibleToUser = false),
+            ScreenTextNode("确认订单", isVisibleToUser = false),
+            ScreenTextNode("付款详情", isVisibleToUser = true),
+            ScreenTextNode("¥12.66", isVisibleToUser = true),
+            ScreenTextNode("付款方式", isVisibleToUser = true),
+            ScreenTextNode("花呗", isVisibleToUser = true),
+            ScreenTextNode("确认付款", isVisibleToUser = true)
+        )
+        val embeddedMspSnapshot = ScreenSnapshot(
+            packageName = "com.taobao.taobao",
+            className = "com.alipay.android.msp.ui.views.MspContainerActivity",
+            texts = embeddedMspNodes.map { it.text },
+            nodes = embeddedMspNodes,
+            capturedAtMillis = baseTime + 6_000L
+        )
+        val cashier3 = parser.extractPendingCheckout(embeddedMspSnapshot)
+        assertNotNull(cashier3)
+        assertTrue(cashier3!!.isCashierStage)
+        assertEquals(MoneyAmount.parseToMicros("12.66"), cashier3.origAmountMicros)
+        assertEquals("花呗", cashier3.paymentMethodText)
+
+        // 5. 账单详情页、购物车、失败页、无金额收银台、聊天窗口绝不误判为 PendingCheckout
+        val billDetail = ScreenSnapshot(
+            packageName = "com.eg.android.AlipayGphone",
+            className = "BillDetailActivity",
+            texts = listOf("账单详情", "瑞幸咖啡", "-18.50", "当前状态", "交易成功", "付款方式", "花呗", "订单号", "202611280001")
+        )
+        assertNull(parser.extractPendingCheckout(billDetail))
+
+        val cartSnapshot = ScreenSnapshot(
+            packageName = "com.taobao.taobao",
+            className = "CartActivity",
+            texts = listOf("购物车", "书亦烧仙草", "合计 ¥12.66", "去结算")
+        )
+        assertNull(parser.extractPendingCheckout(cartSnapshot))
+
+        val failedSnapshot = ScreenSnapshot(
+            packageName = "com.eg.android.AlipayGphone",
+            className = "MspContainerActivity",
+            texts = listOf("支付失败", "¥12.66", "确认付款", "付款方式", "花呗")
+        )
+        assertNull(parser.extractPendingCheckout(failedSnapshot))
+
+        val zeroAmountSettings = ScreenSnapshot(
+            packageName = "com.eg.android.AlipayGphone",
+            className = "PaySettingActivity",
+            texts = listOf("付款方式", "花呗", "网商银行", "调整扣款顺序")
+        )
+        assertNull(parser.extractPendingCheckout(zeroAmountSettings))
+    }
+
+    @Test
+    fun detectsUnpaidFailedCompletionSignalsAndDiagnosticLogEligibilityAccurately() {
+        // 1. 待付款 / 失败 / 已取消判定
+        val unpaidScreen = ScreenSnapshot(
+            packageName = "com.taobao.taobao",
+            className = "OrderDetailActivity",
+            texts = listOf("订单详情", "待付款", "等待买家付款", "书亦烧仙草(蔡家店)", "去支付")
+        )
+        assertTrue(parser.isExplicitUnpaidOrFailedScreen(unpaidScreen))
+        assertNull(parser.detectCheckoutCompletionSignal(unpaidScreen))
+
+        val cancelledScreen = ScreenSnapshot(
+            packageName = "com.eg.android.AlipayGphone",
+            className = "MspContainerActivity",
+            texts = listOf("付款失败", "继续支付")
+        )
+        assertTrue(parser.isExplicitUnpaidOrFailedScreen(cancelledScreen))
+        assertNull(parser.detectCheckoutCompletionSignal(cancelledScreen))
+
+        // 2. 外卖进度页含「取消订单」按钮并非已取消，且无金额首屏应产出 ORDER_DETAIL 确认信号
+        val takeoutMapNodes = listOf(
+            ScreenTextNode("购物车", isVisibleToUser = false),
+            ScreenTextNode("淘宝闪购", isVisibleToUser = true),
+            ScreenTextNode("等待商家接单", isVisibleToUser = true),
+            ScreenTextNode("预计21:28送达", isVisibleToUser = true),
+            ScreenTextNode("书亦烧仙草(蔡家店) >", isVisibleToUser = true),
+            ScreenTextNode("烧仙草大杯 x1", isVisibleToUser = true),
+            ScreenTextNode("¥15.00", isVisibleToUser = true), // 仅单品原价，不应污染 confirmedAmountMicros
+            ScreenTextNode("催单", isVisibleToUser = true),
+            ScreenTextNode("联系商家", isVisibleToUser = true),
+            ScreenTextNode("取消订单", isVisibleToUser = true)
+        )
+        val takeoutMapSnapshot = ScreenSnapshot(
+            packageName = "com.taobao.taobao",
+            className = "com.taobao.order.detail.OrderDetailActivity",
+            texts = takeoutMapNodes.map { it.text },
+            nodes = takeoutMapNodes
+        )
+        assertFalse(parser.isExplicitUnpaidOrFailedScreen(takeoutMapSnapshot))
+        val takeoutSignal = parser.detectCheckoutCompletionSignal(takeoutMapSnapshot)
+        assertNotNull(takeoutSignal)
+        assertEquals(ScreenPageKind.ORDER_DETAIL, takeoutSignal!!.pageKind)
+        assertEquals("书亦烧仙草(蔡家店)", takeoutSignal.merchantHint)
+        assertTrue(takeoutSignal.isTakeout)
+        assertTrue(takeoutSignal.isStrongPaidSignal)
+        assertNull(takeoutSignal.confirmedAmountMicros)
+        assertTrue(parser.shouldRecordDiagnosticLog(takeoutMapSnapshot))
+
+        // 3. 支付宝无金额无「完成」按钮的瞬态付款成功闪帧
+        val alipayFlashFrame = ScreenSnapshot(
+            packageName = "com.eg.android.AlipayGphone",
+            className = "com.alipay.android.msp.ui.views.MspContainerActivity",
+            texts = listOf("付款成功", "淘宝闪购")
+        )
+        val flashSignal = parser.detectCheckoutCompletionSignal(alipayFlashFrame)
+        assertNotNull(flashSignal)
+        assertEquals(ScreenPageKind.PAY_SUCCESS, flashSignal!!.pageKind)
+        assertNull(flashSignal.confirmedAmountMicros)
+        assertTrue(flashSignal.isStrongPaidSignal)
+        assertTrue(parser.shouldRecordDiagnosticLog(alipayFlashFrame))
+
+        // 4. 淘宝无金额「支付成功 + 查看订单」页 + 底层隐藏「购物车」
+        val taobaoNoAmountNodes = listOf(
+            ScreenTextNode("购物车", isVisibleToUser = false),
+            ScreenTextNode("支付成功", isVisibleToUser = true),
+            ScreenTextNode("查看订单", isVisibleToUser = true),
+            ScreenTextNode("返回首页", isVisibleToUser = true)
+        )
+        val taobaoNoAmountSnapshot = ScreenSnapshot(
+            packageName = "com.taobao.taobao",
+            className = "com.taobao.pay.PaySuccessActivity",
+            texts = taobaoNoAmountNodes.map { it.text },
+            nodes = taobaoNoAmountNodes
+        )
+        val noAmountSignal = parser.detectCheckoutCompletionSignal(taobaoNoAmountSnapshot)
+        assertNotNull(noAmountSignal)
+        assertEquals(ScreenPageKind.PAY_SUCCESS, noAmountSignal!!.pageKind)
+        assertNull(noAmountSignal.confirmedAmountMicros)
+        assertTrue(noAmountSignal.isStrongPaidSignal)
+        assertTrue(parser.shouldRecordDiagnosticLog(taobaoNoAmountSnapshot))
+
+        // 5. 淘宝无「支付成功」文案仅「查看订单 + 返回首页」组合 -> 弱确认信号（供 Stage 1 消费，阻止 Stage 0 单独误触）
+        val viewOrderOnly = ScreenSnapshot(
+            packageName = "com.taobao.taobao",
+            className = "com.taobao.pay.PaySuccessActivity",
+            texts = listOf("淘宝闪购", "查看订单", "返回首页")
+        )
+        val weakSignal = parser.detectCheckoutCompletionSignal(viewOrderOnly)
+        assertNotNull(weakSignal)
+        assertEquals(ScreenPageKind.PAY_SUCCESS, weakSignal!!.pageKind)
+        assertFalse(weakSignal.isStrongPaidSignal)
+
+        // 6. 聊天窗口 / 服务号 / 账单助手 / 订单列表 / 普通浏览页：绝不产出确认信号且聊天/浏览不写诊断日志
+        val wechatChat = ScreenSnapshot(
+            packageName = "com.tencent.mm",
+            className = "com.tencent.mm.ui.chatting.ChattingUI",
+            texts = listOf("张三", "按住 说话", "付款成功", "查看订单", "发送")
+        )
+        assertNull(parser.detectCheckoutCompletionSignal(wechatChat))
+        assertFalse(parser.shouldRecordDiagnosticLog(wechatChat))
+
+        val alipayFeed = ScreenSnapshot(
+            packageName = "com.eg.android.AlipayGphone",
+            className = "",
+            texts = listOf("账单助手", "动账提醒", "付款成功", "查看账单详情")
+        )
+        assertNull(parser.detectCheckoutCompletionSignal(alipayFeed))
+        assertFalse(parser.shouldRecordDiagnosticLog(alipayFeed))
+
+        val orderList = ScreenSnapshot(
+            packageName = "com.taobao.taobao",
+            className = "OrderListActivity",
+            texts = listOf("全部订单", "等待商家接单", "实付 ¥12.66", "再来一单", "已送达", "实付 ¥9.90", "再来一单")
+        )
+        assertNull(parser.detectCheckoutCompletionSignal(orderList))
+
+        val taobaoHome = ScreenSnapshot(
+            packageName = "com.taobao.taobao",
+            className = "MainActivity",
+            texts = listOf("推荐", "首页", "逛逛", "消息", "我的淘宝")
+        )
+        assertFalse(parser.shouldRecordDiagnosticLog(taobaoHome))
+        assertFalse(parser.shouldRecordDiagnosticLog(alipayFlashFrame, parseIgnoredReason = "聊天或服务号对话框不触发"))
+    }
 }

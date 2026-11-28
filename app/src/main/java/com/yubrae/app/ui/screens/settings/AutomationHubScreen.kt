@@ -909,6 +909,15 @@ fun AutoCaptureSettingsScreen(
                                         viewModel.updateSettings { it.copy(accessibilityOrderDetailEnabled = checked) }
                                     }
                                 )
+                                CompactHairlineDivider(startIndent = 0.dp)
+                                CompactSwitchRow(
+                                    title = "无障碍页面诊断抓包",
+                                    detail = "排查未自动记账时开启，将受监控页面的节点快照写入捕获日志",
+                                    checked = settings.accessibilityDiagnosticCaptureEnabled,
+                                    onCheckedChange = { checked ->
+                                        viewModel.updateSettings { it.copy(accessibilityDiagnosticCaptureEnabled = checked) }
+                                    }
+                                )
                             }
                         }
                         CompactHairlineDivider(startIndent = 0.dp)

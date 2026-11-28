@@ -102,7 +102,8 @@ data class AppSettings(
     val lastRuleSyncMillis: Long = 0L,
     val initialAccountsSeeded: Boolean = false,
     val assetGroupOrder: List<String> = emptyList(),
-    val collapsedAssetGroups: Set<String> = emptySet()
+    val collapsedAssetGroups: Set<String> = emptySet(),
+    val accessibilityDiagnosticCaptureEnabled: Boolean = false
 )
 
 class SettingsStore(private val context: Context) {
@@ -156,6 +157,7 @@ class SettingsStore(private val context: Context) {
         val INITIAL_ACCOUNTS_SEEDED = booleanPreferencesKey("initial_accounts_seeded")
         val ASSET_GROUP_ORDER = stringPreferencesKey("asset_group_order")
         val COLLAPSED_ASSET_GROUPS = stringPreferencesKey("collapsed_asset_groups")
+        val ACCESSIBILITY_DIAGNOSTIC_CAPTURE = booleanPreferencesKey("accessibility_diagnostic_capture")
     }
 
     val settingsFlow: Flow<AppSettings> = context.kairoDataStore.data.map { prefs ->
@@ -235,7 +237,8 @@ class SettingsStore(private val context: Context) {
             lastRuleSyncMillis = prefs[Keys.LAST_RULE_SYNC] ?: 0L,
             initialAccountsSeeded = prefs[Keys.INITIAL_ACCOUNTS_SEEDED] ?: false,
             assetGroupOrder = assetGroupOrder,
-            collapsedAssetGroups = collapsedAssetGroups
+            collapsedAssetGroups = collapsedAssetGroups,
+            accessibilityDiagnosticCaptureEnabled = prefs[Keys.ACCESSIBILITY_DIAGNOSTIC_CAPTURE] ?: false
         )
     }
 
@@ -305,6 +308,7 @@ class SettingsStore(private val context: Context) {
                 .filter { it.isNotEmpty() }
                 .sorted()
                 .joinToString(",")
+            prefs[Keys.ACCESSIBILITY_DIAGNOSTIC_CAPTURE] = settings.accessibilityDiagnosticCaptureEnabled
         }
     }
 

@@ -58,7 +58,8 @@ class ScreenBillParser(
         val text: String,
         val topPx: Int = -1,
         val heightPx: Int = 0,
-        val isContentDesc: Boolean = false
+        val isContentDesc: Boolean = false,
+        val isVisibleToUser: Boolean = true
     )
 
     private enum class AmountRole(val priority: Int) {
@@ -95,17 +96,20 @@ class ScreenBillParser(
         }
         val rawNormalizedLines = normalizeLinesWithNodes(snapshot)
         if (rawNormalizedLines.isEmpty()) return ScreenPageKind.UNKNOWN
+        val effectiveLines = selectEffectiveLinesForParse(snapshot, rawNormalizedLines)
         val normalizedLines = if (snapshot.packageName.lowercase(Locale.ROOT) in ECOMMERCE_AND_DELIVERY_PACKAGES) {
-            truncateBottomRecommendationFeed(rawNormalizedLines)
+            truncateBottomRecommendationFeed(effectiveLines)
         } else {
-            rawNormalizedLines
+            effectiveLines
         }
+        val visibleLowerLines = selectVisibleLowerLines(snapshot, normalizedLines)
         val lines = normalizedLines.map { it.text }
         val fieldResult = extractFields(lines)
         return classifyPageInternal(
             packageName = snapshot.packageName,
             className = snapshot.className,
             lines = lines,
+            visibleLowerLines = visibleLowerLines,
             fields = fieldResult.fields,
             ignoredLineIndices = fieldResult.ignoredLineIndices
         ).first
@@ -117,8 +121,9 @@ class ScreenBillParser(
     internal fun hasStrongBillDetailAnchors(snapshot: ScreenSnapshot): Boolean {
         if (!isWatchedPackage(snapshot.packageName)) return false
         if (isBlockedChatOrFeedWindow(snapshot.packageName, snapshot.className)) return false
-        val normalizedLines = normalizeLinesWithNodes(snapshot)
-        if (normalizedLines.isEmpty()) return false
+        val rawNormalizedLines = normalizeLinesWithNodes(snapshot)
+        if (rawNormalizedLines.isEmpty()) return false
+        val normalizedLines = selectEffectiveLinesForParse(snapshot, rawNormalizedLines)
         val lines = normalizedLines.map { it.text }
         val lowerLines = lines.map { it.lowercase(Locale.ROOT) }
         val lowerJoined = lowerLines.joinToString("\n")
@@ -174,6 +179,546 @@ class ScreenBillParser(
         return (hasDetailHeader && matchedAnchorCount >= 1) || matchedAnchorCount >= 2
     }
 
+    /**
+     * 提取前置收银台 / 提交订单待确认支付上下文（仅用于状态机短 TTL 记忆，绝不在收银台阶段落账）：
+     * - Stage 1：支付宝/微信/云闪付/淘宝内嵌 MSP 支付收银台弹窗（需精确付款金额 > 0L，提取优惠、付款方式、卡尾号、商户）
+     * - Stage 0：电商/外卖提交订单/确认订单页（提取真实门店名、商品摘要、实付/合计金额(可为0L)、优惠金额、外卖标记）
+     */
+    fun extractPendingCheckout(snapshot: ScreenSnapshot): PendingCheckoutContext? {
+        if (!isWatchedPackage(snapshot.packageName)) return null
+        if (isBlockedChatOrFeedWindow(snapshot.packageName, snapshot.className)) return null
+        val rawNormalizedLines = normalizeLinesWithNodes(snapshot)
+        if (rawNormalizedLines.isEmpty()) return null
+
+        val pkgLower = snapshot.packageName.lowercase(Locale.ROOT)
+        val visibleLines = selectVisibleLinesForState(snapshot, rawNormalizedLines)
+        val effectiveLines = if (pkgLower in ECOMMERCE_AND_DELIVERY_PACKAGES) {
+            truncateBottomRecommendationFeed(visibleLines)
+        } else {
+            visibleLines
+        }
+        if (effectiveLines.isEmpty()) return null
+
+        val lines = effectiveLines.map { it.text }
+        val lowerLines = lines.map { it.lowercase(Locale.ROOT) }
+        val fieldResult = extractFields(lines)
+        val fields = fieldResult.fields
+
+        if (isChatOrServiceFeedContext(snapshot.packageName, lowerLines, fields)) return null
+        if (hasExplicitFailureOrCancelMarker(lowerLines)) return null
+
+        val hasDetailHeader = lowerLines.any { line ->
+            DETAIL_HEADER_KEYWORDS.any { line == it || line.startsWith("$it ") || line.startsWith("$it·") }
+        }
+        val hasDetailAnchorMarker = DETAIL_ANCHOR_MARKERS.any { marker ->
+            lowerLines.any { it.contains(marker) }
+        }
+        val strongDetailOnlyCount = fields
+            .map { it.key }
+            .filter { it == FieldKey.TIME || it == FieldKey.ORDER_NO || it == FieldKey.STATUS }
+            .toSet()
+            .size
+        val hasPaidOrFulfillment = hasExplicitPaidOrFulfillmentStatus(lines, lowerLines, fields)
+        val topLines = lowerLines.take(6)
+
+        // 1. Stage 1：支付收银台弹窗（支付宝 / 微信 / 云闪付 / 淘宝内嵌 MSP 等）
+        if (pkgLower in CASHIER_PACKAGES &&
+            !hasDetailHeader &&
+            !hasDetailAnchorMarker &&
+            strongDetailOnlyCount < 2 &&
+            !hasPaidOrFulfillment
+        ) {
+            val hasStage0SubmitOrConfirm = lowerLines.any { line ->
+                line.length <= 24 && (line == "提交订单" || line.startsWith("提交订单") ||
+                    line == "确认订单" || line.startsWith("确认订单"))
+            }
+            val hasStrongCashierAction = lowerLines.any { line ->
+                line.length <= 28 && CASHIER_STRONG_ACTION_ANCHORS.any { anchor ->
+                    line == anchor || line.startsWith(anchor) || line.contains(anchor)
+                }
+            }
+            val hasSoftCashierAnchor = lowerLines.any { line ->
+                line.length <= 28 && CASHIER_SOFT_ANCHORS.any { anchor ->
+                    line == anchor || line.startsWith("$anchor:") || line.startsWith("$anchor：") ||
+                        line.startsWith("$anchor ") || line.startsWith(anchor)
+                }
+            }
+            val hasCartOrBrowseBlocker = lowerLines.any { line ->
+                CART_OR_BROWSE_BLOCKERS.any { line.contains(it) }
+            } || topLines.any { it == "全部订单" || it == "我的订单" }
+            val hasUnpaidOrderCue = lowerLines.any { line ->
+                line.length <= 24 && (line == "待付款" || line == "等待买家付款" || line == "待支付" ||
+                    line == "去支付" || line == "去付款")
+            }
+
+            val hasCashierAuthOrPopupAnchor = lowerLines.any { line ->
+                line.length <= 28 && CASHIER_AUTH_OR_POPUP_ANCHORS.any { anchor ->
+                    line == anchor || line.startsWith(anchor) || line.contains(anchor)
+                }
+            }
+            val isStage1Cashier = when {
+                hasCartOrBrowseBlocker -> false
+                hasStage0SubmitOrConfirm && pkgLower in ECOMMERCE_AND_DELIVERY_PACKAGES -> hasCashierAuthOrPopupAnchor
+                hasStrongCashierAction -> true
+                hasSoftCashierAnchor && !hasStage0SubmitOrConfirm && !hasUnpaidOrderCue -> true
+                else -> false
+            }
+
+            if (isStage1Cashier) {
+                val resolvedAmount = extractCheckoutAmount(
+                    lines = lines,
+                    normalizedLines = effectiveLines,
+                    fields = fields,
+                    ignoredLineIndices = fieldResult.ignoredLineIndices,
+                    screenHeightPx = snapshot.screenHeightPx,
+                    isCashierStage = true
+                )
+                if (resolvedAmount != null && resolvedAmount.origAmountMicros > 0L) {
+                    val paymentMethodText = extractCashierPaymentMethod(lines, fields)
+                    val summaryText = buildSummaryText(lines)
+                    val accountHint = if (paymentMethodText.isNotBlank()) {
+                        extractAccountHint(paymentMethodText, "")
+                    } else {
+                        extractAccountHint("", summaryText)
+                    }
+                    val discountMicros = extractDiscountAmountMicros(lines, fields)
+                    val merchant = resolveMerchant(lines, fields, TransactionType.EXPENSE, snapshot.packageName)
+                    val goodsSummary = extractCashierGoodsSummary(lines, fields)
+                    val isTakeout = pkgLower in TAKEOUT_PACKAGES || hasTakeoutCue(lines)
+                    return PendingCheckoutContext(
+                        sourcePackage = snapshot.packageName,
+                        merchant = merchant,
+                        goodsSummary = goodsSummary,
+                        origAmountMicros = resolvedAmount.origAmountMicros,
+                        origCurrency = resolvedAmount.origCurrency,
+                        discountAmountMicros = discountMicros,
+                        paymentMethodText = paymentMethodText,
+                        accountHint = accountHint,
+                        isTakeout = isTakeout,
+                        capturedAtMillis = snapshot.capturedAtMillis,
+                        isCashierStage = true
+                    )
+                }
+            }
+        }
+
+        // 2. Stage 0：电商 / 外卖提交订单、确认订单页
+        if (pkgLower in ECOMMERCE_AND_DELIVERY_PACKAGES && !hasPaidOrFulfillment) {
+            val hasStage0Trigger = lowerLines.any { line ->
+                line.length <= 28 && STAGE0_CHECKOUT_TRIGGERS.any { trigger ->
+                    line == trigger || line.startsWith(trigger) || line.contains(trigger)
+                }
+            }
+            if (!hasStage0Trigger) return null
+
+            val hasSubmitOrConfirm = lowerLines.any { line ->
+                line.length <= 24 && (line.contains("提交订单") || line.contains("确认订单"))
+            }
+            val hasCartOrProductOnlyBlocker = lowerLines.any { line ->
+                CART_OR_BROWSE_BLOCKERS.any { line.contains(it) }
+            }
+            if (hasCartOrProductOnlyBlocker && !hasSubmitOrConfirm) return null
+            if (isMultiCardOrderList(lowerLines)) return null
+
+            val orderInfo = extractOrderDetailMerchantAndGoods(lines, fields)
+            val merchant = orderInfo.merchant.ifBlank {
+                resolveMerchant(lines, fields, TransactionType.EXPENSE, snapshot.packageName)
+            }
+            val goodsSummary = orderInfo.goodsSummary.ifBlank { extractGoods(fields) }
+            val resolvedAmount = extractCheckoutAmount(
+                lines = lines,
+                normalizedLines = effectiveLines,
+                fields = fields,
+                ignoredLineIndices = fieldResult.ignoredLineIndices,
+                screenHeightPx = snapshot.screenHeightPx,
+                isCashierStage = false
+            )
+            val discountMicros = extractDiscountAmountMicros(lines, fields)
+            val paymentMethodText = extractCashierPaymentMethod(lines, fields)
+            val summaryText = buildSummaryText(lines)
+            val accountHint = if (paymentMethodText.isNotBlank()) {
+                extractAccountHint(paymentMethodText, "")
+            } else {
+                extractAccountHint("", summaryText)
+            }
+            val isTakeout = pkgLower in TAKEOUT_PACKAGES || hasTakeoutCue(lines)
+
+            return PendingCheckoutContext(
+                sourcePackage = snapshot.packageName,
+                merchant = merchant,
+                goodsSummary = goodsSummary,
+                origAmountMicros = resolvedAmount?.origAmountMicros ?: 0L,
+                origCurrency = resolvedAmount?.origCurrency ?: CurrencyCatalog.DEFAULT_BASE_CURRENCY,
+                discountAmountMicros = discountMicros,
+                paymentMethodText = paymentMethodText,
+                accountHint = accountHint,
+                isTakeout = isTakeout,
+                capturedAtMillis = snapshot.capturedAtMillis,
+                isCashierStage = false
+            )
+        }
+
+        return null
+    }
+
+    /**
+     * 判断当前可见页面是否明确为待付款 / 支付失败 / 交易关闭 / 已取消页面（用于取消支付后清理待确认收银台上下文）。
+     */
+    fun isExplicitUnpaidOrFailedScreen(snapshot: ScreenSnapshot): Boolean {
+        if (!isWatchedPackage(snapshot.packageName)) return false
+        if (isBlockedChatOrFeedWindow(snapshot.packageName, snapshot.className)) return false
+        val rawNormalizedLines = normalizeLinesWithNodes(snapshot)
+        if (rawNormalizedLines.isEmpty()) return false
+
+        val pkgLower = snapshot.packageName.lowercase(Locale.ROOT)
+        val visibleLines = selectVisibleLinesForState(snapshot, rawNormalizedLines)
+        val effectiveLines = if (pkgLower in ECOMMERCE_AND_DELIVERY_PACKAGES) {
+            truncateBottomRecommendationFeed(visibleLines)
+        } else {
+            visibleLines
+        }
+        if (effectiveLines.isEmpty()) return false
+
+        val lines = effectiveLines.map { it.text }
+        val lowerLines = lines.map { it.lowercase(Locale.ROOT) }
+        val lowerJoined = lowerLines.joinToString("\n")
+        if (CHAT_STRONG_MARKERS.any { lowerJoined.contains(it) }) return false
+        if (lowerLines.contains("表情") && lowerLines.contains("发送")) return false
+
+        val hasUnpaidOrFailed = lowerLines.any { line ->
+            line.length <= 28 &&
+                !IGNORED_HELP_EXCLUSIONS.any { line.contains(it) } &&
+                EXPLICIT_UNPAID_OR_FAILED_MARKERS.any { marker -> line.contains(marker) }
+        }
+        if (!hasUnpaidOrFailed) return false
+
+        val fields = extractFields(lines).fields
+        if (hasStrongPaidOrTakeoutAcceptedStatus(lines, lowerLines, fields)) {
+            return false
+        }
+        return true
+    }
+
+    /**
+     * 检测明确的支付完成或电商/外卖已付履约确认信号（即使页面无金额或无「完成」按钮，也可与前置收银台上下文合成记账）。
+     */
+    fun detectCheckoutCompletionSignal(snapshot: ScreenSnapshot): CheckoutCompletionSignal? {
+        if (!isWatchedPackage(snapshot.packageName)) return null
+        if (isBlockedChatOrFeedWindow(snapshot.packageName, snapshot.className)) return null
+        val rawNormalizedLines = normalizeLinesWithNodes(snapshot)
+        if (rawNormalizedLines.isEmpty()) return null
+
+        val pkgLower = snapshot.packageName.lowercase(Locale.ROOT)
+        val visibleLines = selectVisibleLinesForState(snapshot, rawNormalizedLines)
+        val effectiveLines = if (pkgLower in ECOMMERCE_AND_DELIVERY_PACKAGES) {
+            truncateBottomRecommendationFeed(visibleLines)
+        } else {
+            visibleLines
+        }
+        if (effectiveLines.isEmpty()) return null
+
+        val lines = effectiveLines.map { it.text }
+        val lowerLines = lines.map { it.lowercase(Locale.ROOT) }
+        val fieldResult = extractFields(lines)
+        val fields = fieldResult.fields
+
+        // 严守防误触：可见行严禁出现任何待付款/收银台/失败/取消/加购词
+        val hasForbiddenMarker = lowerLines.any { line ->
+            !IGNORED_HELP_EXCLUSIONS.any { line.contains(it) } &&
+                COMPLETION_FORBIDDEN_MARKERS.any { forbidden -> line.contains(forbidden) }
+        }
+        if (hasForbiddenMarker) return null
+
+        // 严守防误触：排除聊天/服务号/账单列表/多卡片订单列表/已忽略状态
+        if (isChatOrServiceFeedContext(snapshot.packageName, lowerLines, fields)) return null
+        if (isBillListOverviewScreen(lowerLines, fields)) return null
+        if (isMultiCardOrderList(lowerLines)) return null
+        if (detectIgnoredStatus(lines, fields) != null) return null
+
+        val hasWalletPaySuccessPhrase = hasCompletionPaySuccessPhrase(lines, lowerLines, fields)
+        val isWalletOrEmbeddedMsp = snapshot.packageName.equals(PKG_ALIPAY, ignoreCase = true) ||
+            pkgLower == PKG_WECHAT ||
+            pkgLower == PKG_TAOBAO ||
+            pkgLower == "com.unionpay" ||
+            pkgLower == "com.tmall.wireless" ||
+            pkgLower == "com.jd.jrapp"
+
+        val isEcommerce = pkgLower in ECOMMERCE_AND_DELIVERY_PACKAGES
+        val hasEcommercePayResult = isEcommerce && (
+            hasWalletPaySuccessPhrase || lowerLines.any { line ->
+                !line.contains('?') && !line.contains('？') &&
+                    (line == "下单成功" || line.startsWith("下单成功 ") || line.startsWith("下单成功，") || line.startsWith("下单成功！"))
+            }
+            )
+        val hasEcommerceFulfillment = isEcommerce && lowerLines.any { line ->
+            COMPLETION_FULFILLMENT_KEYWORDS.any { line.contains(it) }
+        }
+        val hasViewOrderButton = isEcommerce && lowerLines.any { line ->
+            line.length <= 16 && (line == "查看订单" || line.startsWith("查看订单") || line.contains("查看订单"))
+        }
+        val hasViewOrderPayCombo = hasViewOrderButton && lowerLines.any { line ->
+            VIEW_ORDER_PAY_RESULT_COMPANIONS.any { line == it || line.startsWith(it) || line.contains(it) }
+        }
+        val hasViewOrderTakeoutCombo = hasViewOrderButton && (
+            lowerLines.any { line ->
+                VIEW_ORDER_TAKEOUT_COMPANIONS.any { line == it || line.startsWith(it) || line.contains(it) }
+            } || lines.any { ETA_DELIVERY_ANCHOR_REGEX.containsMatchIn(it) }
+            )
+
+        val resolvedKind: ScreenPageKind
+        val isStrongPaidSignal: Boolean
+        when {
+            hasEcommerceFulfillment -> {
+                resolvedKind = ScreenPageKind.ORDER_DETAIL
+                isStrongPaidSignal = true
+            }
+            hasEcommercePayResult -> {
+                resolvedKind = ScreenPageKind.PAY_SUCCESS
+                isStrongPaidSignal = true
+            }
+            isWalletOrEmbeddedMsp && hasWalletPaySuccessPhrase -> {
+                resolvedKind = ScreenPageKind.PAY_SUCCESS
+                isStrongPaidSignal = true
+            }
+            hasViewOrderTakeoutCombo -> {
+                resolvedKind = ScreenPageKind.ORDER_DETAIL
+                isStrongPaidSignal = false
+            }
+            hasViewOrderPayCombo -> {
+                resolvedKind = ScreenPageKind.PAY_SUCCESS
+                isStrongPaidSignal = false
+            }
+            else -> return null
+        }
+
+        val orderNo = extractOrderNo(fields)
+        val isTakeout = pkgLower in TAKEOUT_PACKAGES || hasTakeoutCue(lines)
+        val merchantHint: String
+        val goodsHint: String
+        if (isEcommerce) {
+            val orderInfo = extractOrderDetailMerchantAndGoods(lines, fields)
+            merchantHint = orderInfo.merchant.ifBlank {
+                resolveMerchant(lines, fields, TransactionType.EXPENSE, snapshot.packageName)
+            }
+            goodsHint = orderInfo.goodsSummary.ifBlank { extractGoods(fields) }
+        } else {
+            merchantHint = resolveMerchant(lines, fields, TransactionType.EXPENSE, snapshot.packageName)
+            goodsHint = extractGoods(fields)
+        }
+
+        val confirmedAmountMicros = if (resolvedKind == ScreenPageKind.ORDER_DETAIL) {
+            extractExplicitOrderActualOrSubtotalMicros(
+                lines = lines,
+                normalizedLines = effectiveLines,
+                fields = fields,
+                ignoredLineIndices = fieldResult.ignoredLineIndices
+            )
+        } else {
+            val resolved = resolveAmounts(
+                lines = lines,
+                normalizedLines = effectiveLines,
+                fields = fields,
+                ignoredLineIndices = fieldResult.ignoredLineIndices,
+                screenHeightPx = snapshot.screenHeightPx,
+                pageKind = resolvedKind
+            )
+            resolved?.takeIf { it.origAmountMicros > 0L && it.dominantSign != "-" }?.origAmountMicros
+        }
+
+        return CheckoutCompletionSignal(
+            pageKind = resolvedKind,
+            merchantHint = merchantHint,
+            goodsHint = goodsHint,
+            orderNo = orderNo,
+            isTakeout = isTakeout,
+            confirmedAmountMicros = confirmedAmountMicros,
+            summaryText = buildSummaryText(lines),
+            isStrongPaidSignal = isStrongPaidSignal
+        )
+    }
+
+    /**
+     * 判断末轮未落账快照是否具备强支付/订单/外卖/账单诊断线索，供无障碍服务写入 IGNORED 诊断日志（消灭黑盒丢弃）。
+     */
+    fun shouldRecordDiagnosticLog(
+        snapshot: ScreenSnapshot,
+        parseIgnoredReason: String = ""
+    ): Boolean {
+        if (!isWatchedPackage(snapshot.packageName)) return false
+        if (isBlockedChatOrFeedWindow(snapshot.packageName, snapshot.className)) return false
+        if (parseIgnoredReason == "聊天或服务号对话框不触发") return false
+        if (hasStrongBillDetailAnchors(snapshot)) return true
+
+        val rawNormalizedLines = normalizeLinesWithNodes(snapshot)
+        if (rawNormalizedLines.isEmpty()) return false
+        val effectiveLines = selectVisibleLinesForState(snapshot, rawNormalizedLines)
+        val lines = effectiveLines.map { it.text }
+        val lowerLines = lines.map { it.lowercase(Locale.ROOT) }
+        val fields = extractFields(lines).fields
+
+        if (isChatOrServiceFeedContext(snapshot.packageName, lowerLines, fields)) return false
+
+        return lowerLines.any { line ->
+            DIAGNOSTIC_STRONG_CUES.any { cue -> line.contains(cue) }
+        } || lines.any { ETA_DELIVERY_ANCHOR_REGEX.containsMatchIn(it) }
+    }
+
+    /**
+     * 将前置收银台/确认订单上下文与支付/履约完成信号合成为标准 ScreenParseOutcome，
+     * 完整复用账户别名路由、分类归属、自动标签与去重指纹逻辑。
+     */
+    fun buildCheckoutConfirmedOutcome(
+        snapshot: ScreenSnapshot,
+        pending: PendingCheckoutContext,
+        signal: CheckoutCompletionSignal,
+        aliases: List<AccountAliasEntity> = emptyList(),
+        accounts: List<AccountEntity> = emptyList(),
+        categories: List<CategoryEntity> = emptyList(),
+        originSourcePackage: String = ""
+    ): ScreenParseOutcome? {
+        val origAmountMicros = if (pending.isCashierStage && pending.origAmountMicros > 0L) {
+            pending.origAmountMicros
+        } else {
+            signal.confirmedAmountMicros?.takeIf { it > 0L } ?: pending.origAmountMicros
+        }
+        if (origAmountMicros <= 0L) return null
+
+        val origCurrency = pending.origCurrency.ifBlank { CurrencyCatalog.DEFAULT_BASE_CURRENCY }
+        val merchant = when {
+            !isGenericCheckoutMerchant(signal.merchantHint) -> signal.merchantHint.trim()
+            !isGenericCheckoutMerchant(pending.merchant) -> pending.merchant.trim()
+            else -> signal.merchantHint.trim().ifBlank { pending.merchant.trim() }
+        }
+        val goodsDesc = signal.goodsHint.trim().ifBlank { pending.goodsSummary.trim() }
+        val orderNo = signal.orderNo.trim()
+        val summaryText = signal.summaryText.ifBlank { buildSummaryText(snapshot.texts) }
+
+        val paymentMethodText = sanitizeCashierPaymentMethod(pending.paymentMethodText)
+        val accountHint = pending.accountHint.trim().ifBlank {
+            if (paymentMethodText.isNotBlank()) {
+                extractAccountHint(paymentMethodText, "")
+            } else {
+                extractAccountHint("", summaryText)
+            }
+        }
+        val accountRoutingPackage = resolveCheckoutAccountRoutingPackage(
+            snapshot = snapshot,
+            pending = pending,
+            paymentMethodText = paymentMethodText
+        )
+        val activeAccounts = accounts.filter { !it.archived }.ifEmpty { accounts }
+        val accountSummaryContext = if (paymentMethodText.isNotBlank()) {
+            paymentMethodText
+        } else {
+            summaryText
+        }
+        val accountId = resolveScreenAccountId(
+            packageName = accountRoutingPackage,
+            summaryText = accountSummaryContext,
+            paymentMethodText = paymentMethodText,
+            accountHint = accountHint,
+            routingCurrency = origCurrency,
+            aliases = aliases,
+            accounts = activeAccounts
+        )
+
+        val pkgLower = snapshot.packageName.lowercase(Locale.ROOT)
+        val originPkgLower = originSourcePackage.lowercase(Locale.ROOT)
+        val pendingPkgLower = pending.sourcePackage.lowercase(Locale.ROOT)
+        val isTakeout = pending.isTakeout ||
+            signal.isTakeout ||
+            pkgLower in TAKEOUT_PACKAGES ||
+            originPkgLower in TAKEOUT_PACKAGES ||
+            pendingPkgLower in TAKEOUT_PACKAGES
+
+        val summaryLines = summaryText.split('\n').filter { it.isNotBlank() }
+        val cleanSummary = buildCleanClassificationSummary(summaryLines, signal.pageKind, snapshot.packageName)
+        val extraCategoryHints = if (isTakeout) "外卖" else ""
+        val categoryContext = listOf(merchant, goodsDesc, cleanSummary, extraCategoryHints)
+            .filter { it.isNotBlank() }
+            .joinToString(" ")
+        val defaultCategory = if (isTakeout) "外卖" else "其他支出"
+        val resolvedCategory = localRuleParser.resolveCategory(
+            type = TransactionType.EXPENSE,
+            merchant = merchant,
+            fullText = categoryContext,
+            ruleDefaultCategoryName = defaultCategory,
+            categories = categories
+        )
+        val resolvedCategoryName = resolvedCategory?.name ?: defaultCategory
+
+        val tagSourcePackage = when {
+            isEcommerceOrDeliveryPackage(snapshot.packageName) -> snapshot.packageName
+            isEcommerceOrDeliveryPackage(originSourcePackage) -> originSourcePackage
+            isEcommerceOrDeliveryPackage(pending.sourcePackage) -> pending.sourcePackage
+            else -> snapshot.packageName
+        }
+        val tagFullText = listOf(goodsDesc, cleanSummary, if (isTakeout) "外卖" else "")
+            .filter { it.isNotBlank() }
+            .joinToString(" ")
+        val autoTags = localRuleParser.inferAutoTags(
+            sourcePackage = tagSourcePackage,
+            merchant = merchant,
+            fullText = tagFullText,
+            categoryName = resolvedCategoryName,
+            currency = origCurrency
+        )
+
+        val timestamp = snapshot.capturedAtMillis
+        val dedupFingerprint = if (orderNo.isNotBlank()) {
+            "ORDER:$orderNo"
+        } else {
+            "SCREEN:${snapshot.packageName}:${TransactionType.EXPENSE}:$origCurrency:$origAmountMicros:${timestamp / 60_000L}:$merchant"
+        }
+
+        val baseNote = buildCompactNote(
+            goodsDesc = goodsDesc,
+            merchant = merchant,
+            paymentMethodText = paymentMethodText,
+            orderNo = orderNo,
+            isOrderDetail = signal.pageKind == ScreenPageKind.ORDER_DETAIL
+        )
+        val discountSuffix = if (pending.discountAmountMicros > 0L) {
+            "已优惠${MoneyAmount.formatPlain(pending.discountAmountMicros)}"
+        } else {
+            ""
+        }
+        val note = when {
+            discountSuffix.isBlank() -> baseNote
+            baseNote.isBlank() -> discountSuffix
+            baseNote.length + discountSuffix.length + 3 <= 140 -> "$baseNote · $discountSuffix"
+            else -> baseNote
+        }
+
+        val draft = ParsedBillDraft(
+            type = TransactionType.EXPENSE,
+            origAmountMicros = origAmountMicros,
+            origCurrency = origCurrency,
+            accountId = accountId,
+            accountHint = accountHint,
+            categoryId = resolvedCategory?.id,
+            categoryName = resolvedCategoryName,
+            merchant = merchant,
+            note = note,
+            timestamp = timestamp,
+            confidence = 0.91f,
+            parserUsed = "SCREEN_CHECKOUT_CONFIRMED",
+            externalOrderNo = orderNo,
+            manualAccountAmountMicros = null,
+            tags = autoTags
+        )
+
+        return ScreenParseOutcome(
+            pageKind = signal.pageKind,
+            draft = draft,
+            orderNo = orderNo,
+            dedupFingerprint = dedupFingerprint,
+            summaryText = summaryText,
+            shouldFallbackToLlm = false,
+            ignoredReason = ""
+        )
+    }
+
     fun parse(
         snapshot: ScreenSnapshot,
         aliases: List<AccountAliasEntity> = emptyList(),
@@ -195,12 +740,14 @@ class ScreenBillParser(
         if (rawNormalizedLines.isEmpty()) {
             return ScreenParseOutcome(pageKind = ScreenPageKind.UNKNOWN, draft = null)
         }
+        val effectiveLines = selectEffectiveLinesForParse(snapshot, rawNormalizedLines)
         val pkgLower = snapshot.packageName.lowercase(Locale.ROOT)
         val normalizedLines = if (pkgLower in ECOMMERCE_AND_DELIVERY_PACKAGES) {
-            truncateBottomRecommendationFeed(rawNormalizedLines)
+            truncateBottomRecommendationFeed(effectiveLines)
         } else {
-            rawNormalizedLines
+            effectiveLines
         }
+        val visibleLowerLines = selectVisibleLowerLines(snapshot, normalizedLines)
         val lines = normalizedLines.map { it.text }
 
         val fieldResult = extractFields(lines)
@@ -209,6 +756,7 @@ class ScreenBillParser(
             packageName = snapshot.packageName,
             className = snapshot.className,
             lines = lines,
+            visibleLowerLines = visibleLowerLines,
             fields = fields,
             ignoredLineIndices = fieldResult.ignoredLineIndices
         )
@@ -515,7 +1063,7 @@ class ScreenBillParser(
                 node.text.split('\n', '\r').mapNotNull { part ->
                     val cleaned = cleanLineText(part)
                     cleaned.takeIf { it.isNotEmpty() }?.let {
-                        NormalizedLine(it, node.topPx, node.heightPx, node.isContentDesc)
+                        NormalizedLine(it, node.topPx, node.heightPx, node.isContentDesc, node.isVisibleToUser)
                     }
                 }
             }
@@ -533,7 +1081,7 @@ class ScreenBillParser(
             node.text.split('\n', '\r').mapNotNull { part ->
                 val cleaned = cleanLineText(part)
                 cleaned.takeIf { it.isNotEmpty() }?.let {
-                    NormalizedLine(it, node.topPx, node.heightPx, node.isContentDesc)
+                    NormalizedLine(it, node.topPx, node.heightPx, node.isContentDesc, node.isVisibleToUser)
                 }
             }
         }
@@ -560,17 +1108,70 @@ class ScreenBillParser(
         var minTop = Int.MAX_VALUE
         var maxHeight = 0
         var isDesc = false
+        var anyVisible = false
         for (part in parts) {
             if (part.topPx >= 0 && part.topPx < minTop) minTop = part.topPx
             if (part.heightPx > maxHeight) maxHeight = part.heightPx
             if (part.isContentDesc) isDesc = true
+            if (part.isVisibleToUser) anyVisible = true
         }
         return NormalizedLine(
             text = text,
             topPx = if (minTop == Int.MAX_VALUE) -1 else minTop,
             heightPx = maxHeight,
-            isContentDesc = isDesc
+            isContentDesc = isDesc,
+            isVisibleToUser = anyVisible
         )
+    }
+
+    private fun hasMixedVisibility(snapshot: ScreenSnapshot): Boolean {
+        if (snapshot.nodes.isEmpty()) return false
+        var hasVisible = false
+        var hasInvisible = false
+        for (node in snapshot.nodes) {
+            if (node.isVisibleToUser) hasVisible = true else hasInvisible = true
+            if (hasVisible && hasInvisible) return true
+        }
+        return false
+    }
+
+    /**
+     * 当节点树同时包含可见与不可见节点时，仅当可见节点中存在非纯外壳(chrome)的真实前景内容时才隔离不可见背景行；
+     * 若全树不可见或仅 Activity 顶部导航栏可见（典型微信 WebView/XWeb 场景），无条件回退全部行确保 0 退化。
+     */
+    private fun selectEffectiveLinesForParse(
+        snapshot: ScreenSnapshot,
+        normalizedLines: List<NormalizedLine>
+    ): List<NormalizedLine> {
+        if (!hasMixedVisibility(snapshot)) return normalizedLines
+        val visibleOnly = normalizedLines.filter { it.isVisibleToUser }
+        if (visibleOnly.isEmpty()) return normalizedLines
+        val hasSubstantiveForeground = visibleOnly.any { !isChromeOnlyVisibleLine(it.text) }
+        return if (hasSubstantiveForeground) visibleOnly else normalizedLines
+    }
+
+    private fun selectVisibleLinesForState(
+        snapshot: ScreenSnapshot,
+        normalizedLines: List<NormalizedLine>
+    ): List<NormalizedLine> {
+        if (!hasMixedVisibility(snapshot)) return normalizedLines
+        val visibleOnly = normalizedLines.filter { it.isVisibleToUser }
+        if (visibleOnly.isEmpty()) return normalizedLines
+        val hasSubstantiveForeground = visibleOnly.any { !isChromeOnlyVisibleLine(it.text) }
+        return if (hasSubstantiveForeground) visibleOnly else normalizedLines
+    }
+
+    private fun selectVisibleLowerLines(
+        snapshot: ScreenSnapshot,
+        normalizedLines: List<NormalizedLine>
+    ): List<String> = selectEffectiveLinesForParse(snapshot, normalizedLines)
+        .map { it.text.lowercase(Locale.ROOT) }
+
+    private fun isChromeOnlyVisibleLine(text: String): Boolean {
+        val lower = text.trim().lowercase(Locale.ROOT)
+        if (lower.isEmpty()) return true
+        if (lower in WEBVIEW_CHROME_ONLY_WORDS) return true
+        return lower.startsWith("网页由") || lower.startsWith("该网页由") || lower.startsWith("此网页由")
     }
 
     private fun addOrCoalesceLine(merged: MutableList<NormalizedLine>, item: NormalizedLine) {
@@ -937,6 +1538,7 @@ class ScreenBillParser(
         packageName: String,
         className: String,
         lines: List<String>,
+        visibleLowerLines: List<String> = lines.map { it.lowercase(Locale.ROOT) },
         fields: List<ExtractedField>,
         ignoredLineIndices: Set<Int> = emptySet()
     ): Pair<ScreenPageKind, String> {
@@ -961,7 +1563,7 @@ class ScreenBillParser(
 
         val pkgLower = packageName.lowercase(Locale.ROOT)
         if (pkgLower in ECOMMERCE_AND_DELIVERY_PACKAGES) {
-            return classifyEcommerceOrTakeoutPage(lines, lowerLines, fields, ignoredLineIndices)
+            return classifyEcommerceOrTakeoutPage(lines, lowerLines, visibleLowerLines, fields, ignoredLineIndices)
         }
 
         if (pkgLower in PHONE_WALLET_PACKAGES) {
@@ -1125,7 +1727,7 @@ class ScreenBillParser(
             }
         }
 
-        val hasPrepayCheckoutMarker = lowerLines.any { line ->
+        val hasPrepayCheckoutMarker = visibleLowerLines.any { line ->
             PREPAY_CHECKOUT_MARKERS.any { line == it || line.startsWith(it) }
         }
         if (hasPrepayCheckoutMarker && !hasPaySuccessPhrase && !hasDetailHeader && distinctDetailKeys < 2) {
@@ -1198,12 +1800,13 @@ class ScreenBillParser(
     private fun classifyEcommerceOrTakeoutPage(
         lines: List<String>,
         lowerLines: List<String>,
+        visibleLowerLines: List<String>,
         fields: List<ExtractedField>,
         ignoredLineIndices: Set<Int>
     ): Pair<ScreenPageKind, String> {
-        val topLines = lowerLines.take(6)
-        if (ECOMMERCE_HARD_BLOCKERS.any { blocker -> lowerLines.any { it.contains(blocker) } } ||
-            topLines.any { it == "我的订单" }
+        val visibleTopLines = visibleLowerLines.take(6)
+        if (ECOMMERCE_HARD_BLOCKERS.any { blocker -> visibleLowerLines.any { it.contains(blocker) } } ||
+            visibleTopLines.any { it == "我的订单" }
         ) {
             return ScreenPageKind.UNKNOWN to "电商非已支付订单页不触发"
         }
@@ -1415,6 +2018,537 @@ class ScreenBillParser(
         val lower = line.lowercase(Locale.ROOT)
         TAOBAO_TAKEOUT_CUES.any { lower.contains(it) } ||
             ETA_DELIVERY_ANCHOR_REGEX.containsMatchIn(line)
+    }
+
+    private fun hasTakeoutCue(lines: List<String>): Boolean = hasTaobaoTakeoutCue(lines)
+
+    private fun isChatOrServiceFeedContext(
+        packageName: String,
+        lowerLines: List<String>,
+        fields: List<ExtractedField>
+    ): Boolean {
+        val lowerJoined = lowerLines.joinToString("\n")
+        if (CHAT_STRONG_MARKERS.any { lowerJoined.contains(it) }) return true
+        if (lowerLines.contains("表情") && lowerLines.contains("发送")) return true
+        if ((lowerLines.contains("通讯录") && lowerLines.contains("发现")) ||
+            (lowerLines.contains("首页") && lowerLines.contains("理财") && lowerLines.contains("我的"))
+        ) {
+            return true
+        }
+        val hasServiceBottomMenu = (lowerLines.contains("我的账单") && lowerLines.contains("支付服务")) ||
+            (lowerLines.contains("我的账单") && lowerLines.contains("更多服务")) ||
+            (lowerLines.contains("账单") && lowerLines.contains("支付服务"))
+        if (hasServiceBottomMenu) return true
+
+        val hasDetailHeader = lowerLines.any { line ->
+            DETAIL_HEADER_KEYWORDS.any { line == it || line.startsWith("$it ") || line.startsWith("$it·") }
+        }
+        val hasDetailAnchorMarker = DETAIL_ANCHOR_MARKERS.any { marker ->
+            lowerLines.any { it.contains(marker) }
+        }
+        val strongDetailOnlyCount = fields
+            .map { it.key }
+            .filter { it == FieldKey.TIME || it == FieldKey.ORDER_NO || it == FieldKey.STATUS }
+            .toSet()
+            .size
+
+        if (!hasDetailHeader && !hasDetailAnchorMarker && strongDetailOnlyCount < 2 &&
+            SERVICE_CARD_TITLES.any { title -> lowerLines.any { it.contains(title) } }
+        ) {
+            return true
+        }
+        if (!hasDetailAnchorMarker && strongDetailOnlyCount < 2 &&
+            CHAT_BUBBLE_MARKERS.any { marker -> lowerLines.any { it.contains(marker) } }
+        ) {
+            return true
+        }
+        if (packageName.equals(PKG_ALIPAY, ignoreCase = true) &&
+            !hasDetailHeader &&
+            strongDetailOnlyCount < 2 &&
+            ALIPAY_FEED_CARD_MARKERS.any { marker -> lowerLines.any { it.contains(marker) } }
+        ) {
+            return true
+        }
+
+        val voucherKeyCounts = HashMap<String, Int>(4)
+        for (line in lowerLines) {
+            val matchedKey = matchRepeatedVoucherKey(line) ?: continue
+            val nextCount = (voucherKeyCounts[matchedKey] ?: 0) + 1
+            if (nextCount >= 2) return true
+            voucherKeyCounts[matchedKey] = nextCount
+        }
+
+        val cardJumpDetailCount = lowerLines.count { line ->
+            CARD_JUMP_DETAIL_BUTTONS.any { btn -> line == btn || line.contains(btn) }
+        }
+        if (cardJumpDetailCount >= 2) return true
+
+        val timeFieldValueLines = fields
+            .asSequence()
+            .filter { it.key == FieldKey.TIME }
+            .map { it.lineIndex }
+            .toSet()
+        val chatTimeDividerCount = lowerLines.withIndex().count { (idx, line) ->
+            idx !in timeFieldValueLines && CHAT_TIME_DIVIDER_REGEX.matches(line)
+        }
+        if (chatTimeDividerCount >= 2 && (cardJumpDetailCount > 0 || (!hasDetailHeader && !hasDetailAnchorMarker))) {
+            return true
+        }
+        if (cardJumpDetailCount > 0 && !hasDetailHeader && !hasDetailAnchorMarker && strongDetailOnlyCount == 0) {
+            val hasStrictDone = lowerLines.any { line ->
+                STRICT_PAY_RESULT_DONE_BUTTONS.any { line == it || line.startsWith("$it(") || line.startsWith("$it（") }
+            }
+            if (!hasStrictDone) return true
+        }
+        return false
+    }
+
+    private fun isBillListOverviewScreen(
+        lowerLines: List<String>,
+        fields: List<ExtractedField>
+    ): Boolean {
+        val distinctDetailKeys = fields
+            .map { it.key }
+            .filter { it in DETAIL_SIGNAL_KEYS }
+            .toSet()
+            .size
+        val hasDetailHeader = lowerLines.any { line ->
+            DETAIL_HEADER_KEYWORDS.any { line == it || line.startsWith("$it ") || line.startsWith("$it·") }
+        }
+        val hasDetailAnchorMarker = DETAIL_ANCHOR_MARKERS.any { marker ->
+            lowerLines.any { it.contains(marker) }
+        }
+        val topLines = lowerLines.take(6)
+        return (BILL_LIST_MARKERS.any { marker -> topLines.any { it == marker || it.contains(marker) } } ||
+            (topLines.any { it == "账单" || it == "我的账单" } &&
+                lowerLines.any { it == "支出" || it.startsWith("支出 ") || it.startsWith("支出¥") } &&
+                lowerLines.any { it == "收入" || it.startsWith("收入 ") || it.startsWith("收入¥") })) &&
+            !hasDetailHeader &&
+            !hasDetailAnchorMarker &&
+            distinctDetailKeys < 2
+    }
+
+    private fun isMultiCardOrderList(lowerLines: List<String>): Boolean {
+        val topLines = lowerLines.take(6)
+        if (topLines.any { it == "全部订单" || it == "我的订单" }) return true
+        val repeatedOrderNoCount = lowerLines.count { REPEATED_ORDER_NO_LINE_REGEX.containsMatchIn(it) }
+        val repeatedActualPaidCount = lowerLines.count { REPEATED_ACTUAL_PAID_LINE_REGEX.containsMatchIn(it) }
+        val repeatedAgainCount = lowerLines.count { it.contains("再来一单") }
+        val repeatedLogisticsCount = lowerLines.count { it.contains("查看物流") }
+        val repeatedConfirmReceiptCount = lowerLines.count { it.contains("确认收货") }
+        val repeatedPayActionCount = lowerLines.count { it == "去支付" || it == "去付款" }
+        return repeatedOrderNoCount >= 2 ||
+            repeatedActualPaidCount >= 2 ||
+            repeatedAgainCount >= 2 ||
+            repeatedLogisticsCount >= 2 ||
+            repeatedConfirmReceiptCount >= 2 ||
+            repeatedPayActionCount >= 2
+    }
+
+    private fun hasExplicitFailureOrCancelMarker(lowerLines: List<String>): Boolean =
+        lowerLines.any { line ->
+            line.length <= 28 &&
+                !IGNORED_HELP_EXCLUSIONS.any { line.contains(it) } &&
+                EXPLICIT_FAILURE_OR_CANCEL_MARKERS.any { line.contains(it) }
+        }
+
+    private fun hasExplicitPaidOrFulfillmentStatus(
+        lines: List<String>,
+        lowerLines: List<String>,
+        fields: List<ExtractedField>
+    ): Boolean {
+        if (hasCompletionPaySuccessPhrase(lines, lowerLines, fields)) return true
+        if (lowerLines.any { line ->
+                !line.contains('?') && !line.contains('？') &&
+                    (line == "下单成功" || line.startsWith("下单成功 ") || line.startsWith("下单成功，") || line.startsWith("下单成功！"))
+            }
+        ) {
+            return true
+        }
+        return lowerLines.any { line ->
+            COMPLETION_FULFILLMENT_KEYWORDS.any { line.contains(it) }
+        }
+    }
+
+    private fun hasStrongPaidOrTakeoutAcceptedStatus(
+        lines: List<String>,
+        lowerLines: List<String>,
+        fields: List<ExtractedField>
+    ): Boolean = hasExplicitPaidOrFulfillmentStatus(lines, lowerLines, fields)
+
+    private fun hasCompletionPaySuccessPhrase(
+        lines: List<String>,
+        lowerLines: List<String>,
+        fields: List<ExtractedField>
+    ): Boolean {
+        val inLines = lowerLines.any { line ->
+            !line.contains('?') && !line.contains('？') &&
+                COMPLETION_PAY_SUCCESS_PHRASES.any { phrase ->
+                    line == phrase ||
+                        line.startsWith("$phrase ") ||
+                        line.startsWith("$phrase，") ||
+                        line.startsWith("$phrase!") ||
+                        line.startsWith("$phrase！")
+                }
+        }
+        if (inLines) return true
+        return fields.any { field ->
+            field.key == FieldKey.STATUS && COMPLETION_PAY_SUCCESS_PHRASES.any {
+                field.value.lowercase(Locale.ROOT).contains(it)
+            }
+        }
+    }
+
+    private fun extractCheckoutAmount(
+        lines: List<String>,
+        normalizedLines: List<NormalizedLine>,
+        fields: List<ExtractedField>,
+        ignoredLineIndices: Set<Int>,
+        screenHeightPx: Int,
+        isCashierStage: Boolean
+    ): ResolvedAmountResult? {
+        val explicitCandidates = mutableListOf<AmountCandidate>()
+
+        for ((index, line) in lines.withIndex()) {
+            if (index in ignoredLineIndices) continue
+            if (isCheckoutNoiseAmountLine(line)) continue
+            val match = CASHIER_PAY_BUTTON_AMOUNT_REGEX.find(line) ?: continue
+            val amountPart = match.groupValues.getOrNull(1)?.trim().orEmpty()
+            if (amountPart.isEmpty() || amountPart.contains('-')) continue
+            val heightPx = normalizedLines.getOrNull(index)?.heightPx ?: 0
+            explicitCandidates += extractCandidatesFromText(
+                text = amountPart,
+                role = AmountRole.HERO_VISUAL,
+                lineIndex = index,
+                allowBareDecimal = true,
+                allowBareInteger = true,
+                heightPx = heightPx
+            )
+        }
+
+        for (field in fields) {
+            if (field.key != FieldKey.ACTUAL_AMOUNT) continue
+            val lineText = lines.getOrNull(field.lineIndex).orEmpty()
+            if (isCheckoutNoiseAmountLine(lineText) || field.value.trim().startsWith("-")) continue
+            val heightPx = normalizedLines.getOrNull(field.lineIndex)?.heightPx ?: 0
+            explicitCandidates += extractCandidatesFromText(
+                text = field.value,
+                role = AmountRole.ACTUAL_PAID,
+                lineIndex = field.lineIndex,
+                allowBareDecimal = true,
+                allowBareInteger = true,
+                heightPx = heightPx
+            )
+        }
+
+        if (explicitCandidates.isNotEmpty()) {
+            val best = pickBestCandidate(explicitCandidates)
+            if (best != null && best.amountMicros > 0L) {
+                return ResolvedAmountResult(
+                    origAmountMicros = best.amountMicros,
+                    origCurrency = best.currency,
+                    cnySettlementMicros = null,
+                    dominantSign = null
+                )
+            }
+        }
+
+        val subtotalCandidates = extractSubtotalOrTotalCandidates(lines, normalizedLines, ignoredLineIndices)
+        if (!isCashierStage) {
+            if (subtotalCandidates.isNotEmpty()) {
+                val bestSub = pickBestCandidate(subtotalCandidates)
+                if (bestSub != null && bestSub.amountMicros > 0L) {
+                    return ResolvedAmountResult(
+                        origAmountMicros = bestSub.amountMicros,
+                        origCurrency = bestSub.currency,
+                        cnySettlementMicros = null,
+                        dominantSign = null
+                    )
+                }
+            }
+            val amountFields = fields.filter { it.key == FieldKey.AMOUNT || it.key == FieldKey.ORDER_AMOUNT }
+            val fallbackCandidates = mutableListOf<AmountCandidate>()
+            for (field in amountFields) {
+                val role = if (field.key == FieldKey.AMOUNT) AmountRole.TRANSACTION_AMOUNT else AmountRole.ORDER_AMOUNT
+                fallbackCandidates += extractCandidatesFromText(
+                    text = field.value,
+                    role = role,
+                    lineIndex = field.lineIndex,
+                    allowBareDecimal = true,
+                    allowBareInteger = role == AmountRole.TRANSACTION_AMOUNT
+                )
+            }
+            val bestField = pickBestCandidate(fallbackCandidates)
+            if (bestField != null && bestField.amountMicros > 0L) {
+                return ResolvedAmountResult(
+                    origAmountMicros = bestField.amountMicros,
+                    origCurrency = bestField.currency,
+                    cnySettlementMicros = null,
+                    dominantSign = null
+                )
+            }
+            return null
+        }
+
+        // Stage 1 收银台：排除负号折扣行、额度/余额噪声行后复用大字/独立金额识别
+        val extraIgnored = HashSet(ignoredLineIndices)
+        for ((idx, line) in lines.withIndex()) {
+            val trimmed = line.trim()
+            if (isCheckoutNoiseAmountLine(trimmed) ||
+                (isStandaloneAmountLine(trimmed) && trimmed.startsWith("-"))
+            ) {
+                extraIgnored.add(idx)
+            }
+        }
+        val filteredFields = fields.filterNot { it.lineIndex in extraIgnored }
+        val resolved = resolveAmounts(
+            lines = lines,
+            normalizedLines = normalizedLines,
+            fields = filteredFields,
+            ignoredLineIndices = extraIgnored,
+            screenHeightPx = screenHeightPx,
+            pageKind = ScreenPageKind.PAY_SUCCESS
+        )
+        if (resolved != null && resolved.origAmountMicros > 0L && resolved.dominantSign != "-") {
+            return resolved
+        }
+        if (subtotalCandidates.isNotEmpty()) {
+            val bestSub = pickBestCandidate(subtotalCandidates)
+            if (bestSub != null && bestSub.amountMicros > 0L) {
+                return ResolvedAmountResult(
+                    origAmountMicros = bestSub.amountMicros,
+                    origCurrency = bestSub.currency,
+                    cnySettlementMicros = null,
+                    dominantSign = null
+                )
+            }
+        }
+        return null
+    }
+
+    private fun extractExplicitOrderActualOrSubtotalMicros(
+        lines: List<String>,
+        normalizedLines: List<NormalizedLine>,
+        fields: List<ExtractedField>,
+        ignoredLineIndices: Set<Int>
+    ): Long? {
+        val candidates = mutableListOf<AmountCandidate>()
+        for (field in fields) {
+            if (field.key != FieldKey.ACTUAL_AMOUNT) continue
+            val heightPx = normalizedLines.getOrNull(field.lineIndex)?.heightPx ?: 0
+            candidates += extractCandidatesFromText(
+                text = field.value,
+                role = AmountRole.ACTUAL_PAID,
+                lineIndex = field.lineIndex,
+                allowBareDecimal = true,
+                allowBareInteger = true,
+                heightPx = heightPx
+            )
+        }
+        if (candidates.isEmpty()) {
+            candidates += extractSubtotalOrTotalCandidates(lines, normalizedLines, ignoredLineIndices)
+        }
+        return pickBestCandidate(candidates)?.takeIf { it.amountMicros > 0L }?.amountMicros
+    }
+
+    private fun isCheckoutNoiseAmountLine(line: String): Boolean {
+        val trimmed = line.trim()
+        if (trimmed.isEmpty()) return false
+        if (containsNoiseAmountKeyword(trimmed)) return true
+        return CHECKOUT_QUOTA_NOISE_REGEX.containsMatchIn(trimmed)
+    }
+
+    private fun extractDiscountAmountMicros(
+        lines: List<String>,
+        fields: List<ExtractedField>
+    ): Long {
+        // 1. 优先匹配汇总型优惠文案（如「已优惠 ¥5.34」「共优惠 3.00元」「已省¥3.00」）
+        for ((idx, line) in lines.withIndex()) {
+            val trimmed = line.trim()
+            if (trimmed.isEmpty() || DISCOUNT_NON_DISCOUNT_EXCLUSION_REGEX.containsMatchIn(trimmed)) continue
+            if (SUMMARY_DISCOUNT_LABEL_REGEX.containsMatchIn(trimmed)) {
+                extractPositiveDiscountValueFromLine(trimmed)?.let { return it }
+                val next = lines.getOrNull(idx + 1)?.trim().orEmpty()
+                if (next.isNotEmpty() && !DISCOUNT_NON_DISCOUNT_EXCLUSION_REGEX.containsMatchIn(next)) {
+                    extractPositiveDiscountValueFromLine(next, allowStandalone = true)?.let { return it }
+                }
+            }
+        }
+
+        // 2. 匹配明确优惠/立减/红包抵扣字段或单行文案
+        for (field in fields) {
+            if (field.key != FieldKey.IGNORED_AMOUNT) continue
+            val label = field.rawLabel.trim()
+            if (DISCOUNT_NON_DISCOUNT_EXCLUSION_REGEX.containsMatchIn(label)) continue
+            if (!EXPLICIT_DISCOUNT_KEYWORD_REGEX.containsMatchIn(label)) continue
+            if (FULL_REDUCTION_REGEX.containsMatchIn(field.value) && !field.value.contains('-')) continue
+            extractPositiveDiscountValueFromLine(field.value, allowStandalone = true)?.let { return it }
+        }
+
+        for ((idx, line) in lines.withIndex()) {
+            val trimmed = line.trim()
+            if (trimmed.isEmpty() || DISCOUNT_NON_DISCOUNT_EXCLUSION_REGEX.containsMatchIn(trimmed)) continue
+            if (!EXPLICIT_DISCOUNT_KEYWORD_REGEX.containsMatchIn(trimmed)) continue
+            if (FULL_REDUCTION_REGEX.containsMatchIn(trimmed) && !trimmed.contains('-')) continue
+            extractPositiveDiscountValueFromLine(trimmed)?.let { return it }
+            val next = lines.getOrNull(idx + 1)?.trim().orEmpty()
+            if (next.isNotEmpty() && !DISCOUNT_NON_DISCOUNT_EXCLUSION_REGEX.containsMatchIn(next)) {
+                extractPositiveDiscountValueFromLine(next, allowStandalone = true)?.let { return it }
+            }
+        }
+        return 0L
+    }
+
+    private fun extractPositiveDiscountValueFromLine(
+        text: String,
+        allowStandalone: Boolean = false
+    ): Long? {
+        val cleaned = text
+            .replace(DATETIME_STRIP_REGEX, " ")
+            .replace(TIME_ONLY_STRIP_REGEX, " ")
+            .replace(CARD_HINT_STRIP_REGEX, " ")
+            .trim()
+        if (cleaned.isEmpty()) return null
+        if (allowStandalone && isStandaloneAmountLine(cleaned)) {
+            for (match in AMOUNT_TOKEN_REGEX.findAll(cleaned)) {
+                val numStr = match.groupValues.getOrNull(4).orEmpty()
+                val micros = MoneyAmount.parseToMicros(numStr) ?: continue
+                if (micros > 0L) return micros
+            }
+        }
+        for (match in AMOUNT_TOKEN_REGEX.findAll(cleaned)) {
+            val sign1 = match.groupValues.getOrNull(1).orEmpty()
+            val prefixCur = match.groupValues.getOrNull(2).orEmpty()
+            val sign2 = match.groupValues.getOrNull(3).orEmpty()
+            val numStr = match.groupValues.getOrNull(4).orEmpty()
+            val suffixCur = match.groupValues.getOrNull(5).orEmpty()
+            if (numStr.isBlank()) continue
+            val hasMarker = sign1.isNotBlank() || sign2.isNotBlank() ||
+                prefixCur.isNotBlank() || suffixCur.isNotBlank() || numStr.contains('.')
+            if (!hasMarker) continue
+            val micros = MoneyAmount.parseToMicros(numStr) ?: continue
+            if (micros > 0L) return micros
+        }
+        return null
+    }
+
+    private fun extractCashierPaymentMethod(
+        lines: List<String>,
+        fields: List<ExtractedField>
+    ): String {
+        val fromField = sanitizeCashierPaymentMethod(extractFirstFieldValue(fields, FieldKey.PAYMENT_METHOD))
+        if (fromField.isNotBlank() && !isNonPaymentMethodPlaceholder(fromField)) {
+            return fromField
+        }
+
+        // 查找「付款方式 / 支付方式 / 扣款方式」后 1~3 行内的真实支付方式（跳过「更换 / >」等占位）
+        for ((idx, line) in lines.withIndex()) {
+            val trimmed = line.trim().trimEnd(':', '：')
+            if (trimmed == "付款方式" || trimmed == "支付方式" || trimmed == "扣款方式" || trimmed == "选择付款方式") {
+                for (offset in 1..3) {
+                    val candidate = lines.getOrNull(idx + offset)?.trim() ?: break
+                    val cleaned = sanitizeCashierPaymentMethod(candidate)
+                    if (cleaned.isBlank() || isNonPaymentMethodPlaceholder(cleaned)) continue
+                    if (isStandalonePaymentInstrumentLine(cleaned)) {
+                        return cleaned
+                    }
+                }
+            }
+        }
+
+        // 兜底：从可见行中识别独立付款方式行（如「网商银行储蓄卡(6978)」「花呗」「余额宝」「招商银行信用卡(6688)」「零钱」）
+        for (line in lines) {
+            if (CASHIER_PAYMENT_PROMO_EXCLUSION_REGEX.containsMatchIn(line)) continue
+            val cleaned = sanitizeCashierPaymentMethod(line)
+            if (cleaned.isBlank() || isNonPaymentMethodPlaceholder(cleaned)) continue
+            if (isStandalonePaymentInstrumentLine(cleaned)) {
+                return cleaned
+            }
+        }
+        return ""
+    }
+
+    private fun sanitizeCashierPaymentMethod(raw: String): String {
+        if (raw.isBlank()) return ""
+        return sanitizePaymentMethodText(raw)
+            .replace(CASHIER_PAYMENT_QUOTA_PAREN_STRIP_REGEX, "")
+            .replace(CASHIER_PAYMENT_TRAILING_NOISE_REGEX, "")
+            .replace(WHITESPACE_RUN_REGEX, " ")
+            .trim(' ', '\t', '>', '›', '＞', '·', '•', ',', '，', ':', '：')
+    }
+
+    private fun isNonPaymentMethodPlaceholder(text: String): Boolean {
+        val lower = text.trim().lowercase(Locale.ROOT)
+        return lower.isEmpty() ||
+            lower in PLACEHOLDER_FIELD_VALUES ||
+            lower in CASHIER_PAYMENT_PLACEHOLDERS ||
+            isStrictFieldLabel(text)
+    }
+
+    private fun isStandalonePaymentInstrumentLine(line: String): Boolean {
+        val cleaned = sanitizeCashierPaymentMethod(line)
+        if (cleaned.length !in 2..28) return false
+        if (CASHIER_PAYMENT_PROMO_EXCLUSION_REGEX.containsMatchIn(line)) return false
+        return STANDALONE_PAYMENT_METHOD_LINE_REGEX.matches(cleaned) ||
+            CASHIER_EXTENDED_PAYMENT_METHOD_REGEX.matches(cleaned)
+    }
+
+    private fun extractCashierGoodsSummary(
+        lines: List<String>,
+        fields: List<ExtractedField>
+    ): String {
+        val fromField = extractGoods(fields)
+        if (fromField.isNotBlank()) return fromField
+        for ((idx, line) in lines.withIndex()) {
+            val trimmed = line.trim()
+            val colonIdx = findKeySeparatorIndex(trimmed)
+            if (colonIdx > 0) {
+                val label = trimmed.substring(0, colonIdx).trim()
+                if (label == "订单信息" || label == "商品信息") {
+                    val value = trimmed.substring(colonIdx + 1).trim()
+                    if (value.isNotEmpty() && !isPlaceholderFieldValue(value)) return value
+                }
+            } else if (trimmed == "订单信息" || trimmed == "商品信息") {
+                val next = lines.getOrNull(idx + 1)?.trim().orEmpty()
+                if (next.isNotEmpty() &&
+                    !isPlaceholderFieldValue(next) &&
+                    !isStrictFieldLabelLine(next) &&
+                    !isStandaloneAmountLine(next) &&
+                    !isStandalonePaymentInstrumentLine(next) &&
+                    !isNonMerchantUiText(next.lowercase(Locale.ROOT))
+                ) {
+                    return next
+                }
+            }
+        }
+        return ""
+    }
+
+    private fun resolveCheckoutAccountRoutingPackage(
+        snapshot: ScreenSnapshot,
+        pending: PendingCheckoutContext,
+        paymentMethodText: String
+    ): String {
+        val lowerMethod = paymentMethodText.lowercase(Locale.ROOT)
+        if (ALIPAY_FAMILY_METHOD_CUES.any { lowerMethod.contains(it) }) {
+            return PKG_ALIPAY
+        }
+        if (WECHAT_FAMILY_METHOD_CUES.any { lowerMethod.contains(it) }) {
+            return PKG_WECHAT
+        }
+        if (pending.isCashierStage && pending.sourcePackage.isNotBlank()) {
+            if (!isEcommerceOrDeliveryPackage(pending.sourcePackage)) {
+                return pending.sourcePackage
+            }
+        }
+        val lowerCls = snapshot.className.lowercase(Locale.ROOT)
+        if (lowerCls.contains("alipay") || lowerCls.contains("msp")) {
+            return PKG_ALIPAY
+        }
+        if (lowerCls.contains("tencent.mm") || lowerCls.contains("walletpaid")) {
+            return PKG_WECHAT
+        }
+        return snapshot.packageName.ifBlank { pending.sourcePackage }
     }
 
     private fun extractStandalonePaymentMethodLine(lines: List<String>): String {
@@ -2090,7 +3224,7 @@ class ScreenBillParser(
             val instrumentCore = paymentMethodText
                 .replace(PAYMENT_INSTRUMENT_SUFFIX_STRIP_REGEX, "")
                 .trim()
-            if (instrumentCore.length >= 3 &&
+            if ((instrumentCore.length >= 3 || instrumentCore == "花呗" || instrumentCore == "白条") &&
                 instrumentCore.lowercase(Locale.ROOT) !in GENERIC_PAYMENT_ACCOUNT_MATCH_EXCLUSIONS
             ) {
                 accounts.firstOrNull { acc ->
@@ -2271,6 +3405,7 @@ class ScreenBillParser(
             }
             if (NOISE_MERCHANT_LINE_REGEX.containsMatchIn(line)) continue
             if (isStandaloneAmountLine(line)) continue
+            if (isStandalonePaymentInstrumentLine(line)) continue
             if (FULL_DATETIME_REGEX.containsMatchIn(line) || TIME_ONLY_STRIP_REGEX.matches(line.trim())) continue
 
             val cleaned = cleanMerchantCandidate(line) ?: continue
@@ -2290,7 +3425,15 @@ class ScreenBillParser(
             lower in PLACEHOLDER_FIELD_VALUES ||
             UI_STOP_PREFIXES.any { lower.startsWith(it) } ||
             PAY_SUCCESS_PHRASES.any { lower == it } ||
-            IGNORED_STATUS_KEYWORDS.any { lower == it }
+            IGNORED_STATUS_KEYWORDS.any { lower == it } ||
+            ORDER_PAID_STATUS_KEYWORDS.any {
+                lower == it || lower.startsWith("$it ") || lower.startsWith("$it，") ||
+                    lower.startsWith("$it!") || lower.startsWith("$it！")
+            } ||
+            COMPLETION_FULFILLMENT_KEYWORDS.any {
+                lower == it || lower.startsWith("$it ") || lower.startsWith("$it，")
+            } ||
+            ETA_DELIVERY_ANCHOR_REGEX.containsMatchIn(lower)
 
     private data class OrderDetailExtractedInfo(
         val merchant: String,
@@ -2790,6 +3933,18 @@ class ScreenBillParser(
                 if (packageName.startsWith(prefix)) return true
             }
             return false
+        }
+
+        fun isEcommerceOrDeliveryPackage(packageName: String): Boolean =
+            packageName.trim().lowercase(Locale.ROOT) in ECOMMERCE_AND_DELIVERY_PACKAGES
+
+        internal fun isGenericCheckoutMerchant(merchant: String): Boolean {
+            val lower = merchant.trim().lowercase(Locale.ROOT)
+            if (lower.isEmpty()) return true
+            if (lower in GENERIC_CHANNEL_MERCHANTS) return true
+            if (lower in TAOBAO_SHELL_MERCHANTS_FOR_HERO) return true
+            if (lower in PLATFORM_SHELL_MERCHANTS) return true
+            return PLATFORM_SHELL_SUBSTRINGS.any { lower.contains(it) }
         }
 
         /**
@@ -3661,6 +4816,17 @@ class ScreenBillParser(
             "去评价", "立即评价", "开发中", "加载中", "加载中...",
             "待确认", "待收款", "待确认收款", "待确认收钱", "对方", "朋友", "发红包",
             "添加", "去添加", "点击添加", "请选择", "开关", "未设置", "暂无", "去设置",
+            "付款详情", "支付详情", "订单信息", "确认付款", "确认支付", "立即付款", "立即支付",
+            "去付款", "去支付", "去结算", "提交订单", "确认订单", "购物车", "加入购物车", "立即购买",
+            "全部订单", "我的订单", "继续支付", "重新支付", "请输入支付密码", "输入支付密码",
+            "指纹支付", "面容支付", "验证指纹", "刷脸支付", "支付宝安全支付", "安全支付",
+            "免密支付", "选择付款方式", "更换", "确认交易",
+            "催单", "取消订单", "修改地址", "联系骑手", "联系骑士", "打赏骑手", "打赏骑士",
+            "致电骑手", "致电骑士", "致电商家", "查看物流", "确认收货", "延长收货", "查看地图",
+            "订单进度", "配送信息", "收货信息", "商品信息", "费用明细", "价格明细",
+            "准时宝", "号码保护", "隐私保护中", "号码保护中", "匿名购买",
+            "立即送出", "外卖配送", "到店自取", "餐具份数", "餐具数量", "订单备注",
+            "花呗", "蚂蚁花呗", "余额宝", "余利宝", "零钱", "零钱通", "账户余额", "支付宝余额",
             "微信", "微信支付", "微信收款助手", "支付宝", "云闪付", "财付通",
             "小米钱包", "小米智能卡", "华为钱包", "荣耀钱包", "oppo钱包", "vivo钱包", "三星智付",
             "网商银行", "招商银行", "工商银行", "建设银行",
@@ -3924,7 +5090,150 @@ class ScreenBillParser(
             "返回首页", "回到首页", "继续逛逛", "返回淘宝", "查看订单",
             "准时宝", "号码保护", "匿名购买",
             "退换无忧", "极速退款", "7天无理由", "假一赔十", "正品险", "坏果包赔", "买贵必赔",
+            "提交订单", "确认订单", "去支付", "去付款", "立即支付", "立即付款", "立即下单",
+            "待付款", "等待买家付款", "立即送出", "外卖配送", "到店自取", "餐具份数", "餐具数量",
+            "订单备注", "发票", "支付方式", "付款方式", "选择付款方式", "配送方式", "送达时间",
+            "优惠明细", "实付明细", "需要餐具", "无需餐具", "按餐量提供",
             "复制单号", "淘宝闪购", "拼多多", "淘宝", "天猫", "京东", "美团", "美团外卖", "饿了么", "抖音商城"
+        )
+
+        private val WEBVIEW_CHROME_ONLY_WORDS = setOf(
+            "返回", "关闭", "更多", "分享", "刷新", "投诉",
+            "账单详情", "交易详情", "收支详情", "转账详情", "收款详情", "退款详情", "订单详情",
+            "微信支付", "支付宝", "全部账单"
+        )
+
+        private val CASHIER_PACKAGES = setOf(
+            PKG_ALIPAY.lowercase(Locale.ROOT),
+            PKG_WECHAT,
+            PKG_TAOBAO,
+            "com.unionpay",
+            "com.tmall.wireless",
+            "com.jd.jrapp",
+            "com.sankuai.meituan",
+            "com.sankuai.meituan.takeoutnew",
+            "me.ele",
+            "com.xunmeng.pinduoduo",
+            "com.jingdong.app.mall",
+            "com.ss.android.ugc.aweme"
+        )
+
+        private val CASHIER_STRONG_ACTION_ANCHORS = listOf(
+            "确认付款", "立即付款", "确认支付", "请输入支付密码", "输入支付密码",
+            "指纹支付", "面容支付", "验证指纹", "刷脸支付", "指纹验证", "面容验证",
+            "确认交易", "立即免密支付", "安全支付"
+        )
+
+        private val CASHIER_AUTH_OR_POPUP_ANCHORS = listOf(
+            "请输入支付密码", "输入支付密码", "指纹支付", "面容支付", "验证指纹", "刷脸支付",
+            "指纹验证", "面容验证", "付款详情"
+        )
+
+        private val CASHIER_SOFT_ANCHORS = listOf(
+            "立即支付", "付款方式", "支付方式", "选择付款方式", "扣款方式", "付款详情"
+        )
+
+        private val STAGE0_CHECKOUT_TRIGGERS = listOf(
+            "提交订单", "确认订单", "去支付", "去付款", "立即支付", "立即付款", "待付款", "立即下单"
+        )
+
+        private val CART_OR_BROWSE_BLOCKERS = listOf(
+            "加入购物车", "立即购买", "去结算", "购物车"
+        )
+
+        private val EXPLICIT_FAILURE_OR_CANCEL_MARKERS = listOf(
+            "支付失败", "付款失败", "交易失败", "扣款失败", "交易关闭", "订单已取消", "已取消", "已关闭"
+        )
+
+        private val EXPLICIT_UNPAID_OR_FAILED_MARKERS = listOf(
+            "待付款", "等待买家付款", "待支付", "等待付款",
+            "支付失败", "付款失败", "交易失败", "扣款失败",
+            "交易关闭", "订单已取消", "已取消",
+            "继续支付", "重新支付"
+        )
+
+        private val COMPLETION_FORBIDDEN_MARKERS = listOf(
+            "待付款", "等待买家付款", "待支付", "等待付款",
+            "去支付", "去付款", "立即支付", "立即付款", "确认付款", "确认支付",
+            "提交订单", "确认订单",
+            "支付失败", "付款失败", "交易失败", "扣款失败",
+            "交易关闭", "订单已取消", "已取消",
+            "继续支付", "重新支付", "请输入支付密码", "输入支付密码",
+            "加入购物车", "立即购买", "去结算", "购物车"
+        )
+
+        private val COMPLETION_PAY_SUCCESS_PHRASES = listOf(
+            "付款成功", "支付成功", "交易成功", "免密支付成功", "扣款成功", "支付完成", "付款完成"
+        )
+
+        private val COMPLETION_FULFILLMENT_KEYWORDS = listOf(
+            "买家已付款", "已付款",
+            "等待商家接单", "待商家接单", "商家接单中", "等待接单",
+            "商家已接单", "商家备餐中", "正在备餐", "备餐中", "正在出餐", "商家已出餐",
+            "等待骑手接单", "待骑手接单", "等待骑士接单", "待骑士接单",
+            "骑士已接单", "骑手已接单", "骑士正赶往商家", "骑士赶往商家", "骑手正赶往商家", "骑手赶往商家",
+            "骑士到店", "骑士已到店", "骑手已到店", "骑手到店",
+            "骑士取餐中", "骑手取餐中", "骑士已取餐", "骑手已取餐",
+            "骑士配送中", "骑手配送中", "正在配送", "拼单成功"
+        )
+
+        private val VIEW_ORDER_PAY_RESULT_COMPANIONS = listOf(
+            "返回首页", "回到首页", "继续逛逛", "返回淘宝"
+        )
+
+        private val VIEW_ORDER_TAKEOUT_COMPANIONS = listOf(
+            "催单", "联系商家", "联系骑士", "联系骑手", "修改地址"
+        )
+
+        private val DIAGNOSTIC_STRONG_CUES = listOf(
+            "付款成功", "支付成功", "下单成功", "确认付款", "立即付款", "确认支付", "立即支付",
+            "请输入支付密码", "淘宝闪购", "等待商家接单", "待商家接单", "商家已接单", "商家备餐中",
+            "骑士", "骑手", "预计送达", "查看订单", "订单详情", "实付", "实付款"
+        )
+
+        private val CASHIER_PAY_BUTTON_AMOUNT_REGEX = Regex(
+            "(?:确认付款|立即付款|确认支付|立即支付|去付款|去支付|提交订单|应付金额|应付|需付)(?:金额)?(?:为|：|:|\\s)*((?:US\\$|HK\\$|NT\\$|S\\$|A\\$|C\\$|JP¥|USD|EUR|GBP|HKD|JPY|SGD|CNY|RMB|[¥￥$€£₩])?\\s*[0-9]+(?:,[0-9]{3})*(?:\\.[0-9]{1,2})?(?!\\s*(?:件|笔|单|次|个|份|盒|杯|瓶|袋|包|人|天|小时|分钟|秒|年|月|日|号))\\s*(?:元|美元|USD|EUR|GBP|CNY|RMB)?)",
+            RegexOption.IGNORE_CASE
+        )
+
+        private val CHECKOUT_QUOTA_NOISE_REGEX = Regex("(?:可用额度|剩余额度|信用额度|当前额度|授信额度)")
+
+        private val SUMMARY_DISCOUNT_LABEL_REGEX = Regex("(?:已优惠|共优惠|总优惠|优惠合计|共减|已减|共省|已省|立省)")
+
+        private val EXPLICIT_DISCOUNT_KEYWORD_REGEX = Regex(
+            "(?:支付优惠|优惠金额|商家优惠|平台优惠|店铺优惠|优惠|官方立减|店铺立减|立减金|立减|红包抵扣|红包优惠|支付宝红包|美团红包|神券|跨店满减|满减|抵扣|减免|补贴|直降)"
+        )
+
+        private val DISCOUNT_NON_DISCOUNT_EXCLUSION_REGEX = Regex(
+            "(?:余额|额度|配送费|打包费|餐盒费|餐具费|运费|手续费|服务费|汇率|积分)"
+        )
+
+        private val CASHIER_PAYMENT_QUOTA_PAREN_STRIP_REGEX = Regex(
+            "\\s*[(（][^()（）]*(?:余额|剩余|可用|额度|优先|推荐|免密|默认|限额|立减|优惠)[^()（）]*[)）]"
+        )
+
+        private val CASHIER_PAYMENT_TRAILING_NOISE_REGEX = Regex(
+            "\\s*(?:优先使用|推荐|默认|免密支付|快捷支付|更换|切换|>|›|＞)+$"
+        )
+
+        private val CASHIER_PAYMENT_PROMO_EXCLUSION_REGEX = Regex(
+            "(?:开通|办卡|申请|办理|立减|满减|随机减|优惠券|领券|领红包|福利金|体验金|红包抵扣|支付优惠)"
+        )
+
+        private val CASHIER_PAYMENT_PLACEHOLDERS = setOf(
+            "更换", "切换", "选择", "更多", "修改", ">", "›", "＞"
+        )
+
+        private val CASHIER_EXTENDED_PAYMENT_METHOD_REGEX = Regex(
+            "^(?:蚂蚁花呗|花呗支付|花呗|网商银行|余额宝|余利宝|支付宝余额|账户余额|微信零钱|零钱通|零钱|微众银行|[\\u4e00-\\u9fa5]{2,8}银行)(?:储蓄卡|借记卡|信用卡|快捷支付|支付)?(?:\\s*[(（](?:尾号)?\\d{4}[)）])?$"
+        )
+
+        private val ALIPAY_FAMILY_METHOD_CUES = listOf(
+            "花呗", "余额宝", "余利宝", "支付宝", "网商银行"
+        )
+
+        private val WECHAT_FAMILY_METHOD_CUES = listOf(
+            "零钱", "零钱通", "微信"
         )
 
         private val PLATFORM_SHELL_MERCHANTS = setOf(
